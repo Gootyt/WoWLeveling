@@ -6,6 +6,8 @@ megtervezéséhez és követéséhez.
 - Megadható a szintezés kezdete, az a dátum, amikorra az **első**, illetve az
   **utolsó** karakternek el kell érnie a célszintet, valamint a **kezdőszint** és a
   **célszint**.
+- A két céldátum egy gombnyomással **kiszámolható a karakterek mostani
+  szintjéből** (az eddigi tempó alapján).
 - A szintek **két tizedesjegy pontosságúak** (pl. `83,45`: a 83-as szint 45%-ánál
   tart a karakter). Tizedesvesszővel és -ponttal is beírhatók.
 - Új karakterek vehetők fel. Csak a név kötelező; megadható a realm, a faj, a
@@ -60,15 +62,18 @@ python wow_leveling.py masik_terv.json
    (pl. `2026-10-15`; a `2026.10.15.` alakot is elfogadja), vagy a ▼ gombbal
    naptárból választhatsz. A kezdő- és a célszint két tizedesjegyig adható meg; a
    mezők nyilai egy egész szinttel léptetnek. Hibás érték esetén piros üzenet
-   jelzi, mi a gond. A helyes beállításokat a program azonnal menti.
+   jelzi, mi a gond. A helyes beállításokat a program azonnal menti. A két
+   céldátum melletti „Kiszámolás a mostani szintekből” gomb a karakterek eddigi
+   tempójából számolja ki az első és az utolsó céldátumot (lásd lent); beállítás
+   előtt megmutatja a régi és az új dátumokat, és rákérdez.
 2. **Új karakter** (a főablak jobb oldalán): írd be a nevét (és ha akarod, a
    realmjét, faját, kasztját, specjét, itemlevelét, Raider.io pontszámát és jelenlegi szintjét),
    majd „Hozzáadás” vagy Enter. A realm, a faj, a kaszt és a spec listából
    választható, de bármit beírhatsz. Ha kasztot váltasz, és a már kiválasztott spec
-   nem tartozik az új kaszthoz, a spec mező kiürül. Az itemlevel és a Raider.io
-   pontszám egy tizedesjegyig adható meg (pl. `327`, `326,5` vagy `2543,7`); a
-   weboldalról ezres elválasztóval másolt alak (`2,543.7`) is jó. Az új karakter a
-   lista végére kerül.
+   nem tartozik az új kaszthoz, a spec mező kiürül. Az itemlevel két
+   tizedesjegyig (pl. `327` vagy `326,55`), a Raider.io pontszám egy
+   tizedesjegyig adható meg (pl. `2543,7`); a weboldalról ezres elválasztóval
+   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
@@ -138,6 +143,27 @@ olyan napját, amelynek végére összesen ennyi szint volt esedékes. A szintez
 napja a kezdőnap, az utolsó az utolsó karakter céldátuma. Ha ez a nap a mai, a
 karakterek együtt éppen a mai célnál tartanak; ha korábbi, ennyi nappal le vannak
 maradva.
+
+**Céldátumok a mostani szintekből.** A „Kiszámolás a mostani szintekből” gomb a
+mostani szinteket a tegnapi nap végéig elértnek tekinti: az eddigi tempó a
+kezdőnaptól tegnapig a kezdőszint felett megszerzett szintek (legfeljebb a
+célszintig) osztva a napok számával, a mai nap pedig már a hátralévő szintek első
+napja.
+
+- *Első céldátum:* amikor a lista első karaktere a saját eddigi tempójával eléri a
+  célszintet. Ha például 10 nap alatt 44,50 szintet lépett (napi 4,45), és még
+  44,50 szint van hátra, akkor ez a mai nappal együtt 10 nap. Ha még nem lépett túl
+  a kezdőszinten, a program a karakterek együttes tempójával számol; ha már
+  célszinten van, a céldátuma legkésőbb a tegnapi nap (a korábbi dátum megmarad).
+- *Utolsó céldátum, egymás utáni ütemezésnél:* amikorra a karakterek együttes
+  eddigi tempójával az összes hátralévő szint meglesz.
+- *Utolsó céldátum, párhuzamos ütemezésnél:* a legkorábbi nap, amellyel a
+  karakterek együtt (ugyanúgy számolva, mint a lista alján lévő napszint) éppen
+  elérik a terv tegnapi célját. Aki pontosan a terv szerint halad, annak a
+  céldátumai nem változnak.
+- Az utolsó céldátum nem lehet korábbi az elsőnél. A számoláshoz legalább egy
+  lezárt szintezési nap kell (a mai nap még nem számít bele), és legalább egy
+  karakternek túl kell lépnie a kezdőszinten.
 
 **Murlok.io oszlop.** A program a Murlok.io három Mythic+ rangsoroldalát kéri le
 ([tank](https://murlok.io/meta/tank/m+), [healer](https://murlok.io/meta/healer/m+),

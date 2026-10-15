@@ -138,17 +138,18 @@ class GuiTests(unittest.TestCase):
     def test_item_level_is_saved_shown_and_sortable(self):
         self.add("Thrall", item_level="327")
         self.add("Jaina")
-        self.add("Arthas", item_level="329.5")
+        self.add("Arthas", item_level="329.55")  # két tizedesjegyig
         self.assertEqual(self.app.item_level_var.get(), "")
         saved = load_data(self.path).characters
-        self.assertEqual([c.item_level for c in saved], [D("327"), None, D("329.5")])
+        self.assertEqual([c.item_level for c in saved], [D("327"), None, D("329.55")])
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
             self.add("Sylvanas", item_level="sok")
-        warning.assert_called_once()
+            self.add("Sylvanas", item_level="326,555")
+        self.assertEqual(warning.call_count, 2)
         self.assertEqual(len(self.app.data.characters), 3)
 
         self.app.open_list()
-        self.assertEqual([row["item_level"] for row in self.rows()], ["327", "–", "329,5"])
+        self.assertEqual([row["item_level"] for row in self.rows()], ["327,00", "–", "329,55"])
         self.app.list_window.sort_by("item_level")
         self.app.list_window.sort_by("item_level")  # csökkenő: a legnagyobb itemlevel elöl
         self.assertEqual(self.names(), ["Arthas", "Thrall", "Jaina"])
@@ -400,6 +401,53 @@ class GuiTests(unittest.TestCase):
         self.assertEqual((saved.start_level, saved.target_level, saved.mode), (D("10.00"), D("80.50"), SEQUENTIAL))
         self.assertTrue(self.app.settings_message.get().startswith("✔"))
 
+    def test_target_dates_are_estimated_from_current_levels(self):
+        today = date.today()
+        start = today - timedelta(days=10)
+        old_first, old_last = start + timedelta(days=20), start + timedelta(days=40)
+        self.app.start_var.set(format_date(start))
+        self.app.first_var.set(format_date(old_first))
+        self.app.last_var.set(format_date(old_last))
+        self.app.mode_var.set(SEQUENTIAL)
+        self.assertEqual(str(self.app.estimate_button.grid_info()["row"]), "1")  # a céldátumok mellett
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.estimate_target_dates()
+        self.assertIn("Még nincs karakter a listán", info.call_args.args[1])
+
+        # A szintek a tegnapi nap végén voltak meg: Thrall 10 nap alatt 44,50 szintet lépett (napi 4,45).
+        self.add("Thrall", level="45,5")
+        self.add("Jaina", "Arthas")
+        first, last = today + timedelta(days=9), today + timedelta(days=49)  # 44,50 és összesen 222,50 szint
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False) as ask:
+            self.app.estimate_target_dates()
+        question, detail = ask.call_args.args[1], ask.call_args.kwargs["detail"]
+        self.assertIn(f"Első karakter célszinten: {format_date(old_first)} → {format_date(first)}", question)
+        self.assertIn(f"Utolsó karakter célszinten: {format_date(old_last)} → {format_date(last)}", question)
+        self.assertIn("szintezés eddigi 10 napjának tempójából", detail)
+        self.assertIn("Thrall eddig napi 4,45 szintet lépett", detail)
+        self.assertEqual(self.app.first_var.get(), format_date(old_first))  # nemet mondtunk
+
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            self.app.estimate_target_dates()
+        self.assertEqual((self.app.first_var.get(), self.app.last_var.get()), (format_date(first), format_date(last)))
+        saved = load_data(self.path).settings
+        self.assertEqual((saved.first_target_date, saved.last_target_date), (first, last))
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.estimate_target_dates()
+        self.assertIn("A céldátumok már most is ezek", info.call_args.args[1])
+
+        # A hibás céldátumot a számolás kijavítja, a hibás kezdőnap viszont akadály.
+        self.app.last_var.set("hibás")
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True) as ask:
+            self.app.estimate_target_dates()
+        self.assertIn(f"Első karakter célszinten: {format_date(first)} (nem változik)", ask.call_args.args[1])
+        self.assertEqual(self.app.last_var.get(), format_date(last))
+        self.assertTrue(self.app.settings_message.get().startswith("✔"))
+        self.app.start_var.set("hibás")
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.estimate_target_dates()
+        self.assertIn("Előbb javítsd ki a beállításokat", info.call_args.args[1])
+
     def test_invalid_settings_are_reported_and_not_applied(self):
         before = self.app.data.settings
         self.app.first_var.set("2026-02-30")
@@ -473,6 +521,9 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn("start", tree["displaycolumns"])  # párhuzamosan mindenki ugyanakkor kezd
         self.app.mode_var.set(SEQUENTIAL)
         self.assertIn("start", tree["displaycolumns"])
+        # A szint a spec és az itemlevel között látszik.
+        shown = list(tree["displaycolumns"])
+        self.assertEqual(shown[shown.index("spec") : shown.index("spec") + 3], ["spec", "level", "item_level"])
 
     def test_list_can_be_sorted_by_deviation(self):
         today = date.today()
@@ -567,9 +618,9 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(window.selected_var.get(), "Arthas")
 
     def test_character_dialog_validates_input(self):
-        self.add("Thrall")
+        self.add("Thrall", item_level="326,5")
         dialog = self.gui.CharacterDialog(self.root, self.app.data.characters[0], ["Draenor"])
-        self.assertEqual(dialog.level_var.get(), "1,00")
+        self.assertEqual((dialog.level_var.get(), dialog.item_level_var.get()), ("1,00", "326,50"))
         dialog.name_var.set("  Go'el ")
         dialog.realm_var.set("Draenor ")
         dialog.race_var.set("Orc")
@@ -581,12 +632,12 @@ class GuiTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertIsNone(dialog.result)
         dialog.level_var.set("142,5")
-        dialog.item_level_var.set("326,55")
+        dialog.item_level_var.set("326,555")
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
             dialog.accept()
         warning.assert_called_once()
         self.assertIsNone(dialog.result)
-        dialog.item_level_var.set("326,5")
+        dialog.item_level_var.set("326,55")
         dialog.raiderio_var.set("2543,75")
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
             dialog.accept()
@@ -602,7 +653,7 @@ class GuiTests(unittest.TestCase):
                 "race": "Orc",
                 "char_class": "Shaman",
                 "spec": "Enhancement",
-                "item_level": D("326.5"),
+                "item_level": D("326.55"),
                 "raiderio_score": D("2543.7"),
                 "level": D("142.50"),
             },

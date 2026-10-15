@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -17,7 +18,9 @@ from leveling import (
     build_plan,
     day_progress,
     deadlines,
+    estimate_target_dates,
     format_deviation,
+    format_item_level,
     format_level,
     format_raiderio_score,
     format_compact,
@@ -89,17 +92,25 @@ class ParseTests(unittest.TestCase):
         for text in ("2543,75", "abc", "-5", "100000", "2,5,4"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_raiderio_score(text)
+        with self.assertRaisesRegex(ValueError, "a Raider.io pontszám legfeljebb egy tizedesjegyű lehet"):
+            parse_raiderio_score("2543,75")
 
-    def test_item_level_has_one_decimal(self):
-        cases = {"327": "327.0", "326,5": "326.5", " 326.5 ": "326.5"}
+    def test_item_level_has_two_decimals(self):
+        cases = {"327": "327.00", "326,5": "326.50", " 326.55 ": "326.55", "326,55": "326.55"}
         for text, expected in cases.items():
             with self.subTest(text=text):
-                self.assertEqual(parse_item_level(text), D(expected))
+                value = parse_item_level(text)
+                self.assertEqual(value, D(expected))
+                self.assertEqual(value.as_tuple().exponent, -2)
         self.assertIsNone(parse_item_level(""))
-        self.assertEqual((format_compact(D("327.0")), format_compact(D("326.5"))), ("327", "326,5"))
-        for text in ("326,55", "sok", "-1", "10000"):
+        self.assertEqual((format_item_level(D("327")), format_item_level(D("326.55"))), ("327,00", "326,55"))
+        for text in ("326,555", "sok", "-1", "10000"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_item_level(text)
+        with self.assertRaisesRegex(ValueError, "„326,555”: az itemlevel legfeljebb két tizedesjegyű lehet."):
+            parse_item_level("326,555")
+        with self.assertRaisesRegex(ValueError, "Az itemlevel legfeljebb 9999,99 lehet."):
+            parse_item_level("10000")
 
     def test_format_deviation_is_signed(self):
         self.assertEqual(format_deviation(D("2.87")), "+2,87")
@@ -379,10 +390,10 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "realm")), ["C", "A", "B"])
 
     def test_sort_by_item_level(self):
-        characters = [Character("A", item_level=D("327")), Character("B"), Character("C", item_level=D("329.5"))]
+        characters = [Character("A", item_level=D("327")), Character("B"), Character("C", item_level=D("326.55"))]
         plans = build_plan(make_settings(), characters, START)
-        self.assertEqual(self.names(sort_plans(plans, "item_level")), ["A", "C", "B"])
-        self.assertEqual(self.names(sort_plans(plans, "item_level", descending=True)), ["C", "A", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "item_level")), ["C", "A", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "item_level", descending=True)), ["A", "C", "B"])
 
     def test_sort_by_raiderio_score(self):
         characters = [
@@ -475,6 +486,118 @@ class DayProgressTests(unittest.TestCase):
         self.assertEqual({number: _number_article(number) for number in expected}, expected)
 
 
+class EstimateTests(unittest.TestCase):
+    """Céldátumok a tegnap estig elért szintekből. A terv 1,00 → 90,00 (karakterenként 89 szint)."""
+
+    @staticmethod
+    def levels(*levels):
+        return [Character(name, level=D(level)) for name, level in zip(("Thrall", "Jaina", "Arthas"), levels)]
+
+    def estimate(self, *levels, today=START + timedelta(days=10), **settings):
+        settings.setdefault("first_days", 20)
+        settings.setdefault("last_days", 40)
+        return estimate_target_dates(make_settings(**settings), self.levels(*levels), today)
+
+    def test_unchanged_when_exactly_on_track_in_parallel(self):
+        # A céldátumok: 9., 19. és 29. nap; a tegnapi (5.) nap végére tervezett szintek:
+        # 1 + 89 * 5/10 = 45,50, 1 + 89 * 5/20 = 23,25 és 1 + 89 * 5/30 = 15,83.
+        estimate = self.estimate("45.5", "23.25", "15.83", today=START + timedelta(days=5), first_days=9, last_days=29)
+        self.assertEqual(
+            (estimate.first_target_date, estimate.last_target_date),
+            (START + timedelta(days=9), START + timedelta(days=29)),
+        )
+        self.assertEqual(estimate.days, 5)
+        self.assertEqual(
+            estimate.first_reason,
+            "Thrall eddig napi 8,90 szintet lépett, így a hátralévő 44,50 szintet 5 nap alatt szerzi meg.",
+        )
+        self.assertEqual(
+            estimate.last_reason,
+            "Ezzel a dátummal a karakterek együttes szintje éppen eléri a terv tegnapi célját.",
+        )
+
+    def test_parallel_dates_follow_the_pace(self):
+        today = START + timedelta(days=5)
+        # Thrall 5 nap alatt 59 szintet lépett: a hátralévő 30-hoz 30 * 5/59 = 2,54 → 3 nap kell
+        # (a mai nappal együtt).
+        estimate = self.estimate("60", "23.25", "15.83", today=today, first_days=9, last_days=29)
+        self.assertEqual(estimate.first_target_date, today + timedelta(days=2))
+        # A tegnapra esedékes szintek összege az utolsó céldátummal csökken; a 28. nappal lesz először
+        # legfeljebb annyi, amennyit a karakterek együtt léptek (59 + 22,25 + 14,83 = 96,08).
+        self.assertEqual(estimate.last_target_date, START + timedelta(days=28))
+        plans = build_plan(
+            make_settings(first_days=7, last_days=28),
+            self.levels("60", "23.25", "15.83"),
+            today,
+        )
+        due = sum(planned_level(p.start, p.deadline, D(1), D(90), today - timedelta(days=1)) - 1 for p in plans)
+        self.assertLessEqual(due, D("96.08"))
+        # Egyforma tempónál mindenki egyszerre végez.
+        estimate = self.estimate("45.5", "45.5", "45.5", today=today)
+        self.assertEqual(estimate.first_target_date, estimate.last_target_date)
+
+    def test_sequential_last_date_uses_the_combined_pace(self):
+        today = START + timedelta(days=10)
+        estimate = self.estimate("45.5", "1", "1", mode=SEQUENTIAL)
+        # Thrall napi 4,45 szinttel a hátralévő 44,50 szintet 10 nap alatt szerzi meg.
+        self.assertEqual(estimate.first_target_date, today + timedelta(days=9))
+        # Összesen 222,50 szint van hátra, ez napi 4,45 szinttel 50 nap.
+        self.assertEqual(estimate.last_target_date, today + timedelta(days=49))
+        self.assertEqual(
+            estimate.last_reason,
+            "A karakterek együtt eddig napi 4,45 szintet léptek, így a hátralévő összesen 222,50 szint "
+            "50 nap alatt lesz meg.",
+        )
+
+    def test_last_date_is_not_before_the_first(self):
+        today = START + timedelta(days=10)
+        estimate = self.estimate("10", "89", mode=SEQUENTIAL)  # Thrall lassú, Jaina majdnem kész
+        self.assertEqual(estimate.first_target_date, today + timedelta(days=88))  # 80 szint napi 0,90-nel
+        self.assertEqual(estimate.last_target_date, estimate.first_target_date)
+        self.assertTrue(estimate.last_reason.endswith("Az utolsó céldátum azonban nem lehet korábbi az elsőnél."))
+        estimate = self.estimate("10", "89")  # párhuzamosan is
+        self.assertEqual(estimate.last_target_date, estimate.first_target_date)
+
+    def test_first_character_without_progress_uses_the_combined_pace(self):
+        today = START + timedelta(days=10)
+        estimate = self.estimate("1", "21", mode=SEQUENTIAL)  # együtt 20 szint 10 nap alatt: napi 2,00
+        self.assertEqual(estimate.first_target_date, today + timedelta(days=44))  # 89 szint: 44,5 → 45 nap
+        self.assertEqual(
+            estimate.first_reason,
+            "Thrall még nem lépett túl a kezdőszinten, ezért a karakterek együttes tempójával "
+            "(napi 2,00 szint) számolva a hátralévő 89,00 szintet 45 nap alatt szerzi meg.",
+        )
+        self.assertEqual(estimate.last_target_date, today + timedelta(days=78))  # 158 szint: 79 nap
+
+    def test_first_character_already_done(self):
+        today = START + timedelta(days=12)
+        estimate = self.estimate("90", "45.5", today=today, first_days=9, mode=SEQUENTIAL)
+        self.assertEqual(estimate.first_target_date, START + timedelta(days=9))  # a múltbeli céldátum marad
+        self.assertEqual(
+            estimate.first_reason, "Thrall már elérte a célszintet, ezért a céldátuma legkésőbb a tegnapi nap."
+        )
+        estimate = self.estimate("90", "45.5", today=today, first_days=20, mode=SEQUENTIAL)
+        self.assertEqual(estimate.first_target_date, today - timedelta(days=1))  # legkésőbb tegnap
+
+    def test_single_character(self):
+        estimate = self.estimate("45.5")
+        self.assertEqual(estimate.first_target_date, START + timedelta(days=19))
+        self.assertEqual(estimate.last_target_date, estimate.first_target_date)
+
+    def test_nothing_to_estimate_from(self):
+        cases = {
+            "nincs karakter": ((), {}),
+            "ma kezdődik": (("5",), {"today": START}),
+            "még nem kezdődött el (kezdete: 2026-10-01)": (("5",), {"today": START - timedelta(days=3)}),
+            "Minden karakter elérte már a célszintet": (("90", "95"), {}),
+            "egyik karakter sem lépett túl a kezdőszinten": (("1", "1"), {}),
+            "több mint 10 évig tartana": (("1.01",), {"today": START + timedelta(days=500)}),
+        }
+        for message, (levels, options) in cases.items():
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, re.escape(message)):
+                self.estimate(*levels, **options)
+
+
 class SpecScoresTests(unittest.TestCase):
     def test_lookup_by_class_and_spec(self):
         scores = SpecScores({SpecScores.spec_key("Death Knight", "Unholy"): D("3891")})
@@ -552,7 +675,7 @@ class PersistenceTests(unittest.TestCase):
                     race="Orc",
                     realm="Draenor",
                     raiderio_score=D("2543.7"),
-                    item_level=D("327.5"),
+                    item_level=D("327.55"),
                 ),
                 Character("Jaina", "Mage", level=D("1.00")),
             ],
@@ -562,7 +685,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(raw["characters"][0]["level"], 83.45)  # olvasható szám a fájlban
         self.assertEqual(raw["characters"][0]["raiderio_score"], 2543.7)
         self.assertIsNone(raw["characters"][1]["raiderio_score"])
-        self.assertEqual((raw["characters"][0]["item_level"], raw["characters"][1]["item_level"]), (327.5, None))
+        self.assertEqual((raw["characters"][0]["item_level"], raw["characters"][1]["item_level"]), (327.55, None))
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings, data.settings)
         self.assertEqual(
@@ -571,7 +694,7 @@ class PersistenceTests(unittest.TestCase):
                 for c in loaded.characters
             ],
             [
-                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45"), D("2543.7"), D("327.5")),
+                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45"), D("2543.7"), D("327.55")),
                 ("Jaina", "", "", "Mage", "", D("1.00"), None, None),
             ],
         )
@@ -639,10 +762,7 @@ class PersistenceTests(unittest.TestCase):
             (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level, arthas.raiderio_score),
             ("", "", "", "", D("80.00"), None),
         )
-        self.assertEqual(
-            arthas.item_level,
-            None,
-        )
+        self.assertIsNone(arthas.item_level)
 
     def test_reads_files_of_the_first_version(self):
         content = {

@@ -39,8 +39,10 @@ from leveling import (
     Status,
     build_plan,
     day_progress,
+    estimate_target_dates,
     format_date,
     format_deviation,
+    format_item_level,
     format_level,
     format_raiderio_score,
     format_compact,
@@ -352,7 +354,7 @@ class CharacterDialog(tk.Toplevel):
         score = character.raiderio_score
         self.raiderio_var = tk.StringVar(value="" if score is None else format_raiderio_score(score))
         item_level = character.item_level
-        self.item_level_var = tk.StringVar(value="" if item_level is None else format_compact(item_level))
+        self.item_level_var = tk.StringVar(value="" if item_level is None else format_item_level(item_level))
         self.level_var = tk.StringVar(value=format_level(character.level))
 
         body = ttk.Frame(self, padding=12)
@@ -432,10 +434,10 @@ class CharacterListWindow(tk.Toplevel):
         ("race", "Faj", "w", False),
         ("class", "Kaszt", "w", False),
         ("spec", "Spec", "w", False),
+        ("level", "Szint", "center", False),
         ("item_level", "Itemlevel", "center", False),
         ("raiderio", "Raider.io", "center", False),
         ("murlok", "Murlok.io", "center", False),
-        ("level", "Szint", "center", False),
         ("start", "Kezdés", "center", False),
         ("deadline", "Céldátum", "center", False),
         ("goal", "Mai cél", "center", False),
@@ -658,8 +660,9 @@ class CharacterListWindow(tk.Toplevel):
             limit = self.winfo_screenwidth() - self.app.px(40)
             self.geometry(f"{min(self.winfo_width() + missing, limit)}x{self.winfo_height()}")
 
-    @staticmethod
-    def _row_values(plan: CharacterPlan) -> tuple:
+    @classmethod
+    def _row_values(cls, plan: CharacterPlan) -> tuple:
+        """Egy sor cellái a COLUMNS sorrendjében."""
         character = plan.character
         if plan.status is Status.DONE:
             days = "–"
@@ -667,25 +670,26 @@ class CharacterListWindow(tk.Toplevel):
             days = "lejárt"
         else:
             days = str(plan.days_left)
-        return (
-            plan.position,
-            character.name,
-            character.realm or "–",
-            character.race or "–",
-            character.char_class or "–",
-            character.spec or "–",
-            "–" if character.item_level is None else format_compact(character.item_level),
-            "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
-            "–" if plan.spec_score is None else format_compact(plan.spec_score),
-            format_level(character.level),
-            format_date(plan.start),
-            format_date(plan.deadline),
-            "–" if plan.goal is None else format_level(plan.goal),
-            format_deviation(plan.deviation),
-            days,
-            "–" if plan.pace is None else format_level(plan.pace),
-            plan.status_text,
-        )
+        cells = {
+            "position": plan.position,
+            "name": character.name,
+            "realm": character.realm or "–",
+            "race": character.race or "–",
+            "class": character.char_class or "–",
+            "spec": character.spec or "–",
+            "level": format_level(character.level),
+            "item_level": "–" if character.item_level is None else format_item_level(character.item_level),
+            "raiderio": "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
+            "murlok": "–" if plan.spec_score is None else format_compact(plan.spec_score),
+            "start": format_date(plan.start),
+            "deadline": format_date(plan.deadline),
+            "goal": "–" if plan.goal is None else format_level(plan.goal),
+            "deviation": format_deviation(plan.deviation),
+            "days": days,
+            "pace": "–" if plan.pace is None else format_level(plan.pace),
+            "status": plan.status_text,
+        }
+        return tuple(cells[key] for key, *_ in cls.COLUMNS)
 
     @staticmethod
     def _summary(plans: list[CharacterPlan], goal_day: date, today: date) -> str:
@@ -924,6 +928,7 @@ class App:
         style.configure("Ok.TLabel", foreground=OK_COLOR)
         style.configure("Error.TLabel", foreground=ERROR_COLOR)
         style.configure("Compact.TButton", padding=(2, 0))
+        style.configure("Estimate.TButton", justify="center")
         style.configure("Good.TLabel", font=strong, foreground=OK_COLOR)
         style.configure("Late.TLabel", font=strong, foreground=BEHIND_COLOR)
         style.configure("Treeview", rowheight=round(base.metrics("linespace") * 1.5))
@@ -985,6 +990,13 @@ class App:
         for row, (text, variable) in enumerate(date_rows):
             field_label(settings, text, row)
             DateField(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
+        self.estimate_button = ttk.Button(
+            settings,
+            text="Kiszámolás a\nmostani szintekből",
+            style="Estimate.TButton",
+            command=self.estimate_target_dates,
+        )
+        self.estimate_button.grid(row=1, column=2, rowspan=2, sticky="nsw", padx=(10, 0), pady=3)
         for row, (text, variable) in enumerate(
             (("Kezdőszint:", self.start_level_var), ("Célszint:", self.target_level_var)), start=3
         ):
@@ -992,7 +1004,7 @@ class App:
             LevelSpinbox(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
         field_label(settings, "Ütemezés:", 5, sticky="nw")
         modes = ttk.Frame(settings)
-        modes.grid(row=5, column=1, sticky="w", pady=3)
+        modes.grid(row=5, column=1, columnspan=2, sticky="w", pady=3)
         ttk.Radiobutton(
             modes,
             text="Párhuzamosan – mindegyik a kezdő naptól szintez",
@@ -1008,7 +1020,7 @@ class App:
         self.settings_message_label = ttk.Label(
             settings, textvariable=self.settings_message, wraplength=self.px(520), justify="left"
         )
-        self.settings_message_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.settings_message_label.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         new = ttk.LabelFrame(body, text="Új karakter hozzáadása", padding=10)
         new.grid(row=2, column=1, sticky="nsew", padx=(12, 0))
@@ -1070,31 +1082,29 @@ class App:
             side="right", anchor="n"
         )
 
+    def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
+        """A beállítások mezőiből beolvasott értékek és a hibák, a Settings mezőnevei szerint."""
+        values = {}
+        problems = {}
+        fields = (
+            ("start_date", "Szintezés kezdete", self.start_var, parse_date),
+            ("first_target_date", "Első karakter céldátuma", self.first_var, parse_date),
+            ("last_target_date", "Utolsó karakter céldátuma", self.last_var, parse_date),
+            ("start_level", "Kezdőszint", self.start_level_var, parse_level),
+            ("target_level", "Célszint", self.target_level_var, parse_level),
+        )
+        for key, label, variable, parse in fields:
+            try:
+                values[key] = parse(variable.get())
+            except ValueError as exc:
+                problems[key] = f"{label}: {exc}"
+        return values, problems
+
     def _on_settings_edited(self, *_args) -> None:
         """Minden módosítás után ellenőrzi a beállításokat; ha helyesek, el is menti őket."""
-        values = {}
-        problems = []
-        date_fields = (
-            ("start_date", "Szintezés kezdete", self.start_var),
-            ("first_target_date", "Első karakter céldátuma", self.first_var),
-            ("last_target_date", "Utolsó karakter céldátuma", self.last_var),
-        )
-        for key, label, variable in date_fields:
-            try:
-                values[key] = parse_date(variable.get())
-            except ValueError as exc:
-                problems.append(f"{label}: {exc}")
-        level_fields = (
-            ("start_level", "Kezdőszint", self.start_level_var),
-            ("target_level", "Célszint", self.target_level_var),
-        )
-        for key, label, variable in level_fields:
-            try:
-                values[key] = parse_level(variable.get())
-            except ValueError as exc:
-                problems.append(f"{label}: {exc}")
+        values, problems = self._read_settings_fields()
         if problems:
-            self._show_settings_problems(problems)
+            self._show_settings_problems(list(problems.values()))
             return
         settings = Settings(mode=self.mode_var.get(), **values)
         problems = settings.errors()
@@ -1110,6 +1120,63 @@ class App:
         else:
             self.settings_message.set("✔ A beállítások rendben vannak, a változások automatikusan mentődnek.")
             self.settings_message_label.configure(style="Ok.TLabel")
+
+    def estimate_target_dates(self) -> None:
+        """Az első és az utolsó céldátum kiszámolása a karakterek mostani szintjéből.
+
+        A mostani szinteket a tegnapi nap végéig elértnek tekinti (lásd
+        leveling.estimate_target_dates); az új dátumok beállítása előtt rákérdez.
+        """
+        title = "Céldátumok kiszámolása"
+        values, problems = self._read_settings_fields()
+        # A két céldátum mezőjét a számolás úgyis felülírja, így azok hibája nem akadály.
+        blocking = [text for key, text in problems.items() if key not in ("first_target_date", "last_target_date")]
+        if blocking:
+            message = "Előbb javítsd ki a beállításokat:\n\n" + "\n".join(blocking)
+            messagebox.showinfo(title, message, parent=self.root)
+            return
+        current = self.data.settings
+        settings = Settings(
+            start_date=values["start_date"],
+            first_target_date=values.get("first_target_date", current.first_target_date),
+            last_target_date=values.get("last_target_date", current.last_target_date),
+            start_level=values["start_level"],
+            target_level=values["target_level"],
+            mode=self.mode_var.get(),
+        )
+        try:
+            estimate = estimate_target_dates(settings, self.data.characters, date.today())
+        except ValueError as exc:
+            messagebox.showinfo(title, str(exc), parent=self.root)
+            return
+        new_first = format_date(estimate.first_target_date)
+        new_last = format_date(estimate.last_target_date)
+        old = (values.get("first_target_date"), values.get("last_target_date"))
+        if old == (estimate.first_target_date, estimate.last_target_date):
+            message = f"A céldátumok már most is ezek: {new_first} és {new_last}."
+            messagebox.showinfo(title, message, parent=self.root)
+            return
+
+        def change(old_date: date | None, variable: tk.StringVar, new: str) -> str:
+            if old_date is not None and format_date(old_date) == new:
+                return f"{new} (nem változik)"
+            return f"{variable.get().strip() or '–'} → {new}"
+
+        question = (
+            f"Első karakter célszinten: {change(old[0], self.first_var, new_first)}\n"
+            f"Utolsó karakter célszinten: {change(old[1], self.last_var, new_last)}\n\n"
+            "Beállítod az új céldátumokat?"
+        )
+        # A magyarázat kisebb betűvel jelenik meg (Windowson a kérdés alatt, ugyanabban a szövegben).
+        detail = (
+            f"A számolás a mostani szinteket tegnap estig elértnek tekinti: a szintezés eddigi {estimate.days} "
+            "napjának tempójából indul ki, a mai nap még hátravan.\n\n"
+            f"Első céldátum: {estimate.first_reason}\n\n"
+            f"Utolsó céldátum: {estimate.last_reason}"
+        )
+        if messagebox.askyesno(title, question, detail=detail, parent=self.root):
+            self.first_var.set(new_first)  # a mezők figyelése ellenőriz, ment és frissít
+            self.last_var.set(new_last)
 
     def add_character(self, *_args) -> None:
         name = self.name_var.get().strip()

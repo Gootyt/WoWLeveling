@@ -29,16 +29,17 @@ import re
 import tempfile
 import unicodedata
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 
 LEVEL_STEP = Decimal("0.01")  # a szintek két tizedesjegy pontosságúak
-RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám és az itemlevel egy tizedesjegyű (pl. 2543,7)
+RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám egy tizedesjegyű (pl. 2543,7)
 RAIDERIO_MAX = Decimal("99999.9")
-ITEM_LEVEL_MAX = Decimal("9999.9")
+ITEM_LEVEL_STEP = Decimal("0.01")  # az itemlevel két tizedesjegyű (pl. 326,55)
+ITEM_LEVEL_MAX = Decimal("9999.99")
 LEVEL_MIN = Decimal("1.00")
 LEVEL_MAX = Decimal("999.99")
 DEFAULT_START_LEVEL = Decimal("1.00")
@@ -131,8 +132,22 @@ def format_deviation(value: Decimal) -> str:
     return format_level(abs(value))
 
 
-def _parse_one_decimal(text: str, name: str, example: str, maximum: Decimal) -> Decimal | None:
-    """Legfeljebb egy tizedesjegyű, nem negatív szám beolvasása; üres szövegnél None.
+_DECIMAL_COUNT_WORDS = {1: "egy", 2: "két"}
+
+
+def _decimal_places(step: Decimal) -> int:
+    """A lépésköz tizedesjegyeinek száma (0,1: 1, 0,01: 2)."""
+    return -step.as_tuple().exponent
+
+
+def _format_decimal(value: Decimal, step: Decimal) -> str:
+    """Szám a lépésközének megfelelő számú tizedesjeggyel, tizedesvesszővel."""
+    return f"{value:.{_decimal_places(step)}f}".replace(".", ",")
+
+
+def _parse_decimal(text: str, name: str, example: str, maximum: Decimal, step: Decimal) -> Decimal | None:
+    """Nem negatív szám beolvasása legfeljebb annyi tizedesjeggyel, amennyit a `step`
+    lépésköz megenged; üres szövegnél None.
 
     Tizedesvessző és -pont is jó; ha mindkettő szerepel (pl. a weboldalról másolt
     „2,543.7”), a hátrébb álló a tizedesjel, a másik ezres elválasztó.
@@ -148,37 +163,46 @@ def _parse_one_decimal(text: str, name: str, example: str, maximum: Decimal) -> 
     match = _LEVEL_PATTERN.fullmatch(text)
     if match is None:
         raise ValueError(f"„{original}” nem érvényes {name} (példa: {example}).")
+    places = _decimal_places(step)
     decimals = match.group(2)
-    if decimals is not None and len(decimals) > 1:
-        raise ValueError(f"„{original}”: {article} {name} legfeljebb egy tizedesjegyű lehet.")
+    if decimals is not None and len(decimals) > places:
+        words = _DECIMAL_COUNT_WORDS[places]
+        raise ValueError(f"„{original}”: {article} {name} legfeljebb {words} tizedesjegyű lehet.")
     value = Decimal(text.replace(",", "."))
     if value > maximum:
-        raise ValueError(f"{article.capitalize()} {name} legfeljebb {format_raiderio_score(maximum)} lehet.")
-    return value.quantize(RAIDERIO_STEP)
+        raise ValueError(f"{article.capitalize()} {name} legfeljebb {_format_decimal(maximum, step)} lehet.")
+    return value.quantize(step)
 
 
 def parse_raiderio_score(text: str) -> Decimal | None:
     """Raider.io pontszám beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None."""
-    return _parse_one_decimal(text, "Raider.io pontszám", "2543,7", RAIDERIO_MAX)
+    return _parse_decimal(text, "Raider.io pontszám", "2543,7", RAIDERIO_MAX, RAIDERIO_STEP)
 
 
 def parse_item_level(text: str) -> Decimal | None:
-    """Itemlevel beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None."""
-    return _parse_one_decimal(text, "itemlevel", "327 vagy 326,5", ITEM_LEVEL_MAX)
+    """Itemlevel beolvasása legfeljebb két tizedesjeggyel; üres szövegnél None."""
+    return _parse_decimal(text, "itemlevel", "327 vagy 326,55", ITEM_LEVEL_MAX, ITEM_LEVEL_STEP)
 
 
 def format_raiderio_score(value: Decimal) -> str:
     """Raider.io pontszám egy tizedesjeggyel, tizedesvesszővel (pl. 2543,7)."""
-    return f"{value:.1f}".replace(".", ",")
+    return _format_decimal(value, RAIDERIO_STEP)
+
+
+def format_item_level(value: Decimal) -> str:
+    """Itemlevel két tizedesjeggyel, tizedesvesszővel (pl. 326,55 vagy 327,00)."""
+    return _format_decimal(value, ITEM_LEVEL_STEP)
 
 
 def format_compact(value: Decimal) -> str:
-    """Szám egész alakban, ha egész (pl. 3891), különben egy tizedesjeggyel (pl. 326,5)."""
+    """Szám egész alakban, ha egész (pl. 3891), különben egy tizedesjeggyel (pl. 3712,5)."""
     return str(int(value)) if value == value.to_integral_value() else format_raiderio_score(value)
 
 
-def _one_decimal_from_json(value: object, maximum: Decimal = RAIDERIO_MAX) -> Decimal | None:
-    """Az adatfájlban tárolt egy tizedesjegyű szám, pl. Raider.io pontszám (hiányzó vagy üres: None)."""
+def _decimal_from_json(
+    value: object, maximum: Decimal = RAIDERIO_MAX, step: Decimal = RAIDERIO_STEP
+) -> Decimal | None:
+    """Az adatfájlban tárolt nem negatív szám, pl. Raider.io pontszám (hiányzó vagy üres: None)."""
     if value is None or value == "":
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
@@ -189,7 +213,7 @@ def _one_decimal_from_json(value: object, maximum: Decimal = RAIDERIO_MAX) -> De
         raise ValueError(f"hibás szám: {value!r}") from None
     if not number.is_finite():
         raise ValueError(f"hibás szám: {value!r}")
-    return min(max(number, Decimal(0)), maximum).quantize(RAIDERIO_STEP)
+    return min(max(number, Decimal(0)), maximum).quantize(step)
 
 
 def _level_from_json(value: object) -> Decimal:
@@ -307,8 +331,8 @@ class Character:
             level=_level_from_json(data.get("level", default_level)),
             race=str(data.get("race", "")).strip(),
             realm=str(data.get("realm", "")).strip(),
-            raiderio_score=_one_decimal_from_json(data.get("raiderio_score")),
-            item_level=_one_decimal_from_json(data.get("item_level"), ITEM_LEVEL_MAX),
+            raiderio_score=_decimal_from_json(data.get("raiderio_score")),
+            item_level=_decimal_from_json(data.get("item_level"), ITEM_LEVEL_MAX, ITEM_LEVEL_STEP),
         )
 
 
@@ -652,6 +676,148 @@ def day_progress(settings: Settings, characters: list[Character], today: date | 
     )
 
 
+ESTIMATE_LIMIT_DAYS = 3650  # ennél (kb. 10 évnél) távolabbi céldátumot nem javasol a program
+_TOO_SLOW = "Az eddigi tempóval ez több mint 10 évig tartana, ilyen céldátumot nem érdemes beállítani."
+
+
+@dataclass(frozen=True)
+class TargetDateEstimate:
+    """Az első és az utolsó céldátum az eddigi tempó alapján (lásd estimate_target_dates)."""
+
+    first_target_date: date
+    last_target_date: date
+    days: int  # a szintezés lezárt napjainak száma: a kezdőnaptól a tegnapi napig
+    first_reason: str  # hogyan adódott az első céldátum
+    last_reason: str  # hogyan adódott az utolsó céldátum
+
+
+def _days_needed(remaining: Decimal, gained: Decimal, days: int) -> int:
+    """Hány nap kell a hátralévő szintekhez, ha eddig `days` nap alatt `gained` szint jött össze."""
+    needed = int((remaining * days / gained).to_integral_value(rounding=ROUND_CEILING))
+    if needed > ESTIMATE_LIMIT_DAYS:
+        raise ValueError(_TOO_SLOW)
+    return needed
+
+
+def _daily_pace(gained: Decimal, days: int) -> str:
+    return format_level((gained / days).quantize(LEVEL_STEP, rounding=ROUND_HALF_UP))
+
+
+def estimate_target_dates(
+    settings: Settings, characters: list[Character], today: date | None = None
+) -> TargetDateEstimate:
+    """Az első és az utolsó karakter céldátuma a karakterek eddigi tempója alapján.
+
+    A mostani szinteket a tegnapi nap végéig elértnek tekinti, a mai nap tehát még
+    szintezési nap. Az eddigi tempó: a kezdőnaptól tegnapig a kezdőszint felett
+    megszerzett szintek (legfeljebb a célszintig) osztva a napok számával.
+
+    * Az első céldátum: amikor a lista első karaktere a saját eddigi tempójával
+      eléri a célszintet. Ha még nem lépett túl a kezdőszinten, a karakterek
+      együttes tempójával számol; ha már célszinten van, a céldátuma legkésőbb a
+      tegnapi nap.
+    * Az utolsó céldátum párhuzamos ütemezésnél a legkorábbi nap, amellyel a
+      karakterek együtt (lásd day_progress) elérik a terv tegnapi célját; egymás
+      utáni ütemezésnél pedig az a nap, amikorra az együttes eddigi tempóval minden
+      hátralévő szint meglesz. Nem lehet korábbi az első céldátumnál.
+
+    A beállítások közül csak a kezdőnapot, a kezdő- és a célszintet, valamint az
+    ütemezést használja (és az első céldátumot, ha az első karakter már célszinten
+    van). ValueError-t dob, ha nincs miből számolni.
+    """
+    today = today or date.today()
+    yesterday = today - timedelta(days=1)
+    days = (today - settings.start_date).days
+    start, target = settings.start_level, settings.target_level
+    if not characters:
+        raise ValueError("Még nincs karakter a listán, így nincs miből számolni.")
+    if days < 1:
+        when = "ma kezdődik" if days == 0 else f"még nem kezdődött el (kezdete: {format_date(settings.start_date)})"
+        raise ValueError(
+            f"A szintezés {when}, így még nincs lezárt nap, amelynek a tempójából számolni lehetne "
+            "(a mai nap még nem számít bele)."
+        )
+    if target <= start:
+        raise ValueError("A célszintnek nagyobbnak kell lennie a kezdőszintnél.")
+    if all(character.level >= target for character in characters):
+        raise ValueError("Minden karakter elérte már a célszintet, nincs mit kiszámolni.")
+    gains = [max(min(character.level, target) - start, Decimal(0)) for character in characters]
+    total_gain = sum(gains)
+    if total_gain <= 0:
+        raise ValueError(
+            "A kezdés óta még egyik karakter sem lépett túl a kezdőszinten, így nincs eddigi tempó, "
+            "amiből számolni lehetne."
+        )
+
+    first = characters[0]
+    if first.level >= target:
+        first_date = max(settings.start_date, min(settings.first_target_date, yesterday))
+        first_reason = f"{first.name} már elérte a célszintet, ezért a céldátuma legkésőbb a tegnapi nap."
+    else:
+        remaining = target - first.level
+        if gains[0] > 0:
+            needed = _days_needed(remaining, gains[0], days)
+            first_reason = (
+                f"{first.name} eddig napi {_daily_pace(gains[0], days)} szintet lépett, így a hátralévő "
+                f"{format_level(remaining)} szintet {needed} nap alatt szerzi meg."
+            )
+        else:
+            needed = _days_needed(remaining, total_gain, days)
+            first_reason = (
+                f"{first.name} még nem lépett túl a kezdőszinten, ezért a karakterek együttes tempójával "
+                f"(napi {_daily_pace(total_gain, days)} szint) számolva a hátralévő {format_level(remaining)} "
+                f"szintet {needed} nap alatt szerzi meg."
+            )
+        first_date = today + timedelta(days=needed - 1)
+
+    if len(characters) == 1:
+        last_date, last_reason = first_date, "Egyetlen karakter van, így ez megegyezik az első céldátummal."
+    elif settings.mode == SEQUENTIAL:
+        remaining = sum(max(target - character.level, Decimal(0)) for character in characters)
+        needed = _days_needed(remaining, total_gain, days)
+        last_date = max(first_date, today + timedelta(days=needed - 1))
+        last_reason = (
+            f"A karakterek együtt eddig napi {_daily_pace(total_gain, days)} szintet léptek, így a hátralévő "
+            f"összesen {format_level(remaining)} szint {needed} nap alatt lesz meg."
+        )
+        if last_date > today + timedelta(days=needed - 1):
+            last_reason += " Az utolsó céldátum azonban nem lehet korábbi az elsőnél."
+    else:
+        last_date = _parallel_last_date(settings, characters, first_date, today)
+        last_reason = "Ezzel a dátummal a karakterek együttes szintje éppen eléri a terv tegnapi célját."
+    return TargetDateEstimate(first_date, last_date, days, first_reason, last_reason)
+
+
+def _parallel_last_date(settings: Settings, characters: list[Character], first_date: date, today: date) -> date:
+    """A legkorábbi utolsó céldátum (legalább `first_date`), amellyel a párhuzamos terv
+    szerint a tegnapi nap végére esedékes szintek összege nem több, mint amennyit a
+    karakterek együtt elértek (ugyanúgy számolva, mint a day_progress)."""
+    start, target = settings.start_level, settings.target_level
+    yesterday = today - timedelta(days=1)
+    gained = sum(min(character.level, target) - start for character in characters)
+
+    def reached(last: date) -> bool:
+        trial = replace(settings, first_target_date=first_date, last_target_date=last)
+        due = sum(
+            planned_level(window_start, end, start, target, yesterday) - start
+            for window_start, end in leveling_windows(trial, len(characters))
+        )
+        return due <= gained
+
+    # Későbbi utolsó céldátummal a köztes céldátumok sem korábbiak, így a tegnapra
+    # esedékes szintek sem nőnek: a legkorábbi megfelelő nap felezéssel kereshető.
+    low, high = first_date, today + timedelta(days=ESTIMATE_LIMIT_DAYS - 1)
+    if not reached(high):
+        raise ValueError(_TOO_SLOW)
+    while low < high:
+        middle = low + timedelta(days=(high - low).days // 2)
+        if reached(middle):
+            high = middle
+        else:
+            low = middle + timedelta(days=1)
+    return low
+
+
 SPEC_SCORES_MAX_AGE = timedelta(hours=8)  # a Murlok.io is 8 óránként frissíti a rangsorait
 
 
@@ -687,7 +853,7 @@ class SpecScores:
     def from_dict(cls, data: dict) -> SpecScores:
         scores = {}
         for key, value in dict(data.get("scores", {})).items():
-            score = _one_decimal_from_json(value)
+            score = _decimal_from_json(value)
             if score is not None:
                 scores[str(key).casefold()] = score
         fetched_at = data.get("fetched_at")
