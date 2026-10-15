@@ -74,6 +74,31 @@ def format_date(value: date) -> str:
     return value.isoformat()
 
 
+HU_MONTHS = (
+    "január",
+    "február",
+    "március",
+    "április",
+    "május",
+    "június",
+    "július",
+    "augusztus",
+    "szeptember",
+    "október",
+    "november",
+    "december",
+)
+
+
+def goal_day_phrase(goal_day: date, today: date) -> str:
+    """A célnap megnevezése névelővel: „a mai”, „a holnapi”, „a holnaputáni”, „az október 18-i”."""
+    offset = (goal_day - today).days
+    if 0 <= offset <= 2:
+        return ("a mai", "a holnapi", "a holnaputáni")[offset]
+    month = HU_MONTHS[goal_day.month - 1]
+    return f"{'az' if month[0] in 'aáeéiíoóöőuúüű' else 'a'} {month} {goal_day.day}-i"
+
+
 def parse_level(text: str) -> Decimal:
     """Szint beolvasása legfeljebb két tizedesjeggyel; tizedesvessző és -pont is jó."""
     text = text.strip()
@@ -290,8 +315,8 @@ class CharacterPlan:
     position: int  # sorszám a listában (1-től)
     start: date  # a karakter szintezésének kezdőnapja
     deadline: date  # eddig kell elérnie a célszintet
-    goal_today: Decimal | None  # a mai nap végéig elérendő szint (None: kész vagy még nem kezdte)
-    deviation: Decimal  # a jelenlegi szint eltérése a terv szerinti mai szinttől (+: előrébb jár)
+    goal: Decimal | None  # a célnap (alapból a mai nap) végéig elérendő szint (None: kész vagy még nem kezdte)
+    deviation: Decimal  # a jelenlegi szint eltérése a célnapra tervezett szinttől (+: előrébb jár)
     days_left: int | None  # hátralévő szintezési napok a céldátumig, a mai napot is beleértve
     pace: Decimal | None  # a szükséges átlagos tempó (szint/nap), felfelé kerekítve
     status: Status
@@ -299,11 +324,11 @@ class CharacterPlan:
     spec_score: Decimal | None = None  # a karakter specjének pontszáma a Murlok.io rangsorában
 
     @property
-    def levels_due_today(self) -> Decimal:
-        """Ennyi szintet kell még ma szerezni a mai cél eléréséhez."""
-        if self.goal_today is None:
+    def levels_due(self) -> Decimal:
+        """Ennyi szint hiányzik még a célnap (alapból a mai nap) céljáig."""
+        if self.goal is None:
             return Decimal("0.00")
-        return max(Decimal("0.00"), self.goal_today - self.character.level)
+        return max(Decimal("0.00"), self.goal - self.character.level)
 
 
 def deadlines(settings: Settings, count: int) -> list[date]:
@@ -358,9 +383,15 @@ def build_plan(
     characters: list[Character],
     today: date | None = None,
     spec_scores: SpecScores | None = None,
+    goal_day: date | None = None,
 ) -> list[CharacterPlan]:
-    """Az összes karakter ütemterve a megadott (alapértelmezés szerint a mai) napon."""
+    """Az összes karakter ütemterve a megadott (alapértelmezés szerint a mai) napon.
+
+    A cél, a szinteltérés és az állapot a `goal_day` napra vonatkozik (alapból a mai
+    nap, lásd lookahead_day), a hátralévő napok és a tempó mindig a valódi mai naptól.
+    """
     today = today or date.today()
+    goal_day = goal_day or today
     windows = leveling_windows(settings, len(characters))
     return [
         _plan_character(
@@ -371,9 +402,29 @@ def build_plan(
             settings,
             today,
             spec_scores.score_for(character) if spec_scores is not None else None,
+            goal_day,
         )
         for position, (character, (start, deadline)) in enumerate(zip(characters, windows), start=1)
     ]
+
+
+def lookahead_day(settings: Settings, characters: list[Character], today: date | None = None) -> date:
+    """Az első nap a mai naptól, amelynek tervezett szintjét még nem érte el minden karakter.
+
+    Ha minden karakter elérte a célszintet (vagy nincs karakter), a mai nap.
+    """
+    today = today or date.today()
+    if all(character.level >= settings.target_level for character in characters):
+        return today
+    windows = leveling_windows(settings, len(characters))
+    last_day = max(end for _, end in windows)
+    day = today
+    while day < last_day and all(
+        character.level >= planned_level(start, end, settings.start_level, settings.target_level, day)
+        for character, (start, end) in zip(characters, windows)
+    ):
+        day += timedelta(days=1)
+    return day
 
 
 def _plan_character(
@@ -384,12 +435,14 @@ def _plan_character(
     settings: Settings,
     today: date,
     spec_score: Decimal | None = None,
+    goal_day: date | None = None,
 ) -> CharacterPlan:
     level = character.level
     start_level, target = settings.start_level, settings.target_level
     remaining = target - level
-    # A terv szerinti szint a mai nap végén: kezdés előtt a kezdőszint, a céldátumtól a célszint.
-    planned_today = planned_level(start, deadline, start_level, target, today)
+    goal_day = goal_day or today
+    # A célnapra tervezett szint: kezdés előtt a kezdőszint, a céldátumtól a célszint.
+    planned = planned_level(start, deadline, start_level, target, goal_day)
 
     def plan(status, text, goal=None, days_left=None, pace=None):
         return CharacterPlan(
@@ -397,8 +450,8 @@ def _plan_character(
             position=position,
             start=start,
             deadline=deadline,
-            goal_today=goal,
-            deviation=level - planned_today,
+            goal=goal,
+            deviation=level - planned,
             days_left=days_left,
             pace=pace,
             status=status,
@@ -414,7 +467,7 @@ def _plan_character(
 
     days_left = (deadline - max(today, start)).days + 1
     pace = (remaining / days_left).quantize(LEVEL_STEP, rounding=ROUND_CEILING)
-    if today < start:
+    if goal_day < start:
         if level > start_level:
             status, text = Status.AHEAD, f"Előrébb jár (+{format_level(level - start_level)} szint)"
         elif level < start_level:
@@ -423,16 +476,19 @@ def _plan_character(
             status, text = Status.NOT_STARTED, f"Még nem kezdődött (indulás: {format_date(start)})"
         return plan(status, text, days_left=days_left, pace=pace)
 
-    goal = planned_today
-    expected = planned_level(start, deadline, start_level, target, today - timedelta(days=1))
+    goal = planned
+    expected = planned_level(start, deadline, start_level, target, goal_day - timedelta(days=1))
+    # A mai célnál „ma még”, előretekintéskor pl. „a holnapi célig még”.
+    still = "ma még" if goal_day == today else f"{goal_day_phrase(goal_day, today)} célig még"
     if level > goal:
         status, text = Status.AHEAD, f"Előrébb jár (+{format_level(level - goal)} szint)"
     elif level == goal:
-        status, text = Status.GOAL_MET, "Mai cél teljesítve"
+        met = "Mai cél" if goal_day == today else f"{goal_day_phrase(goal_day, today).capitalize()} cél"
+        status, text = Status.GOAL_MET, f"{met} teljesítve"
     elif level >= expected:
-        status, text = Status.ON_TRACK, f"Ütemben – ma még {format_level(goal - level)} szint"
+        status, text = Status.ON_TRACK, f"Ütemben – {still} {format_level(goal - level)} szint"
     else:
-        status, text = Status.BEHIND, f"Lemaradásban – ma még {format_level(goal - level)} szint"
+        status, text = Status.BEHIND, f"Lemaradásban – {still} {format_level(goal - level)} szint"
     return plan(status, text, goal=goal, days_left=days_left, pace=pace)
 
 
@@ -475,7 +531,7 @@ SORT_KEYS = {
     "level": lambda plan: plan.character.level,
     "start": lambda plan: plan.start,
     "deadline": lambda plan: plan.deadline,
-    "goal": lambda plan: plan.goal_today,
+    "goal": lambda plan: plan.goal,
     "deviation": lambda plan: plan.deviation,
     "days": lambda plan: plan.days_left,
     "pace": lambda plan: plan.pace,
@@ -629,6 +685,8 @@ class LevelingData:
     settings: Settings
     characters: list[Character] = field(default_factory=list)
     spec_scores: SpecScores = field(default_factory=SpecScores)  # a Murlok.io-ról lekért adatok
+    # A lista a következő nap céljait mutassa, ha a mai célt minden karakter teljesítette.
+    look_ahead: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -636,6 +694,7 @@ class LevelingData:
             "settings": self.settings.to_dict(),
             "characters": [character.to_dict() for character in self.characters],
             "spec_scores": self.spec_scores.to_dict(),
+            "view": {"look_ahead": self.look_ahead},
         }
 
     @classmethod
@@ -645,10 +704,13 @@ class LevelingData:
             spec_scores = SpecScores.from_dict(data.get("spec_scores") or {})
         except (ArithmeticError, AttributeError, TypeError, ValueError):
             spec_scores = SpecScores()  # a sérült gyorsítótár miatt ne vesszenek el az adatok
+        view = data.get("view")
+        look_ahead = view.get("look_ahead", True) if isinstance(view, dict) else True
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
             spec_scores=spec_scores,
+            look_ahead=look_ahead if isinstance(look_ahead, bool) else True,
         )
 
 

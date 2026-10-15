@@ -26,6 +26,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from leveling import (
+    HU_MONTHS,
     LEVEL_MAX,
     LEVEL_MIN,
     PARALLEL,
@@ -43,7 +44,9 @@ from leveling import (
     format_level,
     format_raiderio_score,
     format_spec_score,
+    goal_day_phrase,
     load_data,
+    lookahead_day,
     parse_date,
     parse_level,
     parse_raiderio_score,
@@ -64,20 +67,6 @@ INTRO_TEXT = (
 )
 
 
-HU_MONTHS = (
-    "január",
-    "február",
-    "március",
-    "április",
-    "május",
-    "június",
-    "július",
-    "augusztus",
-    "szeptember",
-    "október",
-    "november",
-    "december",
-)
 HU_WEEKDAYS = ("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
 HU_WEEKDAY_ABBREVIATIONS = ("H", "K", "Sze", "Cs", "P", "Szo", "V")
 
@@ -90,6 +79,7 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
+GOAL_HEADING_SAMPLES = ("Mai cél", "Holnapi cél", "Cél (12-31)")  # a cél oszlop lehetséges fejlécei
 
 BEHIND_COLOR = "#b35c00"
 
@@ -143,6 +133,26 @@ def link_spec_to_class(class_var: tk.StringVar, spec_var: tk.StringVar, spec_box
 
     spec_box.configure(values=specs_for_class(class_var.get()))
     class_var.trace_add("write", update)
+
+
+def goal_heading(goal_day: date, today: date) -> str:
+    """A cél oszlop fejléce: „Mai cél”, „Holnapi cél”, vagy pl. „Cél (10-18)”."""
+    offset = (goal_day - today).days
+    return "Mai cél" if offset == 0 else "Holnapi cél" if offset == 1 else f"Cél ({goal_day:%m-%d})"
+
+
+def look_ahead_text(goal_day: date, today: date) -> str:
+    """Magyarázat, ha a lista egy későbbi nap céljait mutatja (különben üres)."""
+    offset = (goal_day - today).days
+    if offset <= 0:
+        return ""
+    if offset == 1:
+        done = "A mai célt"
+    elif offset == 2:
+        done = "A mai és a holnapi célt is"
+    else:
+        done = f"A mai és a következő {offset - 1} nap célját is"
+    return f"{done} minden karakter teljesítette, ezért {goal_day_phrase(goal_day, today)} célok látszanak."
 
 
 def describe_character(character: Character) -> str:
@@ -424,6 +434,8 @@ class CharacterListWindow(tk.Toplevel):
         self.level_var = tk.StringVar()
         self.order_hint_var = tk.StringVar()
         self.day_var = tk.StringVar()
+        self.look_ahead_var = tk.BooleanVar(value=app.data.look_ahead)
+        self.look_ahead_info_var = tk.StringVar()
         self._build()
         self.update_score_controls()
         self.bind("<Escape>", lambda _event: self.close())
@@ -452,14 +464,25 @@ class CharacterListWindow(tk.Toplevel):
         ttk.Label(
             body,
             text="A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie "
-            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni, a "
+            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor "
+            "a következő napé), a "
             "„Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
             "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ "
             "rangsorában. A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend.",
             style="Hint.TLabel",
             wraplength=px(860),
             justify="left",
-        ).pack(anchor="w", pady=(2, 8))
+        ).pack(anchor="w", pady=(2, 6))
+
+        options = ttk.Frame(body)
+        options.pack(fill="x", pady=(0, 6))
+        ttk.Checkbutton(
+            options,
+            text="Teljesített nap után a következő nap céljait mutassa",
+            variable=self.look_ahead_var,
+            command=self._toggle_look_ahead,
+        ).pack(side="left")
+        ttk.Label(options, textvariable=self.look_ahead_info_var, style="Good.TLabel").pack(side="left", padx=(12, 0))
 
         table = ttk.Frame(body)
         table.pack(fill="both", expand=True)
@@ -471,7 +494,8 @@ class CharacterListWindow(tk.Toplevel):
         heading_font = tkfont.nametofont("TkHeadingFont")
         for key, heading, width, anchor, stretch in self.COLUMNS:
             self.tree.heading(key, text=heading, anchor=anchor, command=lambda key=key: self.sort_by(key))
-            width = max(px(width), heading_font.measure(heading + SORT_ARROWS[False]) + px(16))
+            labels = GOAL_HEADING_SAMPLES if key == "goal" else (heading,)
+            width = max(px(width), max(heading_font.measure(label + SORT_ARROWS[False]) for label in labels) + px(16))
             minwidth = px(200) if stretch else px(30)
             self.tree.column(key, width=width, minwidth=minwidth, anchor=anchor, stretch=stretch)
         for status, color in STATUS_COLORS.items():
@@ -531,10 +555,13 @@ class CharacterListWindow(tk.Toplevel):
 
     def refresh(self, select: Character | None = None) -> None:
         """A táblázat újraszámolása és újrarajzolása."""
-        settings = self.app.data.settings
+        data = self.app.data
+        settings = data.settings
         today = date.today()
+        # Előretekintéskor az első olyan nap céljai, amelyet még nem teljesített minden karakter.
+        goal_day = lookahead_day(settings, data.characters, today) if data.look_ahead else today
         sort_key, descending = self.app.list_sort
-        plans = build_plan(settings, self.app.data.characters, today, self.app.data.spec_scores)
+        plans = build_plan(settings, data.characters, today, data.spec_scores, goal_day)
         plans = sort_plans(plans, sort_key, descending)
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
 
@@ -543,8 +570,10 @@ class CharacterListWindow(tk.Toplevel):
             self.tree.insert(
                 "", "end", iid=plan.character.uid, values=self._row_values(plan), tags=(plan.status.value,)
             )
+        headings = {"goal": goal_heading(goal_day, today)}
         for key, heading, *_ in self.COLUMNS:
-            self.tree.heading(key, text=heading + (SORT_ARROWS[descending] if key == sort_key else ""))
+            text = headings.get(key, heading)
+            self.tree.heading(key, text=text + (SORT_ARROWS[descending] if key == sort_key else ""))
         shown = [column[0] for column in self.COLUMNS]
         if settings.mode == PARALLEL:  # párhuzamos ütemezésnél mindenki ugyanakkor kezd
             shown.remove("start")
@@ -560,7 +589,9 @@ class CharacterListWindow(tk.Toplevel):
             f"Ma: {long_date(today)}   ·   Kezdőszint: {format_level(settings.start_level)}   ·   "
             f"Célszint: {format_level(settings.target_level)}   ·   Ütemezés: {mode}"
         )
-        self.summary_var.set(self._summary(plans))
+        self.look_ahead_var.set(data.look_ahead)
+        self.look_ahead_info_var.set(look_ahead_text(goal_day, today))
+        self.summary_var.set(self._summary(plans, goal_day, today))
         progress = day_progress(settings, self.app.data.characters, today)
         self.day_var.set(progress.describe() if progress is not None else "")
         behind = progress is not None and not progress.finished and progress.today >= 1 and progress.days_ahead < 0
@@ -587,7 +618,7 @@ class CharacterListWindow(tk.Toplevel):
             format_level(character.level),
             format_date(plan.start),
             format_date(plan.deadline),
-            "–" if plan.goal_today is None else format_level(plan.goal_today),
+            "–" if plan.goal is None else format_level(plan.goal),
             format_deviation(plan.deviation),
             days,
             "–" if plan.pace is None else format_level(plan.pace),
@@ -595,7 +626,7 @@ class CharacterListWindow(tk.Toplevel):
         )
 
     @staticmethod
-    def _summary(plans: list[CharacterPlan]) -> str:
+    def _summary(plans: list[CharacterPlan], goal_day: date, today: date) -> str:
         if not plans:
             return "Még nincs karakter a listán. Új karaktert a főablakban adhatsz hozzá."
         counts = Counter(plan.status for plan in plans)
@@ -603,8 +634,11 @@ class CharacterListWindow(tk.Toplevel):
         behind = counts[Status.BEHIND] + counts[Status.OVERDUE]
         if behind:
             parts.append(f"lemaradásban: {behind}")
-        due = sum(plan.levels_due_today for plan in plans)
-        parts.append(f"mai teendő összesen: {format_level(due)} szint" if due else "mára nincs több teendő")
+        due = sum(plan.levels_due for plan in plans)
+        if goal_day != today:
+            parts.append(f"teendő {goal_day_phrase(goal_day, today)} célig: {format_level(due)} szint")
+        else:
+            parts.append(f"mai teendő összesen: {format_level(due)} szint" if due else "mára nincs több teendő")
         return "   ·   ".join(parts)
 
     def _selected_character(self) -> Character | None:
@@ -704,6 +738,10 @@ class CharacterListWindow(tk.Toplevel):
         self.app.data.characters.remove(character)
         neighbour = next((c for c in self.app.data.characters if c.uid == neighbour_uid), None)
         self.app.data_changed(select=neighbour)
+
+    def _toggle_look_ahead(self) -> None:
+        self.app.data.look_ahead = self.look_ahead_var.get()
+        self.app.data_changed()
 
     def update_score_controls(self) -> None:
         """A Murlok.io frissítés gomb csak akkor használható, ha éppen nem fut lekérés."""

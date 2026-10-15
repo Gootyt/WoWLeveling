@@ -207,6 +207,45 @@ class GuiTests(unittest.TestCase):
         )
         self.assertNotIn("disabled", app.list_window.score_button.state())  # újra lehet próbálni
 
+    def test_look_ahead_shows_next_goals_when_todays_are_met(self):
+        today = date.today()
+        self.app.start_var.set(format_date(today))
+        self.app.first_var.set(format_date(today + timedelta(days=9)))
+        self.add("Thrall", level="9,9")  # 10 napos terv: a mai cél 9,90, a holnapi 18,80
+        self.app.open_list()
+        window = self.app.list_window
+        tree = window.tree
+
+        def view():
+            row = self.rows()[0]
+            return tree.heading("goal", "text"), row["goal"], row["deviation"], row["status"]
+
+        self.assertTrue(window.look_ahead_var.get())  # alapból bekapcsolva
+        self.assertEqual(view(), ("Holnapi cél", "18,80", "−8,90", "Ütemben – a holnapi célig még 8,90 szint"))
+        self.assertEqual(
+            window.look_ahead_info_var.get(), "A mai célt minden karakter teljesítette, ezért a holnapi célok látszanak."
+        )
+        self.assertIn("teendő a holnapi célig: 8,90 szint", window.summary_var.get())
+
+        window.look_ahead_var.set(False)  # kikapcsolás a jelölőnégyzettel
+        window._toggle_look_ahead()
+        self.assertEqual(view(), ("Mai cél", "9,90", "0,00", "Mai cél teljesítve"))
+        self.assertEqual(window.look_ahead_info_var.get(), "")
+        self.assertFalse(load_data(self.path).look_ahead)
+
+        window.look_ahead_var.set(True)
+        window._toggle_look_ahead()
+        self.select(self.app.data.characters[0])
+        window.level_var.set("27,7")  # a mai, a holnapi és a holnaputáni cél is megvan
+        window.apply_level()
+        goal_day = today + timedelta(days=3)
+        self.assertEqual(view()[:2], (f"Cél ({goal_day:%m-%d})", "36,60"))
+        self.assertEqual(
+            window.look_ahead_info_var.get(),
+            "A mai és a következő 2 nap célját is minden karakter teljesítette, ezért "
+            f"{self.gui.goal_day_phrase(goal_day, today)} célok látszanak.",
+        )
+
     def test_list_shows_which_day_level_we_are_at(self):
         today = date.today()
         self.app.start_var.set(format_date(today - timedelta(days=4)))

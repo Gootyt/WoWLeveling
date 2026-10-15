@@ -20,6 +20,9 @@ megtervezéséhez és követéséhez.
 - A lista alján látszik, hányadik napja tart a szintezés, és hogy a karakterek
   együtt **melyik nap szintjén állnak** (pl. „a 8. nap szintjén állnak – 3 nappal a
   mai cél mögött”).
+- **Előretekintés:** ha minden karakter teljesítette a mai célt, a lista
+  automatikusan a holnapi célokat mutatja; ha azt is, a holnaputániakat, és így
+  tovább. A lista tetején lévő jelölőnégyzettel ki- és bekapcsolható.
 - A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
   szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
 - A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a
@@ -104,6 +107,15 @@ szerint a mai nap végén tartania kellene. Pozitív érték: ennyivel jár a te
 előtt, negatív: ennyivel van mögötte. Ha a szintezés már tart, ez éppen a
 „Szint” és a „Mai cél” különbsége. A kezdés előtt a kezdőszinthez, a céldátum
 után a célszinthez viszonyít a program.
+
+**Előretekintés.** Bekapcsolva (ez az alapbeállítás) a lista az első olyan nap
+céljait mutatja, amelynek a tervezett szintjét még nem érte el minden karakter.
+Ilyenkor a cél oszlop fejléce „Holnapi cél” (vagy pl. „Cél (10-18)”), a
+szinteltérés és az állapot is ehhez a naphoz viszonyít („Ütemben – a holnapi célig
+még 0,57 szint”), a táblázat fölött pedig egy zöld sor jelzi, hogy melyik nap
+céljai látszanak és miért. A „Hátra (nap)”, a „Napi tempó” és a lista alján lévő
+napszint továbbra is a valódi mai naphoz igazodik. Kikapcsolva a lista mindig a
+mai célokat mutatja. A beállítást a program megjegyzi.
 
 **Hátra (nap), napi tempó.** A céldátumig hátralévő szintezési napok száma (a mai
 nappal együtt), és hogy átlagosan hány szintet kell naponta szerezni a célszintig.

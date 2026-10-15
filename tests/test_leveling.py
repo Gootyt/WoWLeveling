@@ -21,8 +21,10 @@ from leveling import (
     format_level,
     format_raiderio_score,
     format_spec_score,
+    goal_day_phrase,
     leveling_windows,
     load_data,
+    lookahead_day,
     parse_date,
     parse_level,
     parse_raiderio_score,
@@ -184,7 +186,7 @@ class PlanTests(unittest.TestCase):
     def test_done_when_target_level_reached(self):
         plan = self.plan_for("90", START + timedelta(days=3))
         self.assertIs(plan.status, Status.DONE)
-        self.assertIsNone(plan.goal_today)
+        self.assertIsNone(plan.goal)
         self.assertIsNone(plan.pace)
         self.assertEqual(plan.deviation, D("53.40"))  # a terv szerint ma estére 36,60 lenne
 
@@ -195,7 +197,7 @@ class PlanTests(unittest.TestCase):
     def test_not_started_before_start_date(self):
         plan = self.plan_for("1", START - timedelta(days=2))
         self.assertIs(plan.status, Status.NOT_STARTED)
-        self.assertIsNone(plan.goal_today)
+        self.assertIsNone(plan.goal)
         self.assertEqual(plan.pace, D("8.90"))  # 89 szint 10 nap alatt
         self.assertEqual(plan.days_left, 10)  # a kezdés előtti napok nem számítanak
 
@@ -225,9 +227,9 @@ class PlanTests(unittest.TestCase):
             with self.subTest(level=level):
                 plan = self.plan_for(level, today)
                 self.assertIs(plan.status, expected)
-                self.assertEqual(plan.goal_today, D("18.80"))
+                self.assertEqual(plan.goal, D("18.80"))
                 self.assertEqual(plan.deviation, D(level) - D("18.80"))
-                self.assertEqual(plan.levels_due_today, max(D(0), D("18.80") - D(level)))
+                self.assertEqual(plan.levels_due, max(D(0), D("18.80") - D(level)))
 
     def test_status_text_uses_two_decimals(self):
         plan = self.plan_for("12.34", START + timedelta(days=1))
@@ -236,13 +238,13 @@ class PlanTests(unittest.TestCase):
     def test_first_day_at_start_level_is_on_track(self):
         plan = self.plan_for("1", START)
         self.assertIs(plan.status, Status.ON_TRACK)
-        self.assertEqual(plan.goal_today, D("9.90"))
+        self.assertEqual(plan.goal, D("9.90"))
 
     def test_below_start_level_during_leveling_is_behind(self):
         settings = make_settings(start_level="80", target_level="90")
         plan = self.plan_for("75", START, settings)
         self.assertIs(plan.status, Status.BEHIND)
-        self.assertEqual(plan.goal_today, D("81.00"))
+        self.assertEqual(plan.goal, D("81.00"))
         self.assertEqual(plan.status_text, "Lemaradásban – ma még 6,00 szint")
 
     def test_overdue_after_deadline(self):
@@ -250,7 +252,7 @@ class PlanTests(unittest.TestCase):
         self.assertIs(plan.status, Status.OVERDUE)
         self.assertEqual(plan.days_left, 0)
         self.assertEqual(plan.deviation, D("-19.75"))
-        self.assertEqual(plan.levels_due_today, D("19.75"))
+        self.assertEqual(plan.levels_due, D("19.75"))
         self.assertEqual(plan.status_text, "Lejárt a céldátum – még 19,75 szint")
 
     def test_pace_counts_today_and_rounds_up(self):
@@ -267,6 +269,47 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([plan.character.name for plan in plans], ["A", "B", "C"])
         self.assertEqual([(plan.deadline - START).days for plan in plans], [10, 15, 20])
         self.assertEqual([plan.status for plan in plans], [Status.ON_TRACK, Status.NOT_STARTED, Status.NOT_STARTED])
+
+
+class LookAheadTests(unittest.TestCase):
+    """Egy karakter, 10 nap alatt 1,00 → 90,00: a napi célok 9,90; 18,80; 27,70; 36,60 …"""
+
+    def day(self, *levels, today=START, settings=None):
+        settings = settings or make_settings(first_days=9, last_days=29)
+        return lookahead_day(settings, [Character(f"K{i}", level=D(level)) for i, level in enumerate(levels)], today)
+
+    def test_moves_on_while_every_goal_is_met(self):
+        self.assertEqual(self.day("9.89"), START)  # a mai cél sincs meg
+        self.assertEqual(self.day("9.9"), START + timedelta(days=1))  # a mai megvan → a holnapi
+        self.assertEqual(self.day("27.7"), START + timedelta(days=3))  # a 3. napé is megvan
+
+    def test_every_character_has_to_meet_the_goal(self):
+        # A második karakter (30 napos terv) mai célja 3,96, ezt nem érte el.
+        self.assertEqual(self.day("9.9", "1"), START)
+        self.assertEqual(self.day("9.9", "3.96"), START + timedelta(days=1))
+
+    def test_stays_on_today_when_nothing_to_look_ahead_to(self):
+        self.assertEqual(self.day("90"), START)  # mindenki elérte a célszintet
+        self.assertEqual(self.day("70", today=START + timedelta(days=12)), START + timedelta(days=12))  # a terv véget ért
+        self.assertEqual(lookahead_day(make_settings(), [], START), START)
+
+    def test_before_the_start_date(self):
+        self.assertEqual(self.day("1", today=START - timedelta(days=2)), START)
+
+    def test_goal_day_phrase(self):
+        cases = {0: "a mai", 1: "a holnapi", 2: "a holnaputáni", 17: "az október 18-i", 33: "a november 3-i"}
+        for offset, phrase in cases.items():
+            with self.subTest(offset=offset):
+                self.assertEqual(goal_day_phrase(START + timedelta(days=offset), START), phrase)
+
+    def test_plan_for_a_later_goal_day(self):
+        tomorrow = START + timedelta(days=1)
+        plan = build_plan(make_settings(), [Character("A", level=D("9.9"))], START, goal_day=tomorrow)[0]
+        self.assertEqual((plan.goal, plan.deviation, plan.status), (D("18.80"), D("-8.90"), Status.ON_TRACK))
+        self.assertEqual(plan.status_text, "Ütemben – a holnapi célig még 8,90 szint")
+        self.assertEqual((plan.days_left, plan.pace), (10, D("8.01")))  # a valódi mai naptól számolva
+        plan = build_plan(make_settings(), [Character("A", level=D("18.8"))], START, goal_day=tomorrow)[0]
+        self.assertEqual((plan.status, plan.status_text), (Status.GOAL_MET, "A holnapi cél teljesítve"))
 
 
 class SortTests(unittest.TestCase):
@@ -474,6 +517,12 @@ class PersistenceTests(unittest.TestCase):
         save_data(self.path, LevelingData(make_settings(), [], scores))
         loaded = load_data(self.path).spec_scores
         self.assertEqual((loaded.scores, loaded.fetched_at), (scores.scores, scores.fetched_at))
+
+    def test_look_ahead_switch_is_saved(self):
+        save_data(self.path, LevelingData(make_settings(), look_ahead=False))
+        self.assertFalse(load_data(self.path).look_ahead)
+        save_data(self.path, LevelingData(make_settings()))
+        self.assertTrue(load_data(self.path).look_ahead)  # alapból bekapcsolva
 
     def test_broken_spec_score_cache_does_not_lose_data(self):
         content = {
