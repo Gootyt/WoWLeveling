@@ -17,7 +17,8 @@ megtervezéséhez és követéséhez.
   kezdőszint alatt vagy a célszint felett is.
 - **Combó ajánlása:** a program javasol egy class/spec/faj combót a választott
   frakcióban (Alliance vagy Horde), amilyenből a legkevesebb (vagy egyáltalán
-  nincs) karakter van a listán – szerep, páncéltípus, kaszt, spec és faj szerint.
+  nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
+  páncéltípus, kaszt, spec és faj szerint.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -175,7 +176,7 @@ napja.
 közül az a javaslat, amelyből a legkevesebb van a listán. A program a meglévő
 karaktereket öt szempont szerint számolja meg, ebben a sorrendben:
 
-1. szerep (tank, healer, DPS),
+1. szerep (tank, healer, melee DPS, ranged DPS),
 2. páncéltípus (cloth, leather, mail, plate),
 3. kaszt,
 4. spec,
@@ -193,7 +194,9 @@ számokat és a következő három jelöltet is.
   Troll és Undead Paladin még nincs benne.
 - A felismerhetetlen (kézzel beírt) kasztot, specet vagy fajt a számolás kihagyja.
   Spec nélkül a szerep csak akkor számít, ha a kaszt minden specje ugyanazt a
-  szerepet tölti be (pl. Mage: DPS).
+  szerepet tölti be (pl. Mage: ranged DPS, Rogue: melee DPS; a Hunter nem, mert a
+  Beast Mastery és a Marksmanship ranged, a Survival melee).
+- A Devourer Demon Hunter és az Augmentation Evoker ranged DPS-nek számít.
 - A meglévő karaktereket frakciótól függetlenül számolja (a Pandaren, Dracthyr,
   Earthen és Haranir karakterek frakcióját a program nem tárolja).
 

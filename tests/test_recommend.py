@@ -28,14 +28,20 @@ class RecommendTests(unittest.TestCase):
     def test_rarest_role_comes_first(self):
         roster = [
             Character("A", "Warrior", "Protection"),
-            Character("B", "Paladin", "Protection"),
-            Character("C", "Shaman", "Restoration"),
-            Character("D", "Mage"),  # spec nélkül is DPS
-            Character("E", "Rogue", "Outlaw"),
+            Character("B", "Paladin", "Holy"),
+            Character("C", "Rogue", "Outlaw"),
+            Character("D", "Warrior", "Arms"),
         ]
-        best = recommend_combo(roster, SpecScores({"warrior/arms": D("9999")}), HORDE).best
-        self.assertEqual(best.role, "healer")  # tank: 2, healer: 1, DPS: 2
-        self.assertEqual(best.counts[0], 1)
+        # tank: 1, healer: 1, melee DPS: 2, ranged DPS: 0 – a DPS-en belül a ranged hiányzik
+        best = recommend_combo(roster, SpecScores({"rogue/subtlety": D("9999")}), HORDE).best
+        self.assertEqual(best.role, "ranged DPS")
+        self.assertEqual(best.counts[0], 0)
+
+    def test_role_without_spec(self):
+        roster = [Character("A", "Mage"), Character("B", "Hunter")]  # Mage: ranged; Hunter: nem tudható
+        by_name = {combo.name: combo for combo in ranked_combos(roster, SpecScores(), ALLIANCE)}
+        self.assertEqual(by_name["Human Fire Mage"].counts[:3], (1, 1, 1))  # ranged, cloth, Mage
+        self.assertEqual(by_name["Human Survival Hunter"].counts[:3], (0, 1, 1))  # melee, mail, Hunter
 
     def test_armor_type_beats_a_better_score(self):
         # Egy Shadow Priest után a cloth már foglalt: a legjobb pontszámú Holy Priest helyett
@@ -55,7 +61,7 @@ class RecommendTests(unittest.TestCase):
         ranked = ranked_combos(roster, SpecScores(), ALLIANCE)
         by_name = {combo.name: combo for combo in ranked}
         self.assertEqual(by_name["Human Protection Warrior"].counts, (0, 2, 2, 0, 2))
-        self.assertEqual(by_name["Dwarf Arms Warrior"].counts, (3, 2, 2, 1, 1))
+        self.assertEqual(by_name["Dwarf Arms Warrior"].counts, (2, 2, 2, 1, 1))  # melee DPS: 2
         self.assertEqual(by_name["Night Elf Holy Priest"].counts, (0, 1, 1, 0, 0))
         # A rangsor a számok szerint növekvő.
         self.assertEqual([combo.counts for combo in ranked], sorted(combo.counts for combo in ranked))
@@ -99,9 +105,9 @@ class RecommendTests(unittest.TestCase):
             "• kaszt – Druid: még egy sincs\n"
             "• spec – Restoration Druid: még egy sincs\n"
             "• faj – Troll: még egy sincs\n"
-            "Ugyanennyire hiányzik még 1 másik class/spec is; közülük ennek a legmagasabb a Murlok.io-pontszáma "
+            "Ugyanennyire hiányzik még 3 másik class/spec is; közülük ennek a legmagasabb a Murlok.io-pontszáma "
             "(3720).\n"
-            "\nUtána következnének: Troll Mistweaver Monk, Troll Holy Priest, Troll Discipline Priest.",
+            "\nUtána következnének: Troll Mistweaver Monk, Blood Elf Devourer Demon Hunter, Troll Balance Druid.",
         )
 
     def test_without_scores_the_alphabet_decides(self):

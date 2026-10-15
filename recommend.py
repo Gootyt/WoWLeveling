@@ -1,8 +1,8 @@
 """Javaslat új karakterre: melyik class/spec/faj combóból van a legkevesebb a listán.
 
 A meglévő karaktereket öt szempont szerint számolja meg, ebben a sorrendben:
-szerep (tank, healer, DPS), páncéltípus (cloth, leather, mail, plate), kaszt,
-spec és faj. A választott frakcióban létrehozható combók közül az a legjobb,
+szerep (tank, healer, melee DPS, ranged DPS), páncéltípus (cloth, leather, mail,
+plate), kaszt, spec és faj. A választott frakcióban létrehozható combók közül az a legjobb,
 amelynek a szerepéből van a legkevesebb; ha ebben több is egyforma, az, amelyiknek
 a páncéltípusából, és így tovább. Ha minden szempont szerint egyformák, a
 magasabb Murlok.io-pontszámú class/spec jön előbb, végül a kasztok ábécérendje
@@ -11,7 +11,7 @@ előtt).
 
 A felismerhetetlen (kézzel beírt) kasztot, specet vagy fajt a számolás kihagyja;
 spec nélkül a szerep csak akkor számít, ha a kaszt minden specje ugyanazt a
-szerepet tölti be (pl. Mage: DPS).
+szerepet tölti be (pl. Mage: ranged DPS).
 """
 
 from __future__ import annotations

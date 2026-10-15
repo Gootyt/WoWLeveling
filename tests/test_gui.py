@@ -668,7 +668,7 @@ class GuiTests(unittest.TestCase):
             self.app.show_combo_recommendation()  # a frakciókérdést bezárták
         ask.assert_not_called()
 
-        # Tank (plate, Warrior, Orc) már van: healer vagy DPS, nem plate, más kaszt és faj kell;
+        # Tank (plate, Warrior, Orc) már van: healer, melee vagy ranged DPS, nem plate, más kaszt és faj kell;
         # ezek közül a Restoration Druidnak a legmagasabb a Murlok.io-pontszáma.
         with mock.patch.object(self.app, "_ask_faction", return_value="Horde"), mock.patch.object(
             self.gui.messagebox, "askyesno", return_value=False

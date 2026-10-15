@@ -4,15 +4,17 @@ from collections import Counter
 from wow_data import (
     ALLIANCE,
     CLASS_ARMOR,
-    DPS,
     FACTION_RACES,
     HEALER,
     HORDE,
+    MELEE,
     RACE_CLASSES,
+    RANGED,
     SPEC_ROLES,
     TANK,
     WOW_CLASSES,
     WOW_RACES,
+    WOW_SPECS,
     character_role,
     find_class,
     find_race,
@@ -47,14 +49,19 @@ class GameDataTests(unittest.TestCase):
                 self.assertNotIn("Paladin", RACE_CLASSES[race])
 
     def test_roles_and_armor_types(self):
-        self.assertEqual(len(SPEC_ROLES), 40)
+        self.assertEqual(set(SPEC_ROLES), {(c, spec) for c, specs in WOW_SPECS.items() for spec in specs})
         roles = Counter(SPEC_ROLES.values())
-        self.assertEqual((roles[TANK], roles[HEALER], roles[DPS]), (6, 7, 27))
-        self.assertEqual(SPEC_ROLES[("Demon Hunter", "Devourer")], DPS)
+        self.assertEqual((roles[TANK], roles[HEALER], roles[MELEE], roles[RANGED]), (6, 7, 13, 14))
+        self.assertEqual(SPEC_ROLES[("Demon Hunter", "Devourer")], RANGED)
+        self.assertEqual(SPEC_ROLES[("Demon Hunter", "Havoc")], MELEE)
+        self.assertEqual(SPEC_ROLES[("Hunter", "Survival")], MELEE)
+        self.assertEqual(SPEC_ROLES[("Evoker", "Augmentation")], RANGED)
         self.assertEqual(SPEC_ROLES[("Priest", "Discipline")], HEALER)
         self.assertEqual(set(CLASS_ARMOR), set(WOW_CLASSES))
         self.assertEqual(Counter(CLASS_ARMOR.values()), {"cloth": 3, "leather": 4, "mail": 3, "plate": 3})
-        self.assertEqual(character_role("Mage", None), DPS)  # minden Mage spec DPS
+        self.assertEqual(character_role("Mage", None), RANGED)  # minden Mage spec ranged DPS
+        self.assertEqual(character_role("Rogue", None), MELEE)
+        self.assertIsNone(character_role("Hunter", None))  # a Survival melee, a többi ranged
         self.assertIsNone(character_role("Paladin", None))  # spec nélkül nem tudható
         self.assertEqual(character_role("Paladin", "Holy"), HEALER)
 

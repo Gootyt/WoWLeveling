@@ -61,35 +61,56 @@ def specs_for_class(class_name: str) -> tuple[str, ...]:
     return WOW_SPECS[found] if found else ALL_SPECS
 
 
-# Szerepek (a Murlok.io rangsorai is így csoportosítják a speceket).
+# Szerepek; a DPS specek közelharci (melee) és távolsági (ranged) csoportra oszlanak.
 TANK = "tank"
 HEALER = "healer"
-DPS = "DPS"
-ROLES = (TANK, HEALER, DPS)
-_TANK_SPECS = {
-    "Death Knight": ("Blood",),
-    "Demon Hunter": ("Vengeance",),
-    "Druid": ("Guardian",),
-    "Monk": ("Brewmaster",),
-    "Paladin": ("Protection",),
-    "Warrior": ("Protection",),
+MELEE = "melee DPS"
+RANGED = "ranged DPS"
+ROLES = (TANK, HEALER, MELEE, RANGED)
+_ROLE_SPECS = {
+    TANK: {
+        "Death Knight": ("Blood",),
+        "Demon Hunter": ("Vengeance",),
+        "Druid": ("Guardian",),
+        "Monk": ("Brewmaster",),
+        "Paladin": ("Protection",),
+        "Warrior": ("Protection",),
+    },
+    HEALER: {
+        "Druid": ("Restoration",),
+        "Evoker": ("Preservation",),
+        "Monk": ("Mistweaver",),
+        "Paladin": ("Holy",),
+        "Priest": ("Discipline", "Holy"),
+        "Shaman": ("Restoration",),
+    },
+    MELEE: {
+        "Death Knight": ("Frost", "Unholy"),
+        "Demon Hunter": ("Havoc",),
+        "Druid": ("Feral",),
+        "Hunter": ("Survival",),
+        "Monk": ("Windwalker",),
+        "Paladin": ("Retribution",),
+        "Rogue": ("Assassination", "Outlaw", "Subtlety"),
+        "Shaman": ("Enhancement",),
+        "Warrior": ("Arms", "Fury"),
+    },
+    RANGED: {
+        "Demon Hunter": ("Devourer",),
+        "Druid": ("Balance",),
+        "Evoker": ("Devastation", "Augmentation"),
+        "Hunter": ("Beast Mastery", "Marksmanship"),
+        "Mage": ("Arcane", "Fire", "Frost"),
+        "Priest": ("Shadow",),
+        "Shaman": ("Elemental",),
+        "Warlock": ("Affliction", "Demonology", "Destruction"),
+    },
 }
-_HEALER_SPECS = {
-    "Druid": ("Restoration",),
-    "Evoker": ("Preservation",),
-    "Monk": ("Mistweaver",),
-    "Paladin": ("Holy",),
-    "Priest": ("Discipline", "Holy"),
-    "Shaman": ("Restoration",),
-}
-# (kaszt, spec) → szerep; ami nem tank vagy healer, az DPS.
+# (kaszt, spec) → szerep
 SPEC_ROLES = {
-    (char_class, spec): TANK
-    if spec in _TANK_SPECS.get(char_class, ())
-    else HEALER
-    if spec in _HEALER_SPECS.get(char_class, ())
-    else DPS
-    for char_class, specs in WOW_SPECS.items()
+    (char_class, spec): role
+    for role, classes in _ROLE_SPECS.items()
+    for char_class, specs in classes.items()
     for spec in specs
 }
 
@@ -226,7 +247,8 @@ def find_race(text: str) -> str | None:
 
 def character_role(char_class: str, spec: str | None) -> str | None:
     """A (már azonosított) kaszt és spec szerepe. Spec nélkül csak akkor ismert, ha a
-    kaszt minden specje ugyanazt a szerepet tölti be (pl. Mage: DPS)."""
+    kaszt minden specje ugyanazt a szerepet tölti be (pl. Mage: ranged DPS, Rogue:
+    melee DPS; a Hunter nem, mert a Survival melee)."""
     if spec is not None:
         return SPEC_ROLES[(char_class, spec)]
     roles = {SPEC_ROLES[(char_class, item)] for item in WOW_SPECS[char_class]}
