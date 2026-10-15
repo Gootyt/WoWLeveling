@@ -36,8 +36,9 @@ from enum import Enum
 from pathlib import Path
 
 LEVEL_STEP = Decimal("0.01")  # a szintek két tizedesjegy pontosságúak
-RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám egy tizedesjegyű (pl. 2543,7)
+RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám és az itemlevel egy tizedesjegyű (pl. 2543,7)
 RAIDERIO_MAX = Decimal("99999.9")
+ITEM_LEVEL_MAX = Decimal("9999.9")
 LEVEL_MIN = Decimal("1.00")
 LEVEL_MAX = Decimal("999.99")
 DEFAULT_START_LEVEL = Decimal("1.00")
@@ -130,8 +131,8 @@ def format_deviation(value: Decimal) -> str:
     return format_level(abs(value))
 
 
-def parse_raiderio_score(text: str) -> Decimal | None:
-    """Raider.io pontszám beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None.
+def _parse_one_decimal(text: str, name: str, example: str, maximum: Decimal) -> Decimal | None:
+    """Legfeljebb egy tizedesjegyű, nem negatív szám beolvasása; üres szövegnél None.
 
     Tizedesvessző és -pont is jó; ha mindkettő szerepel (pl. a weboldalról másolt
     „2,543.7”), a hátrébb álló a tizedesjel, a másik ezres elválasztó.
@@ -143,16 +144,27 @@ def parse_raiderio_score(text: str) -> Decimal | None:
     if "," in text and "." in text:
         thousands = "." if text.rfind(",") > text.rfind(".") else ","
         text = text.replace(thousands, "")
+    article = "az" if name[0].lower() in "aáeéiíoóöőuúüű" else "a"
     match = _LEVEL_PATTERN.fullmatch(text)
     if match is None:
-        raise ValueError(f"„{original}” nem érvényes Raider.io pontszám (példa: 2543,7).")
+        raise ValueError(f"„{original}” nem érvényes {name} (példa: {example}).")
     decimals = match.group(2)
     if decimals is not None and len(decimals) > 1:
-        raise ValueError(f"„{original}”: a Raider.io pontszám legfeljebb egy tizedesjegyű lehet.")
+        raise ValueError(f"„{original}”: {article} {name} legfeljebb egy tizedesjegyű lehet.")
     value = Decimal(text.replace(",", "."))
-    if value > RAIDERIO_MAX:
-        raise ValueError(f"A Raider.io pontszám legfeljebb {format_raiderio_score(RAIDERIO_MAX)} lehet.")
+    if value > maximum:
+        raise ValueError(f"{article.capitalize()} {name} legfeljebb {format_raiderio_score(maximum)} lehet.")
     return value.quantize(RAIDERIO_STEP)
+
+
+def parse_raiderio_score(text: str) -> Decimal | None:
+    """Raider.io pontszám beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None."""
+    return _parse_one_decimal(text, "Raider.io pontszám", "2543,7", RAIDERIO_MAX)
+
+
+def parse_item_level(text: str) -> Decimal | None:
+    """Itemlevel beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None."""
+    return _parse_one_decimal(text, "itemlevel", "327 vagy 326,5", ITEM_LEVEL_MAX)
 
 
 def format_raiderio_score(value: Decimal) -> str:
@@ -160,24 +172,24 @@ def format_raiderio_score(value: Decimal) -> str:
     return f"{value:.1f}".replace(".", ",")
 
 
-def format_spec_score(value: Decimal) -> str:
-    """A Murlok.io-pontszám: egész számként, ha az (pl. 3891), különben egy tizedesjeggyel."""
+def format_compact(value: Decimal) -> str:
+    """Szám egész alakban, ha egész (pl. 3891), különben egy tizedesjeggyel (pl. 326,5)."""
     return str(int(value)) if value == value.to_integral_value() else format_raiderio_score(value)
 
 
-def _raiderio_from_json(value: object) -> Decimal | None:
-    """Az adatfájlban tárolt Raider.io pontszám (hiányzó vagy üres: None)."""
+def _one_decimal_from_json(value: object, maximum: Decimal = RAIDERIO_MAX) -> Decimal | None:
+    """Az adatfájlban tárolt egy tizedesjegyű szám, pl. Raider.io pontszám (hiányzó vagy üres: None)."""
     if value is None or value == "":
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        raise TypeError(f"hibás Raider.io pontszám: {value!r}")
+        raise TypeError(f"hibás szám: {value!r}")
     try:
-        score = Decimal(str(value).strip().replace(",", "."))
+        number = Decimal(str(value).strip().replace(",", "."))
     except InvalidOperation:
-        raise ValueError(f"hibás Raider.io pontszám: {value!r}") from None
-    if not score.is_finite():
-        raise ValueError(f"hibás Raider.io pontszám: {value!r}")
-    return min(max(score, Decimal(0)), RAIDERIO_MAX).quantize(RAIDERIO_STEP)
+        raise ValueError(f"hibás szám: {value!r}") from None
+    if not number.is_finite():
+        raise ValueError(f"hibás szám: {value!r}")
+    return min(max(number, Decimal(0)), maximum).quantize(RAIDERIO_STEP)
 
 
 def _level_from_json(value: object) -> Decimal:
@@ -267,6 +279,7 @@ class Character:
     race: str = ""  # faj, pl. Orc
     realm: str = ""  # szerver, pl. Draenor
     raiderio_score: Decimal | None = None  # Raider.io (Mythic+) pontszám, ha meg van adva
+    item_level: Decimal | None = None  # itemlevel, ha meg van adva
     # Csak a program futása alatt használt azonosító, nem kerül mentésre.
     uid: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
@@ -279,6 +292,7 @@ class Character:
             "spec": self.spec,
             "level": float(self.level),
             "raiderio_score": None if self.raiderio_score is None else float(self.raiderio_score),
+            "item_level": None if self.item_level is None else float(self.item_level),
         }
 
     @classmethod
@@ -293,7 +307,8 @@ class Character:
             level=_level_from_json(data.get("level", default_level)),
             race=str(data.get("race", "")).strip(),
             realm=str(data.get("realm", "")).strip(),
-            raiderio_score=_raiderio_from_json(data.get("raiderio_score")),
+            raiderio_score=_one_decimal_from_json(data.get("raiderio_score")),
+            item_level=_one_decimal_from_json(data.get("item_level"), ITEM_LEVEL_MAX),
         )
 
 
@@ -526,6 +541,7 @@ SORT_KEYS = {
     "spec": lambda plan: _text_sort_key(plan.character.spec) if plan.character.spec else None,
     "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
     "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
+    "item_level": lambda plan: plan.character.item_level,
     "raiderio": lambda plan: plan.character.raiderio_score,
     "murlok": lambda plan: plan.spec_score,
     "level": lambda plan: plan.character.level,
@@ -671,7 +687,7 @@ class SpecScores:
     def from_dict(cls, data: dict) -> SpecScores:
         scores = {}
         for key, value in dict(data.get("scores", {})).items():
-            score = _raiderio_from_json(value)
+            score = _one_decimal_from_json(value)
             if score is not None:
                 scores[str(key).casefold()] = score
         fetched_at = data.get("fetched_at")

@@ -20,12 +20,13 @@ from leveling import (
     format_deviation,
     format_level,
     format_raiderio_score,
-    format_spec_score,
+    format_compact,
     goal_day_phrase,
     leveling_windows,
     load_data,
     lookahead_day,
     parse_date,
+    parse_item_level,
     parse_level,
     parse_raiderio_score,
     planned_level,
@@ -83,10 +84,21 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(parse_raiderio_score(text), D(expected))
         self.assertIsNone(parse_raiderio_score("  "))
         self.assertEqual(format_raiderio_score(D("2543")), "2543,0")
-        self.assertEqual((format_spec_score(D("3891")), format_spec_score(D("3712.5"))), ("3891", "3712,5"))
+        self.assertEqual((format_compact(D("3891")), format_compact(D("3712.5"))), ("3891", "3712,5"))
         for text in ("2543,75", "abc", "-5", "100000", "2,5,4"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_raiderio_score(text)
+
+    def test_item_level_has_one_decimal(self):
+        cases = {"327": "327.0", "326,5": "326.5", " 326.5 ": "326.5"}
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(parse_item_level(text), D(expected))
+        self.assertIsNone(parse_item_level(""))
+        self.assertEqual((format_compact(D("327.0")), format_compact(D("326.5"))), ("327", "326,5"))
+        for text in ("326,55", "sok", "-1", "10000"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_item_level(text)
 
     def test_format_deviation_is_signed(self):
         self.assertEqual(format_deviation(D("2.87")), "+2,87")
@@ -365,6 +377,12 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "race")), ["C", "B", "A"])
         self.assertEqual(self.names(sort_plans(plans, "realm")), ["C", "A", "B"])
 
+    def test_sort_by_item_level(self):
+        characters = [Character("A", item_level=D("327")), Character("B"), Character("C", item_level=D("329.5"))]
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual(self.names(sort_plans(plans, "item_level")), ["A", "C", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "item_level", descending=True)), ["C", "A", "B"])
+
     def test_sort_by_raiderio_score(self):
         characters = [
             Character("A", raiderio_score=D("2543.7")),
@@ -491,7 +509,14 @@ class PersistenceTests(unittest.TestCase):
             make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"),
             [
                 Character(
-                    "Thrall", "Shaman", "Enhancement", D("83.45"), race="Orc", realm="Draenor", raiderio_score=D("2543.7")
+                    "Thrall",
+                    "Shaman",
+                    "Enhancement",
+                    D("83.45"),
+                    race="Orc",
+                    realm="Draenor",
+                    raiderio_score=D("2543.7"),
+                    item_level=D("327.5"),
                 ),
                 Character("Jaina", "Mage", level=D("1.00")),
             ],
@@ -501,13 +526,17 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(raw["characters"][0]["level"], 83.45)  # olvasható szám a fájlban
         self.assertEqual(raw["characters"][0]["raiderio_score"], 2543.7)
         self.assertIsNone(raw["characters"][1]["raiderio_score"])
+        self.assertEqual((raw["characters"][0]["item_level"], raw["characters"][1]["item_level"]), (327.5, None))
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings, data.settings)
         self.assertEqual(
-            [(c.name, c.realm, c.race, c.char_class, c.spec, c.level, c.raiderio_score) for c in loaded.characters],
             [
-                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45"), D("2543.7")),
-                ("Jaina", "", "", "Mage", "", D("1.00"), None),
+                (c.name, c.realm, c.race, c.char_class, c.spec, c.level, c.raiderio_score, c.item_level)
+                for c in loaded.characters
+            ],
+            [
+                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45"), D("2543.7"), D("327.5")),
+                ("Jaina", "", "", "Mage", "", D("1.00"), None, None),
             ],
         )
         self.assertEqual(list(Path(self.temp_dir.name).iterdir()), [self.path])  # nem marad ideiglenes fájl
@@ -573,6 +602,10 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(
             (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level, arthas.raiderio_score),
             ("", "", "", "", D("80.00"), None),
+        )
+        self.assertEqual(
+            arthas.item_level,
+            None,
         )
 
     def test_reads_files_of_the_first_version(self):
