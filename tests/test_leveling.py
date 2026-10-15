@@ -12,7 +12,9 @@ from leveling import (
     LevelingData,
     Settings,
     Status,
+    _number_article,
     build_plan,
+    day_progress,
     deadlines,
     format_deviation,
     format_level,
@@ -294,10 +296,95 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "spec")), ["D", "E", "A", "B", "C"])
         self.assertEqual(self.names(sort_plans(plans, "class")), ["E", "B", "D", "A", "C"])
 
+    def test_sort_by_race_and_realm(self):
+        characters = [
+            Character("A", race="Orc", realm="Ragnaros"),
+            Character("B", race="Human"),
+            Character("C", race="Dwarf", realm="Draenor"),
+        ]
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual(self.names(sort_plans(plans, "race")), ["C", "B", "A"])
+        self.assertEqual(self.names(sort_plans(plans, "realm")), ["C", "A", "B"])
+
     def test_names_follow_hungarian_alphabet(self):
         names = ["Zoli", "Ödön", "Oszkár", "Ábel", "abel"]
         plans = build_plan(make_settings(), [Character(name) for name in names], START)
         self.assertEqual(self.names(sort_plans(plans, "name")), ["abel", "Ábel", "Oszkár", "Ödön", "Zoli"])
+
+
+class DayProgressTests(unittest.TestCase):
+    """Egy karakter, 10 nap alatt 1,00 → 90,00: naponta 8,90 szint."""
+
+    def progress(self, *levels, day=5, settings=None):
+        settings = settings or make_settings(first_days=9, last_days=29)
+        characters = [Character(f"K{index}", level=D(level)) for index, level in enumerate(levels)]
+        return day_progress(settings, characters, START + timedelta(days=day - 1))
+
+    def test_reached_day_compared_with_today(self):
+        cases = {
+            "30": (3, "Ma a szintezés 5. napja van (összesen 10 nap). A karakter a 3. nap szintjén áll – "
+                   "2 nappal a mai cél mögött."),
+            "50": (5, "Ma a szintezés 5. napja van (összesen 10 nap). A karakter az 5. nap szintjén áll – "
+                   "pont a mai célnál."),
+            "70": (7, "Ma a szintezés 5. napja van (összesen 10 nap). A karakter a 7. nap szintjén áll – "
+                   "2 nappal a terv előtt."),
+            "1": (0, "Ma a szintezés 5. napja van (összesen 10 nap). A karakter még az 1. nap szintjét sem "
+                  "érte el – 5 nappal a mai cél mögött."),
+        }
+        for level, (reached, text) in cases.items():
+            with self.subTest(level=level):
+                progress = self.progress(level)
+                self.assertEqual((progress.today, progress.total_days, progress.reached_day), (5, 10, reached))
+                self.assertEqual(progress.days_ahead, reached - 5)
+                self.assertEqual(progress.describe(), text)
+
+    def test_finished(self):
+        progress = self.progress("90")
+        self.assertTrue(progress.finished)
+        self.assertEqual(progress.describe(), "A szintezés kész: minden karakter elérte a célszintet.")
+
+    def test_before_start_and_after_end(self):
+        self.assertEqual(self.progress("1", day=-2).describe(), "A szintezés 3 nap múlva kezdődik.")
+        self.assertEqual(
+            self.progress("20", day=0).describe(), "A szintezés holnap kezdődik. A karakter a 2. nap szintjén áll."
+        )
+        self.assertEqual(
+            self.progress("70", day=13).describe(),
+            "A tervezett 10 nap letelt. A karakter a 7. nap szintjén áll – 3 nappal a mai cél mögött.",
+        )
+
+    def test_all_characters_count_together(self):
+        # Céldátumok: 10., 20. és 30. nap; a 10. napon a tervezett összes szintlépés 163,16,
+        # a 11. napon 170,58. A karakterek összesen 89 + 49 + 29 = 167 szintet léptek.
+        progress = self.progress("90", "50", "30", day=10)
+        self.assertEqual((progress.total_days, progress.reached_day, progress.days_ahead), (30, 10, 0))
+        self.assertEqual(
+            progress.describe(),
+            "Ma a szintezés 10. napja van (összesen 30 nap). A karakterek együtt a 10. nap szintjén állnak – "
+            "pont a mai célnál.",
+        )
+
+    def test_levels_below_start_level_count_as_deficit(self):
+        settings = make_settings(start_level="80", target_level="90")
+        progress = self.progress("75", "80", day=1, settings=settings)
+        self.assertEqual(progress.reached_day, 0)
+        self.assertEqual(
+            progress.describe(),
+            "Ma a szintezés 1. napja van (összesen 30 nap). A karakterek együtt még az 1. nap szintjét sem "
+            "érték el – 1 nappal a mai cél mögött.",
+        )
+
+    def test_sequential_plan(self):
+        settings = make_settings(first_days=9, last_days=19, mode=SEQUENTIAL)
+        progress = self.progress("90", "1", day=15, settings=settings)  # a második karakter a 11. napon kezd
+        self.assertEqual((progress.reached_day, progress.days_ahead), (10, -5))
+
+    def test_no_characters(self):
+        self.assertIsNone(day_progress(make_settings(), [], START))
+
+    def test_article_before_numbers(self):
+        expected = {1: "az", 2: "a", 5: "az", 10: "a", 15: "a", 50: "az", 51: "az", 100: "a", 1000: "az", 1500: "az"}
+        self.assertEqual({number: _number_article(number) for number in expected}, expected)
 
 
 class PersistenceTests(unittest.TestCase):
@@ -312,7 +399,7 @@ class PersistenceTests(unittest.TestCase):
         data = LevelingData(
             make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"),
             [
-                Character("Thrall", "Shaman", "Enhancement", D("83.45")),
+                Character("Thrall", "Shaman", "Enhancement", D("83.45"), race="Orc", realm="Draenor"),
                 Character("Jaina", "Mage", level=D("1.00")),
             ],
         )
@@ -322,8 +409,11 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings, data.settings)
         self.assertEqual(
-            [(c.name, c.char_class, c.spec, c.level) for c in loaded.characters],
-            [("Thrall", "Shaman", "Enhancement", D("83.45")), ("Jaina", "Mage", "", D("1.00"))],
+            [(c.name, c.realm, c.race, c.char_class, c.spec, c.level) for c in loaded.characters],
+            [
+                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45")),
+                ("Jaina", "", "", "Mage", "", D("1.00")),
+            ],
         )
         self.assertEqual(list(Path(self.temp_dir.name).iterdir()), [self.path])  # nem marad ideiglenes fájl
 
@@ -362,7 +452,9 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.settings.mode, PARALLEL)
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
         arthas = loaded.characters[0]
-        self.assertEqual((arthas.char_class, arthas.spec, arthas.level), ("", "", D("80.00")))
+        self.assertEqual(
+            (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level), ("", "", "", "", D("80.00"))
+        )
 
     def test_reads_files_of_the_first_version(self):
         content = {

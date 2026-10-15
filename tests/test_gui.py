@@ -36,9 +36,11 @@ class GuiTests(unittest.TestCase):
         self.root.destroy()
         self.temp_dir.cleanup()
 
-    def add(self, *names, level="", char_class="", spec=""):
+    def add(self, *names, level="", char_class="", spec="", race="", realm=""):
         for name in names:
             self.app.name_var.set(name)
+            self.app.realm_var.set(realm)
+            self.app.race_var.set(race)
             self.app.class_var.set(char_class)
             self.app.spec_var.set(spec)
             self.app.new_level_var.set(level)
@@ -107,6 +109,48 @@ class GuiTests(unittest.TestCase):
         window.sort_by("spec")
         window.sort_by("spec")  # csökkenő sorrendben is a spec nélküli karakter marad a végén
         self.assertEqual(self.names(), ["Thrall", "Jaina"])
+
+    def test_realm_and_race_are_saved_and_shown(self):
+        self.add("Thrall", realm="Draenor", race="Orc", char_class="Shaman", spec="Enhancement")
+        self.add("Jaina", realm="Ragnaros", race="Human")
+        self.add("Arthas")
+        self.assertEqual((self.app.realm_var.get(), self.app.race_var.get()), ("", ""))
+        saved = load_data(self.path).characters
+        self.assertEqual([(c.realm, c.race) for c in saved], [("Draenor", "Orc"), ("Ragnaros", "Human"), ("", "")])
+        # a realm mező a már használt realmeket ajánlja
+        self.assertEqual(self.root.tk.splitlist(self.app.realm_box.cget("values")), ("Draenor", "Ragnaros"))
+
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual(
+            [(row["realm"], row["race"]) for row in self.rows()], [("Draenor", "Orc"), ("Ragnaros", "Human"), ("–", "–")]
+        )
+        self.select(self.app.data.characters[0])
+        self.assertEqual(window.selected_var.get(), "Thrall-Draenor (Orc Shaman, Enhancement)")
+        self.select(self.app.data.characters[1])
+        self.assertEqual(window.selected_var.get(), "Jaina-Ragnaros (Human)")
+        window.sort_by("race")
+        self.assertEqual(self.names(), ["Jaina", "Thrall", "Arthas"])
+
+    def test_list_shows_which_day_level_we_are_at(self):
+        today = date.today()
+        self.app.start_var.set(format_date(today - timedelta(days=4)))
+        self.app.first_var.set(format_date(today + timedelta(days=5)))
+        self.app.last_var.set(format_date(today + timedelta(days=5)))
+        self.add("Thrall", level="30")  # 10 napos terv, naponta 8,90 szint: a 3. nap szintjén áll
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual(
+            window.day_var.get(),
+            "Ma a szintezés 5. napja van (összesen 10 nap). A karakter a 3. nap szintjén áll – 2 nappal a mai cél mögött.",
+        )
+        self.assertEqual(str(window.day_label.cget("style")), "Late.TLabel")
+
+        self.select(self.app.data.characters[0])
+        window.level_var.set("70")
+        window.apply_level()
+        self.assertTrue(window.day_var.get().endswith("A karakter a 7. nap szintjén áll – 2 nappal a terv előtt."))
+        self.assertEqual(str(window.day_label.cget("style")), "Good.TLabel")
 
     def test_spec_choices_follow_the_class(self):
         def choices():
@@ -205,6 +249,8 @@ class GuiTests(unittest.TestCase):
             {
                 "position": "1",
                 "name": "Thrall",
+                "realm": "–",
+                "race": "–",
                 "class": "–",
                 "spec": "–",
                 "level": "1,00",
@@ -319,9 +365,11 @@ class GuiTests(unittest.TestCase):
 
     def test_character_dialog_validates_input(self):
         self.add("Thrall")
-        dialog = self.gui.CharacterDialog(self.root, self.app.data.characters[0])
+        dialog = self.gui.CharacterDialog(self.root, self.app.data.characters[0], ["Draenor"])
         self.assertEqual(dialog.level_var.get(), "1,00")
         dialog.name_var.set("  Go'el ")
+        dialog.realm_var.set("Draenor ")
+        dialog.race_var.set("Orc")
         dialog.class_var.set("Shaman")
         dialog.spec_var.set(" Enhancement ")
         dialog.level_var.set("42,555")
@@ -331,7 +379,17 @@ class GuiTests(unittest.TestCase):
         self.assertIsNone(dialog.result)
         dialog.level_var.set("142,5")
         dialog.accept()
-        self.assertEqual(dialog.result, ("Go'el", "Shaman", "Enhancement", D("142.50")))
+        self.assertEqual(
+            dialog.result,
+            {
+                "name": "Go'el",
+                "realm": "Draenor",
+                "race": "Orc",
+                "char_class": "Shaman",
+                "spec": "Enhancement",
+                "level": D("142.50"),
+            },
+        )
 
     def test_calendar_popup_picks_a_date(self):
         picked = []

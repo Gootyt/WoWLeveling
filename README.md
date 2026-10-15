@@ -8,14 +8,18 @@ megtervezéséhez és követéséhez.
   **célszint**.
 - A szintek **két tizedesjegy pontosságúak** (pl. `83,45`: a 83-as szint 45%-ánál
   tart a karakter). Tizedesvesszővel és -ponttal is beírhatók.
-- Új karakterek vehetők fel (a kaszt, a spec és a jelenlegi szint nem kötelező;
-  szint nélkül a karakter a kezdőszintről indul). A spec választólistája mindig a
-  kiválasztott kaszt specjeit kínálja. A karakterek szintje lehet a kezdőszint
-  alatt vagy a célszint felett is.
+- Új karakterek vehetők fel. Csak a név kötelező; megadható a realm, a faj, a
+  kaszt, a spec és a jelenlegi szint is (szint nélkül a karakter a kezdőszintről
+  indul). A spec választólistája mindig a kiválasztott kaszt specjeit kínálja, a
+  realm mező pedig a már használt realmeket. A karakterek szintje lehet a
+  kezdőszint alatt vagy a célszint felett is.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
-  a szükséges tempó és az állapot (színkódolva).
+  a szükséges napi tempó és az állapot (színkódolva).
+- A lista alján látszik, hányadik napja tart a szintezés, és hogy a karakterek
+  együtt **melyik nap szintjén állnak** (pl. „a 8. nap szintjén állnak – 3 nappal a
+  mai cél mögött”).
 - A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
   szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
@@ -50,18 +54,18 @@ python wow_leveling.py masik_terv.json
    naptárból választhatsz. A kezdő- és a célszint két tizedesjegyig adható meg; a
    mezők nyilai egy egész szinttel léptetnek. Hibás érték esetén piros üzenet
    jelzi, mi a gond. A helyes beállításokat a program azonnal menti.
-2. **Új karakter**: írd be a nevét (és ha akarod, a kasztját, a specjét és a
-   jelenlegi szintjét), majd „Hozzáadás” vagy Enter. A kaszt és a spec listából
-   választható, de bármit beírhatsz. Ha kasztot váltasz, és a már kiválasztott spec
-   nem tartozik az új kaszthoz, a spec mező kiürül. Az új karakter a lista végére
-   kerül.
+2. **Új karakter** (a főablak jobb oldalán): írd be a nevét (és ha akarod, a
+   realmjét, faját, kasztját, specjét és jelenlegi szintjét), majd „Hozzáadás” vagy
+   Enter. A realm, a faj, a kaszt és a spec listából választható, de bármit
+   beírhatsz. Ha kasztot váltasz, és a már kiválasztott spec nem tartozik az új
+   kaszthoz, a spec mező kiürül. Az új karakter a lista végére kerül.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
-   Dupla kattintásra (vagy a „Szerkesztés…” gombbal) a név, a kaszt, a spec és a
-   szint is módosítható.
+   Dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden adata
+   módosítható.
 5. **Rendezés**: kattints egy oszlop fejlécére; újabb kattintásra megfordul az
    irány (a fejlécben ▲ = növekvő, ▼ = csökkenő). A rendezés csak a nézetet
    változtatja meg, a karakterek sorrendjét nem. A # oszlopra kattintva visszakapod
@@ -97,9 +101,17 @@ előtt, negatív: ennyivel van mögötte. Ha a szintezés már tart, ez éppen a
 „Szint” és a „Mai cél” különbsége. A kezdés előtt a kezdőszinthez, a céldátum
 után a célszinthez viszonyít a program.
 
-**Hátralévő napok, tempó.** A céldátumig hátralévő szintezési napok száma (a mai
+**Hátra (nap), napi tempó.** A céldátumig hátralévő szintezési napok száma (a mai
 nappal együtt), és hogy átlagosan hány szintet kell naponta szerezni a célszintig.
 Ha egy karakter a kezdőszint alatt van, a hiányzó szintek is beleszámítanak.
+
+**Melyik nap szintjén állunk?** A lista alján a program összeadja, hány szintet
+léptek a karakterek a kezdőszinthez képest (a célszint feletti rész nem számít, a
+kezdőszint alatti karakterek hiánya levonódik). Utána megkeresi a terv utolsó
+olyan napját, amelynek végére összesen ennyi szint volt esedékes. A szintezés 1.
+napja a kezdőnap, az utolsó az utolsó karakter céldátuma. Ha ez a nap a mai, a
+karakterek együtt éppen a mai célnál tartanak; ha korábbi, ennyi nappal le vannak
+maradva.
 
 **Állapotok:**
 

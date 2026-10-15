@@ -34,6 +34,7 @@ from leveling import (
     Settings,
     Status,
     build_plan,
+    day_progress,
     format_date,
     format_deviation,
     format_level,
@@ -72,6 +73,34 @@ WOW_SPECS = {
 }
 WOW_CLASSES = tuple(WOW_SPECS)
 ALL_SPECS = tuple(sorted({spec for specs in WOW_SPECS.values() for spec in specs}))
+WOW_RACES = (
+    "Blood Elf",
+    "Dark Iron Dwarf",
+    "Dracthyr",
+    "Draenei",
+    "Dwarf",
+    "Earthen",
+    "Gnome",
+    "Goblin",
+    "Haranir",
+    "Highmountain Tauren",
+    "Human",
+    "Kul Tiran",
+    "Lightforged Draenei",
+    "Mag'har Orc",
+    "Mechagnome",
+    "Night Elf",
+    "Nightborne",
+    "Orc",
+    "Pandaren",
+    "Tauren",
+    "Troll",
+    "Undead",
+    "Void Elf",
+    "Vulpera",
+    "Worgen",
+    "Zandalari Troll",
+)
 
 HU_MONTHS = (
     "január",
@@ -100,12 +129,14 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
 
+BEHIND_COLOR = "#b35c00"
+
 # Az „Ütemben” állapot az alapértelmezett betűszínnel jelenik meg.
 STATUS_COLORS = {
     Status.DONE: OK_COLOR,
     Status.GOAL_MET: OK_COLOR,
     Status.AHEAD: "#1f5fae",
-    Status.BEHIND: "#b35c00",
+    Status.BEHIND: BEHIND_COLOR,
     Status.OVERDUE: ERROR_COLOR,
     Status.NOT_STARTED: "#80868b",
 }
@@ -161,9 +192,12 @@ def link_spec_to_class(class_var: tk.StringVar, spec_var: tk.StringVar, spec_box
     class_var.trace_add("write", update)
 
 
-def describe_class(character: Character) -> str:
-    """Kaszt és spec együtt, pl. „Death Knight, Unholy” (üres, ha egyik sincs megadva)."""
-    return ", ".join(part for part in (character.char_class, character.spec) if part)
+def describe_character(character: Character) -> str:
+    """A karakter rövid leírása, pl. „Arthas-Draenor (Undead Death Knight, Unholy)”."""
+    name = f"{character.name}-{character.realm}" if character.realm else character.name
+    kind = " ".join(part for part in (character.race, character.char_class) if part)
+    details = ", ".join(part for part in (kind, character.spec) if part)
+    return f"{name} ({details})" if details else name
 
 
 def place_over(window: tk.Toplevel, parent: tk.Misc) -> None:
@@ -328,37 +362,39 @@ class CalendarPopup(tk.Toplevel):
 
 
 class CharacterDialog(tk.Toplevel):
-    """Egy karakter nevének, kasztjának és szintjének szerkesztése."""
+    """Egy karakter adatainak szerkesztése."""
 
-    def __init__(self, parent: tk.Misc, character: Character) -> None:
+    def __init__(self, parent: tk.Misc, character: Character, realms: list[str] | None = None) -> None:
         super().__init__(parent)
         self.withdraw()
         self.title("Karakter szerkesztése")
         self.resizable(False, False)
         self.transient(parent.winfo_toplevel())
-        self.result: tuple[str, str, str, Decimal] | None = None
+        self.result: dict | None = None  # mentéskor a karakter új adatai
         self.name_var = tk.StringVar(value=character.name)
+        self.realm_var = tk.StringVar(value=character.realm)
+        self.race_var = tk.StringVar(value=character.race)
         self.class_var = tk.StringVar(value=character.char_class)
         self.spec_var = tk.StringVar(value=character.spec)
         self.level_var = tk.StringVar(value=format_level(character.level))
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Név:").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=3)
-        name_entry = ttk.Entry(body, textvariable=self.name_var, width=26)
-        name_entry.grid(row=0, column=1, sticky="ew", pady=3)
-        ttk.Label(body, text="Kaszt:").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=3)
-        ttk.Combobox(body, textvariable=self.class_var, values=WOW_CLASSES, width=24).grid(
-            row=1, column=1, sticky="ew", pady=3
+        rows = (
+            ("Név:", ttk.Entry(body, textvariable=self.name_var, width=26)),
+            ("Realm:", ttk.Combobox(body, textvariable=self.realm_var, values=realms or [], width=24)),
+            ("Faj:", ttk.Combobox(body, textvariable=self.race_var, values=WOW_RACES, width=24)),
+            ("Kaszt:", ttk.Combobox(body, textvariable=self.class_var, values=WOW_CLASSES, width=24)),
+            ("Spec:", ttk.Combobox(body, textvariable=self.spec_var, width=24)),
+            ("Jelenlegi szint:", LevelSpinbox(body, self.level_var)),
         )
-        ttk.Label(body, text="Spec:").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=3)
-        spec_box = ttk.Combobox(body, textvariable=self.spec_var, width=24)
-        spec_box.grid(row=2, column=1, sticky="ew", pady=3)
+        for row, (text, widget) in enumerate(rows):
+            ttk.Label(body, text=text).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+            widget.grid(row=row, column=1, sticky="w" if isinstance(widget, LevelSpinbox) else "ew", pady=3)
+        name_entry, spec_box = rows[0][1], rows[4][1]
         link_spec_to_class(self.class_var, self.spec_var, spec_box)
-        ttk.Label(body, text="Jelenlegi szint:").grid(row=3, column=0, sticky="w", padx=(0, 12), pady=3)
-        LevelSpinbox(body, self.level_var).grid(row=3, column=1, sticky="w", pady=3)
         buttons = ttk.Frame(body)
-        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=len(rows), column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Mentés", command=self.accept).pack(side="left", padx=(0, 6))
         ttk.Button(buttons, text="Mégse", command=self.destroy).pack(side="left")
 
@@ -379,7 +415,14 @@ class CharacterDialog(tk.Toplevel):
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self)
             return
-        self.result = (name, self.class_var.get().strip(), self.spec_var.get().strip(), level)
+        self.result = {
+            "name": name,
+            "realm": self.realm_var.get().strip(),
+            "race": self.race_var.get().strip(),
+            "char_class": self.class_var.get().strip(),
+            "spec": self.spec_var.get().strip(),
+            "level": level,
+        }
         self.destroy()
 
 
@@ -389,16 +432,18 @@ class CharacterListWindow(tk.Toplevel):
     # azonosító, fejléc, alapszélesség (képpont), igazítás, nyúlhat-e
     COLUMNS = (
         ("position", "#", 36, "center", False),
-        ("name", "Név", 130, "w", True),
-        ("class", "Kaszt", 105, "w", True),
-        ("spec", "Spec", 100, "w", True),
+        ("name", "Név", 120, "w", False),
+        ("realm", "Realm", 120, "w", False),
+        ("race", "Faj", 105, "w", False),
+        ("class", "Kaszt", 110, "w", False),
+        ("spec", "Spec", 110, "w", False),
         ("level", "Szint", 70, "center", False),
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
         ("goal", "Mai cél", 70, "center", False),
         ("deviation", "Szinteltérés", 95, "center", False),
-        ("days", "Hátralévő napok", 100, "center", False),
-        ("pace", "Tempó (szint/nap)", 110, "center", False),
+        ("days", "Hátra (nap)", 90, "center", False),
+        ("pace", "Napi tempó", 90, "center", False),
         ("status", "Állapot", 290, "w", True),
     )
 
@@ -412,10 +457,16 @@ class CharacterListWindow(tk.Toplevel):
         self.selected_var = tk.StringVar()
         self.level_var = tk.StringVar()
         self.order_hint_var = tk.StringVar()
+        self.day_var = tk.StringVar()
         self._build()
         self.bind("<Escape>", lambda _event: self.close())
         self.refresh()
         self.minsize(app.px(640), app.px(360))
+        # Kisebb kijelzőn se lógjon ki: a szöveges oszlopok ilyenkor keskenyebbek lesznek.
+        self.update_idletasks()
+        width = min(self.winfo_reqwidth(), self.winfo_screenwidth() - app.px(40))
+        if width < self.winfo_reqwidth():
+            self.geometry(f"{width}x{self.winfo_reqheight()}")
 
     def _build(self) -> None:
         px = self.app.px
@@ -444,7 +495,8 @@ class CharacterListWindow(tk.Toplevel):
         for key, heading, width, anchor, stretch in self.COLUMNS:
             self.tree.heading(key, text=heading, anchor=anchor, command=lambda key=key: self.sort_by(key))
             width = max(px(width), heading_font.measure(heading + SORT_ARROWS[False]) + px(16))
-            self.tree.column(key, width=width, minwidth=px(30), anchor=anchor, stretch=stretch)
+            minwidth = px(200) if stretch else px(30)
+            self.tree.column(key, width=width, minwidth=minwidth, anchor=anchor, stretch=stretch)
         for status, color in STATUS_COLORS.items():
             self.tree.tag_configure(status.value, foreground=color)
         vertical = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
@@ -487,9 +539,17 @@ class CharacterListWindow(tk.Toplevel):
 
         footer = ttk.Frame(body)
         footer.pack(fill="x", pady=(10, 0))
-        ttk.Button(footer, text="Bezárás", command=self.close).pack(side="right")
-        ttk.Label(footer, textvariable=self.summary_var, wraplength=px(720), justify="left").pack(
-            side="left", anchor="w"
+        ttk.Button(footer, text="Bezárás", command=self.close).pack(side="right", anchor="n")
+        texts = ttk.Frame(footer)
+        texts.pack(side="left", fill="x", expand=True)
+        summary = ttk.Label(texts, textvariable=self.summary_var, justify="left")
+        summary.pack(anchor="w")
+        self.day_label = ttk.Label(texts, textvariable=self.day_var, justify="left")
+        self.day_label.pack(anchor="w", pady=(4, 0))
+        # A sorok az ablak tényleges szélességénél törjenek.
+        texts.bind(
+            "<Configure>",
+            lambda event: [label.configure(wraplength=max(event.width, px(300))) for label in (summary, self.day_label)],
         )
 
     def refresh(self, select: Character | None = None) -> None:
@@ -523,6 +583,10 @@ class CharacterListWindow(tk.Toplevel):
             f"Célszint: {format_level(settings.target_level)}   ·   Ütemezés: {mode}"
         )
         self.summary_var.set(self._summary(plans))
+        progress = day_progress(settings, self.app.data.characters, today)
+        self.day_var.set(progress.describe() if progress is not None else "")
+        behind = progress is not None and not progress.finished and progress.today >= 1 and progress.days_ahead < 0
+        self.day_label.configure(style="Late.TLabel" if behind else "Good.TLabel")
 
     @staticmethod
     def _row_values(plan: CharacterPlan) -> tuple:
@@ -536,6 +600,8 @@ class CharacterListWindow(tk.Toplevel):
         return (
             plan.position,
             character.name,
+            character.realm or "–",
+            character.race or "–",
             character.char_class or "–",
             character.spec or "–",
             format_level(character.level),
@@ -580,8 +646,7 @@ class CharacterListWindow(tk.Toplevel):
             self.selected_var.set("– nincs kijelölve –")
             self.level_var.set("")
         else:
-            details = describe_class(character)
-            self.selected_var.set(f"{character.name} ({details})" if details else character.name)
+            self.selected_var.set(describe_character(character))
             self.level_var.set(format_level(character.level))
 
     def sort_by(self, key: str) -> None:
@@ -637,10 +702,11 @@ class CharacterListWindow(tk.Toplevel):
         character = self._selected_character()
         if character is None:
             return
-        dialog = CharacterDialog(self, character)
+        dialog = CharacterDialog(self, character, self.app.known_realms())
         self.wait_window(dialog)
         if dialog.result is not None:
-            character.name, character.char_class, character.spec, character.level = dialog.result
+            for field_name, value in dialog.result.items():
+                setattr(character, field_name, value)
             self.app.data_changed(select=character)
 
     def delete_selected(self) -> None:
@@ -690,6 +756,8 @@ class App:
         self.mode_var = tk.StringVar(value=settings.mode)
         self.settings_message = tk.StringVar()
         self.name_var = tk.StringVar()
+        self.realm_var = tk.StringVar()
+        self.race_var = tk.StringVar()
         self.class_var = tk.StringVar()
         self.spec_var = tk.StringVar()
         self.new_level_var = tk.StringVar()
@@ -732,6 +800,8 @@ class App:
         style.configure("Ok.TLabel", foreground=OK_COLOR)
         style.configure("Error.TLabel", foreground=ERROR_COLOR)
         style.configure("Compact.TButton", padding=(2, 0))
+        style.configure("Good.TLabel", font=strong, foreground=OK_COLOR)
+        style.configure("Late.TLabel", font=strong, foreground=BEHIND_COLOR)
         style.configure("Treeview", rowheight=round(base.metrics("linespace") * 1.5))
 
         # Egyes Tk-verziókban (8.6.9) e nélkül nem látszanak a sorok színei.
@@ -769,25 +839,20 @@ class App:
         root.rowconfigure(0, weight=1)
         body = ttk.Frame(root, padding=14)
         body.grid(row=0, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=1)
-        wrap = self.px(470)
+        body.columnconfigure((0, 1), weight=1)
 
         ttk.Label(body, text="World of Warcraft – szintezés tervező", style="Title.TLabel").grid(
-            row=0, column=0, sticky="w"
+            row=0, column=0, columnspan=2, sticky="w"
         )
-        ttk.Label(body, text=INTRO_TEXT, style="Hint.TLabel", wraplength=wrap, justify="left").grid(
-            row=1, column=0, sticky="w", pady=(4, 12)
+        ttk.Label(body, text=INTRO_TEXT, style="Hint.TLabel", wraplength=self.px(940), justify="left").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 12)
         )
-
-        field_labels = []
 
         def field_label(frame: ttk.Frame, text: str, row: int, sticky: str = "w") -> None:
-            label = ttk.Label(frame, text=text)
-            label.grid(row=row, column=0, sticky=sticky, padx=(0, 12), pady=3)
-            field_labels.append(label)
+            ttk.Label(frame, text=text).grid(row=row, column=0, sticky=sticky, padx=(0, 12), pady=3)
 
         settings = ttk.LabelFrame(body, text="Beállítások", padding=10)
-        settings.grid(row=2, column=0, sticky="ew")
+        settings.grid(row=2, column=0, sticky="nsew")
         date_rows = (
             ("Szintezés kezdete:", self.start_var),
             ("Első karakter célszinten:", self.first_var),
@@ -817,25 +882,22 @@ class App:
             variable=self.mode_var,
         ).pack(anchor="w")
         self.settings_message_label = ttk.Label(
-            settings, textvariable=self.settings_message, wraplength=wrap, justify="left"
+            settings, textvariable=self.settings_message, wraplength=self.px(520), justify="left"
         )
         self.settings_message_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         new = ttk.LabelFrame(body, text="Új karakter hozzáadása", padding=10)
-        new.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        field_label(new, "Név:", 0)
+        new.grid(row=2, column=1, sticky="nsew", padx=(12, 0))
+        ttk.Label(new, text="Csak a név kötelező.", style="Hint.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 3)
+        )
         self.name_entry = ttk.Entry(new, textvariable=self.name_var, width=26)
-        self.name_entry.grid(row=0, column=1, sticky="w", pady=3)
-        field_label(new, "Kaszt (nem kötelező):", 1)
+        self.realm_box = ttk.Combobox(new, textvariable=self.realm_var, width=24)
+        race_box = ttk.Combobox(new, textvariable=self.race_var, values=WOW_RACES, width=24)
         class_box = ttk.Combobox(new, textvariable=self.class_var, values=WOW_CLASSES, width=24)
-        class_box.grid(row=1, column=1, sticky="w", pady=3)
-        field_label(new, "Spec (nem kötelező):", 2)
         self.spec_box = ttk.Combobox(new, textvariable=self.spec_var, width=24)
-        self.spec_box.grid(row=2, column=1, sticky="w", pady=3)
         link_spec_to_class(self.class_var, self.spec_var, self.spec_box)
-        field_label(new, "Jelenlegi szint:", 3)
         level_cell = ttk.Frame(new)
-        level_cell.grid(row=3, column=1, sticky="w", pady=3)
         level_box = LevelSpinbox(
             level_cell, self.new_level_var, empty_value=lambda: self.data.settings.start_level
         )
@@ -843,22 +905,28 @@ class App:
         ttk.Label(level_cell, text="üresen hagyva: a kezdőszint", style="Hint.TLabel").pack(
             side="left", padx=(8, 0)
         )
-        for widget in (self.name_entry, class_box, self.spec_box, level_box):
+        fields = (
+            ("Név:", self.name_entry),
+            ("Realm:", self.realm_box),
+            ("Faj:", race_box),
+            ("Kaszt:", class_box),
+            ("Spec:", self.spec_box),
+            ("Jelenlegi szint:", level_cell),
+        )
+        for row, (text, widget) in enumerate(fields, start=1):
+            field_label(new, text, row)
+            widget.grid(row=row, column=1, sticky="w", pady=3)
+        for widget in (self.name_entry, self.realm_box, race_box, class_box, self.spec_box, level_box):
             widget.bind("<Return>", self.add_character)
         ttk.Button(new, text="Hozzáadás", command=self.add_character).grid(
-            row=4, column=1, sticky="w", pady=(6, 0)
+            row=len(fields) + 1, column=1, sticky="w", pady=(6, 0)
         )
-        ttk.Label(new, textvariable=self.feedback_var, style="Ok.TLabel").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        ttk.Label(new, textvariable=self.feedback_var, style="Ok.TLabel", wraplength=self.px(400)).grid(
+            row=len(fields) + 2, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
-
-        # A két keret beviteli mezői egy vonalba kerüljenek.
-        label_width = max(label.winfo_reqwidth() for label in field_labels) + self.px(12)
-        for frame in (settings, new):
-            frame.columnconfigure(0, minsize=label_width)
 
         footer = ttk.Frame(body)
-        footer.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
         ttk.Button(footer, text="Karakterlista megnyitása…", command=self.open_list).pack(
             side="right", anchor="n"
@@ -922,13 +990,17 @@ class App:
             if not messagebox.askyesno("Létező név", question, parent=self.root):
                 return
         character = Character(
-            name=name, char_class=self.class_var.get().strip(), spec=self.spec_var.get().strip(), level=level
+            name=name,
+            realm=self.realm_var.get().strip(),
+            race=self.race_var.get().strip(),
+            char_class=self.class_var.get().strip(),
+            spec=self.spec_var.get().strip(),
+            level=level,
         )
         self.data.characters.append(character)
         self.data_changed(select=character)
-        self.name_var.set("")
-        self.class_var.set("")
-        self.spec_var.set("")
+        for variable in (self.name_var, self.realm_var, self.race_var, self.class_var, self.spec_var):
+            variable.set("")
         self.new_level_var.set("")
         self.name_entry.focus_set()
         position = len(self.data.characters)
@@ -967,7 +1039,12 @@ class App:
         else:
             self._save_error_shown = False
 
+    def known_realms(self) -> list[str]:
+        """A karaktereknél már megadott realmek, a realm mezők javaslataihoz."""
+        return sorted({character.realm for character in self.data.characters if character.realm}, key=str.casefold)
+
     def refresh(self, select: Character | None = None) -> None:
+        self.realm_box.configure(values=self.known_realms())
         characters = self.data.characters
         settings = self.data.settings
         if characters:

@@ -187,11 +187,20 @@ class Character:
     char_class: str = ""
     spec: str = ""  # specializáció, pl. Frost
     level: Decimal = DEFAULT_START_LEVEL
+    race: str = ""  # faj, pl. Orc
+    realm: str = ""  # szerver, pl. Draenor
     # Csak a program futása alatt használt azonosító, nem kerül mentésre.
     uid: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "class": self.char_class, "spec": self.spec, "level": float(self.level)}
+        return {
+            "name": self.name,
+            "realm": self.realm,
+            "race": self.race,
+            "class": self.char_class,
+            "spec": self.spec,
+            "level": float(self.level),
+        }
 
     @classmethod
     def from_dict(cls, data: dict, default_level: Decimal = DEFAULT_START_LEVEL) -> Character:
@@ -203,6 +212,8 @@ class Character:
             char_class=str(data.get("class", "")).strip(),
             spec=str(data.get("spec", "")).strip(),
             level=_level_from_json(data.get("level", default_level)),
+            race=str(data.get("race", "")).strip(),
+            realm=str(data.get("realm", "")).strip(),
         )
 
 
@@ -383,6 +394,8 @@ SORT_KEYS = {
         else None
     ),
     "spec": lambda plan: _text_sort_key(plan.character.spec) if plan.character.spec else None,
+    "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
+    "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
     "level": lambda plan: plan.character.level,
     "start": lambda plan: plan.start,
     "deadline": lambda plan: plan.deadline,
@@ -405,6 +418,90 @@ def sort_plans(plans: list[CharacterPlan], key: str = "position", descending: bo
     present = [plan for plan in plans if get(plan) is not None]
     missing = [plan for plan in plans if get(plan) is None]
     return sorted(present, key=get, reverse=descending) + missing
+
+
+def _number_article(number: int) -> str:
+    """Határozott névelő sorszám elé: „az 1.”, „az 5.”, „az 50.”, de „a 2.”, „a 10.”."""
+    digits = str(number)
+    return "az" if digits[0] == "5" or (digits[0] == "1" and len(digits) % 3 == 1) else "a"
+
+
+@dataclass(frozen=True)
+class DayProgress:
+    """A karakterek együttes haladása, a terv napjaiban kifejezve."""
+
+    today: int  # a szintezés hányadik napja van ma (1: a kezdőnap; 0 vagy kevesebb: még nem kezdődött el)
+    total_days: int  # a terv hossza napokban, a kezdőnaptól az utolsó céldátumig
+    reached_day: int  # ennek a napnak a tervezett szintjét érték el együtt (0: még az 1. napét sem)
+    character_count: int
+    finished: bool  # minden karakter elérte a célszintet
+
+    @property
+    def days_ahead(self) -> int:
+        """Hány nappal járnak a mai cél előtt (+) vagy mögött (−)."""
+        return self.reached_day - min(self.today, self.total_days)
+
+    def describe(self) -> str:
+        if self.finished:
+            return "A szintezés kész: minden karakter elérte a célszintet."
+        single = self.character_count == 1
+        subject = "A karakter" if single else "A karakterek együtt"
+        if self.reached_day == 0:
+            level = f"{subject} még az 1. nap szintjét sem {'érte' if single else 'érték'} el"
+        else:
+            article = _number_article(self.reached_day)
+            level = f"{subject} {article} {self.reached_day}. nap szintjén {'áll' if single else 'állnak'}"
+        if self.today < 1:
+            wait = 1 - self.today
+            when = "holnap" if wait == 1 else f"{wait} nap múlva"
+            start = f"A szintezés {when} kezdődik."
+            return f"{start} {level}." if self.reached_day else start
+        if self.today <= self.total_days:
+            day = f"Ma a szintezés {self.today}. napja van (összesen {self.total_days} nap)."
+        else:
+            day = f"A tervezett {self.total_days} nap letelt."
+        if self.days_ahead > 0:
+            comparison = f"{self.days_ahead} nappal a terv előtt"
+        elif self.days_ahead == 0:
+            comparison = "pont a mai célnál"
+        else:
+            comparison = f"{-self.days_ahead} nappal a mai cél mögött"
+        return f"{day} {level} – {comparison}."
+
+
+def day_progress(settings: Settings, characters: list[Character], today: date | None = None) -> DayProgress | None:
+    """Az összes karakter együttes szintje a terv hányadik napjának felel meg.
+
+    Összeadja, hány szintet léptek a karakterek a kezdőszinthez képest (legfeljebb
+    a célszintig; a kezdőszint alatti karakterek hiánya levonódik), és megkeresi az
+    utolsó napot, amelynek végére a terv szerint összesen ennyi szint volt esedékes.
+    """
+    if not characters:
+        return None
+    today = today or date.today()
+    windows = leveling_windows(settings, len(characters))
+    total_days = (max(end for _, end in windows) - settings.start_date).days + 1
+    if total_days < 1:
+        return None
+    gained = sum(min(c.level, settings.target_level) - settings.start_level for c in characters)
+
+    def planned_gain(day_number: int) -> Decimal:
+        day = settings.start_date + timedelta(days=day_number - 1)
+        return sum(
+            planned_level(start, end, settings.start_level, settings.target_level, day) - settings.start_level
+            for start, end in windows
+        )
+
+    reached = 0
+    while reached < total_days and planned_gain(reached + 1) <= gained:
+        reached += 1
+    return DayProgress(
+        today=(today - settings.start_date).days + 1,
+        total_days=total_days,
+        reached_day=reached,
+        character_count=len(characters),
+        finished=all(c.level >= settings.target_level for c in characters),
+    )
 
 
 @dataclass
