@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import queue
 import sys
+import threading
 import tkinter as tk
 from collections import Counter
 from datetime import date, datetime
@@ -32,6 +34,7 @@ from leveling import (
     CharacterPlan,
     LevelingData,
     Settings,
+    SpecScores,
     Status,
     build_plan,
     day_progress,
@@ -46,6 +49,8 @@ from leveling import (
     save_data,
     sort_plans,
 )
+import murlok
+from wow_data import ALL_SPECS, WOW_CLASSES, WOW_RACES, specs_for_class
 
 APP_TITLE = "WoW szintezés tervező"
 DATA_FILE_NAME = "szintezes_adatok.json"
@@ -57,52 +62,6 @@ INTRO_TEXT = (
     "pontossággal adhatod meg (pl. 83,45)."
 )
 
-# Kasztok és specializációik, a játékbeli angol elnevezésekkel.
-WOW_SPECS = {
-    "Death Knight": ("Blood", "Frost", "Unholy"),
-    "Demon Hunter": ("Havoc", "Vengeance", "Devourer"),
-    "Druid": ("Balance", "Feral", "Guardian", "Restoration"),
-    "Evoker": ("Devastation", "Preservation", "Augmentation"),
-    "Hunter": ("Beast Mastery", "Marksmanship", "Survival"),
-    "Mage": ("Arcane", "Fire", "Frost"),
-    "Monk": ("Brewmaster", "Mistweaver", "Windwalker"),
-    "Paladin": ("Holy", "Protection", "Retribution"),
-    "Priest": ("Discipline", "Holy", "Shadow"),
-    "Rogue": ("Assassination", "Outlaw", "Subtlety"),
-    "Shaman": ("Elemental", "Enhancement", "Restoration"),
-    "Warlock": ("Affliction", "Demonology", "Destruction"),
-    "Warrior": ("Arms", "Fury", "Protection"),
-}
-WOW_CLASSES = tuple(WOW_SPECS)
-ALL_SPECS = tuple(sorted({spec for specs in WOW_SPECS.values() for spec in specs}))
-WOW_RACES = (
-    "Blood Elf",
-    "Dark Iron Dwarf",
-    "Dracthyr",
-    "Draenei",
-    "Dwarf",
-    "Earthen",
-    "Gnome",
-    "Goblin",
-    "Haranir",
-    "Highmountain Tauren",
-    "Human",
-    "Kul Tiran",
-    "Lightforged Draenei",
-    "Mag'har Orc",
-    "Mechagnome",
-    "Night Elf",
-    "Nightborne",
-    "Orc",
-    "Pandaren",
-    "Tauren",
-    "Troll",
-    "Undead",
-    "Void Elf",
-    "Vulpera",
-    "Worgen",
-    "Zandalari Troll",
-)
 
 HU_MONTHS = (
     "január",
@@ -164,15 +123,6 @@ def format_number(value: float) -> str:
 def article(word: str) -> str:
     """A szóhoz illő határozott névelő: „a Thrall”, de „az Arthas”."""
     return "az" if word[:1].lower() in tuple("aáeéiíoóöőuúüű") else "a"
-
-
-def specs_for_class(class_name: str) -> tuple[str, ...]:
-    """Az ismert kaszt specjei; üres vagy ismeretlen kasztnál az összes spec."""
-    wanted = class_name.strip().casefold()
-    for name, specs in WOW_SPECS.items():
-        if name.casefold() == wanted:
-            return specs
-    return ALL_SPECS
 
 
 def link_spec_to_class(class_var: tk.StringVar, spec_var: tk.StringVar, spec_box: ttk.Combobox) -> None:
@@ -451,6 +401,7 @@ class CharacterListWindow(tk.Toplevel):
         ("class", "Kaszt", 110, "w", False),
         ("spec", "Spec", 110, "w", False),
         ("raiderio", "Raider.io", 85, "center", False),
+        ("murlok", "Murlok.io", 85, "center", False),
         ("level", "Szint", 70, "center", False),
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
@@ -473,6 +424,7 @@ class CharacterListWindow(tk.Toplevel):
         self.order_hint_var = tk.StringVar()
         self.day_var = tk.StringVar()
         self._build()
+        self.update_score_controls()
         self.bind("<Escape>", lambda _event: self.close())
         self.refresh()
         self.minsize(app.px(640), app.px(360))
@@ -486,13 +438,23 @@ class CharacterListWindow(tk.Toplevel):
         px = self.app.px
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, textvariable=self.header_var, style="Strong.TLabel").pack(anchor="w")
+        header = ttk.Frame(body)
+        header.pack(fill="x")
+        ttk.Label(header, textvariable=self.header_var, style="Strong.TLabel").pack(side="left", anchor="w")
+        self.score_button = ttk.Button(
+            header, text="Frissítés a Murlok.io-ról", command=lambda: self.app.refresh_spec_scores(force=True)
+        )
+        self.score_button.pack(side="right")
+        ttk.Label(header, textvariable=self.app.score_status_var, style="Hint.TLabel").pack(
+            side="right", padx=(0, 8)
+        )
         ttk.Label(
             body,
             text="A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie "
             "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni, a "
             "„Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
-            "mögött (−). A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend.",
+            "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ "
+            "rangsorában. A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend.",
             style="Hint.TLabel",
             wraplength=px(860),
             justify="left",
@@ -571,7 +533,8 @@ class CharacterListWindow(tk.Toplevel):
         settings = self.app.data.settings
         today = date.today()
         sort_key, descending = self.app.list_sort
-        plans = sort_plans(build_plan(settings, self.app.data.characters, today), sort_key, descending)
+        plans = build_plan(settings, self.app.data.characters, today, self.app.data.spec_scores)
+        plans = sort_plans(plans, sort_key, descending)
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
 
         self.tree.delete(*self.tree.get_children())
@@ -619,6 +582,7 @@ class CharacterListWindow(tk.Toplevel):
             character.char_class or "–",
             character.spec or "–",
             "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
+            "–" if plan.spec_score is None else format_raiderio_score(plan.spec_score),
             format_level(character.level),
             format_date(plan.start),
             format_date(plan.deadline),
@@ -740,6 +704,10 @@ class CharacterListWindow(tk.Toplevel):
         neighbour = next((c for c in self.app.data.characters if c.uid == neighbour_uid), None)
         self.app.data_changed(select=neighbour)
 
+    def update_score_controls(self) -> None:
+        """A Murlok.io frissítés gomb csak akkor használható, ha éppen nem fut lekérés."""
+        self.score_button.state(["!disabled" if self.app.can_fetch_scores() else "disabled"])
+
     def close(self) -> None:
         self.app.list_window = None
         self.destroy()
@@ -748,9 +716,14 @@ class CharacterListWindow(tk.Toplevel):
 class App:
     """A főablak: beállítások, új karakter felvétele, a lista megnyitása."""
 
-    def __init__(self, root: tk.Tk, data_path: Path) -> None:
+    def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None) -> None:
         self.root = root
         self.data_path = Path(data_path)
+        # A Murlok.io-pontszámokat lekérő függvény (None: nincs lekérés, pl. a tesztekben).
+        self._fetch_scores = fetch_scores
+        self._score_fetch_running = False
+        self._score_error: str | None = None
+        self.score_status_var = tk.StringVar()
         self.list_window: CharacterListWindow | None = None
         self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
@@ -1051,6 +1024,61 @@ class App:
             self.list_window.focus_set()
             return
         self.list_window = CharacterListWindow(self)
+        self._update_score_status()
+        self.refresh_spec_scores()  # ha a tárolt adat már régebbi 8 óránál
+
+    def can_fetch_scores(self) -> bool:
+        return self._fetch_scores is not None and not self._score_fetch_running
+
+    def refresh_spec_scores(self, force: bool = False) -> None:
+        """A specenkénti pontszámok lekérése a Murlok.io-ról a háttérben; közben a program használható."""
+        if not self.can_fetch_scores() or not (force or self.data.spec_scores.is_stale()):
+            return
+        fetch = self._fetch_scores
+        results: queue.Queue = queue.Queue()
+
+        def work() -> None:
+            try:
+                results.put((True, fetch()))
+            except murlok.MurlokError as exc:
+                results.put((False, str(exc)))
+            except Exception as exc:  # váratlan hiba se akassza meg a programot
+                results.put((False, f"váratlan hiba: {exc!r}"))
+
+        self._score_fetch_running = True
+        self._score_error = None
+        self._update_score_status()
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(100, self._check_score_fetch, results)
+
+    def _check_score_fetch(self, results: queue.Queue) -> None:
+        try:
+            succeeded, value = results.get_nowait()
+        except queue.Empty:
+            self.root.after(100, self._check_score_fetch, results)
+            return
+        self._score_fetch_running = False
+        if succeeded:
+            self.data.spec_scores = SpecScores(scores=value, fetched_at=datetime.now())
+            self.data_changed()
+        else:
+            self._score_error = value
+        self._update_score_status()
+
+    def _update_score_status(self) -> None:
+        fetched_at = self.data.spec_scores.fetched_at
+        last = f"{fetched_at:%Y-%m-%d %H:%M}" if fetched_at else None
+        if self._score_fetch_running:
+            text = "Murlok.io: lekérés folyamatban…"
+        elif self._score_error:
+            text = f"Murlok.io: {self._score_error}" + (f" Utolsó sikeres lekérés: {last}." if last else "")
+        elif last:
+            text = f"Murlok.io-pontszámok: {last}"
+        else:
+            text = "Murlok.io-pontszámok: még nincsenek lekérve"
+        self.score_status_var.set(text)
+        if self.list_window is not None:
+            self.list_window.update_score_controls()
 
     def data_changed(self, select: Character | None = None) -> None:
         """Módosítás után: mentés, majd minden ablak frissítése."""
@@ -1125,7 +1153,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     _enable_windows_dpi_awareness()
     root = tk.Tk()
-    App(root, args.data_file)
+    App(root, args.data_file, fetch_scores=murlok.fetch_spec_scores)
     root.mainloop()
 
 

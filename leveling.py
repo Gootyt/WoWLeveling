@@ -30,7 +30,7 @@ import tempfile
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
@@ -291,6 +291,7 @@ class CharacterPlan:
     pace: Decimal | None  # a szükséges átlagos tempó (szint/nap), felfelé kerekítve
     status: Status
     status_text: str
+    spec_score: Decimal | None = None  # a karakter specjének pontszáma a Murlok.io rangsorában
 
     @property
     def levels_due_today(self) -> Decimal:
@@ -348,19 +349,36 @@ def planned_level(start: date, deadline: date, from_level: Decimal, to_level: De
 
 
 def build_plan(
-    settings: Settings, characters: list[Character], today: date | None = None
+    settings: Settings,
+    characters: list[Character],
+    today: date | None = None,
+    spec_scores: SpecScores | None = None,
 ) -> list[CharacterPlan]:
     """Az összes karakter ütemterve a megadott (alapértelmezés szerint a mai) napon."""
     today = today or date.today()
     windows = leveling_windows(settings, len(characters))
     return [
-        _plan_character(character, position, start, deadline, settings, today)
+        _plan_character(
+            character,
+            position,
+            start,
+            deadline,
+            settings,
+            today,
+            spec_scores.score_for(character) if spec_scores is not None else None,
+        )
         for position, (character, (start, deadline)) in enumerate(zip(characters, windows), start=1)
     ]
 
 
 def _plan_character(
-    character: Character, position: int, start: date, deadline: date, settings: Settings, today: date
+    character: Character,
+    position: int,
+    start: date,
+    deadline: date,
+    settings: Settings,
+    today: date,
+    spec_score: Decimal | None = None,
 ) -> CharacterPlan:
     level = character.level
     start_level, target = settings.start_level, settings.target_level
@@ -380,6 +398,7 @@ def _plan_character(
             pace=pace,
             status=status,
             status_text=text,
+            spec_score=spec_score,
         )
 
     if remaining <= 0:
@@ -447,6 +466,7 @@ SORT_KEYS = {
     "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
     "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
     "raiderio": lambda plan: plan.character.raiderio_score,
+    "murlok": lambda plan: plan.spec_score,
     "level": lambda plan: plan.character.level,
     "start": lambda plan: plan.start,
     "deadline": lambda plan: plan.deadline,
@@ -555,26 +575,75 @@ def day_progress(settings: Settings, characters: list[Character], today: date | 
     )
 
 
+SPEC_SCORES_MAX_AGE = timedelta(hours=8)  # a Murlok.io is 8 óránként frissíti a rangsorait
+
+
+@dataclass
+class SpecScores:
+    """A Murlok.io Mythic+ rangsoraiból lekért, specenkénti pontszámok."""
+
+    scores: dict[str, Decimal] = field(default_factory=dict)  # kulcs: spec_key(kaszt, spec)
+    fetched_at: datetime | None = None  # a lekérés időpontja (helyi idő)
+
+    @staticmethod
+    def spec_key(char_class: str, spec: str) -> str:
+        return f"{char_class.strip()}/{spec.strip()}".casefold()
+
+    def score_for(self, character: Character) -> Decimal | None:
+        """A karakter kasztjához és specjéhez tartozó pontszám (ha mindkettő meg van adva)."""
+        if not character.char_class.strip() or not character.spec.strip():
+            return None
+        return self.scores.get(self.spec_key(character.char_class, character.spec))
+
+    def is_stale(self, now: datetime | None = None) -> bool:
+        """Igaz, ha még nincs adat, vagy régebbi annál, ahogy a Murlok.io frissül."""
+        now = now or datetime.now()
+        return self.fetched_at is None or now - self.fetched_at >= SPEC_SCORES_MAX_AGE
+
+    def to_dict(self) -> dict:
+        return {
+            "fetched_at": None if self.fetched_at is None else self.fetched_at.isoformat(timespec="seconds"),
+            "scores": {key: float(value) for key, value in sorted(self.scores.items())},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> SpecScores:
+        scores = {}
+        for key, value in dict(data.get("scores", {})).items():
+            score = _raiderio_from_json(value)
+            if score is not None:
+                scores[str(key).casefold()] = score
+        fetched_at = data.get("fetched_at")
+        return cls(scores=scores, fetched_at=datetime.fromisoformat(fetched_at) if fetched_at else None)
+
+
 @dataclass
 class LevelingData:
     """A program összes mentendő adata."""
 
     settings: Settings
     characters: list[Character] = field(default_factory=list)
+    spec_scores: SpecScores = field(default_factory=SpecScores)  # a Murlok.io-ról lekért adatok
 
     def to_dict(self) -> dict:
         return {
             "version": DATA_VERSION,
             "settings": self.settings.to_dict(),
             "characters": [character.to_dict() for character in self.characters],
+            "spec_scores": self.spec_scores.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> LevelingData:
         settings = Settings.from_dict(data["settings"])
+        try:
+            spec_scores = SpecScores.from_dict(data.get("spec_scores") or {})
+        except (ArithmeticError, AttributeError, TypeError, ValueError):
+            spec_scores = SpecScores()  # a sérült gyorsítótár miatt ne vesszenek el az adatok
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
+            spec_scores=spec_scores,
         )
 
 

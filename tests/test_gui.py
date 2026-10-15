@@ -2,6 +2,7 @@
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
 import tempfile
+import time
 import unittest
 from datetime import date, timedelta
 from decimal import Decimal
@@ -152,6 +153,60 @@ class GuiTests(unittest.TestCase):
         window.sort_by("raiderio")  # csökkenő: a legjobb pontszám elöl, a pontszám nélküli a végén
         self.assertEqual(self.names(), ["Arthas", "Thrall", "Jaina"])
 
+    def fetch_app(self, fetch):
+        """Egy második főablak, amely a megadott függvénnyel „kéri le” a spec-pontszámokat."""
+        return self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "lekeres.json", fetch_scores=fetch)
+
+    def wait_for_fetch(self, app):
+        for _ in range(200):
+            self.root.update()
+            if app.can_fetch_scores():
+                return
+            time.sleep(0.01)
+        self.fail("a háttérben futó lekérés nem fejeződött be")
+
+    def test_spec_scores_column_is_filled_in_the_background(self):
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return {"death knight/unholy": D("3891"), "paladin/holy": D("4050")}
+
+        app = self.fetch_app(fetch)
+        for name, char_class, spec in (("Arthas", "Death Knight", "Unholy"), ("Uther", "paladin", "holy"), ("Jaina", "Mage", "")):
+            app.name_var.set(name)
+            app.class_var.set(char_class)
+            app.spec_var.set(spec)
+            app.add_character()
+        app.open_list()  # még nincs tárolt adat, ezért a lista megnyitásakor elindul a lekérés
+        self.assertIn("folyamatban", app.score_status_var.get())
+        self.assertIn("disabled", app.list_window.score_button.state())
+        self.wait_for_fetch(app)
+        self.assertEqual(len(calls), 1)
+        tree = app.list_window.tree
+        self.assertEqual([tree.set(iid, "murlok") for iid in tree.get_children()], ["3891,0", "4050,0", "–"])
+        self.assertTrue(app.score_status_var.get().startswith("Murlok.io-pontszámok: "))
+        self.assertEqual(load_data(app.data_path).spec_scores.scores["paladin/holy"], D("4050"))
+
+        app.list_window.close()
+        app.open_list()  # friss adatnál nincs újabb lekérés
+        self.assertEqual(len(calls), 1)
+        app.list_window.sort_by("murlok")
+        app.list_window.sort_by("murlok")
+        self.assertEqual(app.list_window.tree.get_children()[0], app.data.characters[1].uid)  # Uther: 4050
+
+    def test_failed_spec_score_fetch_is_reported(self):
+        def fetch():
+            raise self.gui.murlok.MurlokError("a Murlok.io nem érhető el (teszt).")
+
+        app = self.fetch_app(fetch)
+        app.open_list()
+        self.wait_for_fetch(app)
+        self.assertEqual(
+            app.score_status_var.get(), "Murlok.io: a Murlok.io nem érhető el (teszt)."
+        )
+        self.assertNotIn("disabled", app.list_window.score_button.state())  # újra lehet próbálni
+
     def test_list_shows_which_day_level_we_are_at(self):
         today = date.today()
         self.app.start_var.set(format_date(today - timedelta(days=4)))
@@ -274,6 +329,7 @@ class GuiTests(unittest.TestCase):
                 "class": "–",
                 "spec": "–",
                 "raiderio": "–",
+                "murlok": "–",
                 "level": "1,00",
                 "start": format_date(today),
                 "deadline": format_date(today + timedelta(days=9)),

@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,6 +11,7 @@ from leveling import (
     Character,
     LevelingData,
     Settings,
+    SpecScores,
     Status,
     _number_article,
     build_plan,
@@ -410,6 +411,28 @@ class DayProgressTests(unittest.TestCase):
         self.assertEqual({number: _number_article(number) for number in expected}, expected)
 
 
+class SpecScoresTests(unittest.TestCase):
+    def test_lookup_by_class_and_spec(self):
+        scores = SpecScores({SpecScores.spec_key("Death Knight", "Unholy"): D("3891")})
+        self.assertEqual(scores.score_for(Character("A", "death knight", " unholy ")), D("3891"))
+        self.assertIsNone(scores.score_for(Character("B", "Death Knight", "Blood")))
+        self.assertIsNone(scores.score_for(Character("C", "Death Knight")))
+
+    def test_staleness_follows_murlok_refresh_interval(self):
+        fetched = datetime(2026, 10, 15, 12, 0)
+        scores = SpecScores({}, fetched)
+        self.assertFalse(scores.is_stale(fetched + timedelta(hours=7, minutes=59)))
+        self.assertTrue(scores.is_stale(fetched + timedelta(hours=8)))
+        self.assertTrue(SpecScores().is_stale())
+
+    def test_plan_rows_get_the_spec_score_and_sort_by_it(self):
+        scores = SpecScores({"mage/frost": D("3500"), "paladin/holy": D("4050")}, datetime(2026, 10, 15, 12, 0))
+        characters = [Character("A", "Mage", "Frost"), Character("B", "Mage"), Character("C", "Paladin", "Holy")]
+        plans = build_plan(make_settings(), characters, START, scores)
+        self.assertEqual([plan.spec_score for plan in plans], [D("3500"), None, D("4050")])
+        self.assertEqual([p.character.name for p in sort_plans(plans, "murlok", descending=True)], ["C", "A", "B"])
+
+
 class PersistenceTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -443,6 +466,23 @@ class PersistenceTests(unittest.TestCase):
             ],
         )
         self.assertEqual(list(Path(self.temp_dir.name).iterdir()), [self.path])  # nem marad ideiglenes fájl
+
+    def test_spec_scores_are_saved(self):
+        scores = SpecScores({"mage/frost": D("3500.5")}, datetime(2026, 10, 15, 20, 13, 5))
+        save_data(self.path, LevelingData(make_settings(), [], scores))
+        loaded = load_data(self.path).spec_scores
+        self.assertEqual((loaded.scores, loaded.fetched_at), (scores.scores, scores.fetched_at))
+
+    def test_broken_spec_score_cache_does_not_lose_data(self):
+        content = {
+            "settings": {"start_date": "2026-10-01", "first_target_date": "2026-10-10", "last_target_date": "2026-11-01"},
+            "characters": [{"name": "Arthas"}],
+            "spec_scores": {"fetched_at": "nem dátum", "scores": {}},
+        }
+        self.path.write_text(json.dumps(content), encoding="utf-8")
+        loaded = load_data(self.path)
+        self.assertEqual([c.name for c in loaded.characters], ["Arthas"])
+        self.assertIsNone(loaded.spec_scores.fetched_at)
 
     def test_missing_file(self):
         with self.assertRaises(FileNotFoundError):
