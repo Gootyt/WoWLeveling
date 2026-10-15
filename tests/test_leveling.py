@@ -18,10 +18,12 @@ from leveling import (
     deadlines,
     format_deviation,
     format_level,
+    format_raiderio_score,
     leveling_windows,
     load_data,
     parse_date,
     parse_level,
+    parse_raiderio_score,
     planned_level,
     save_data,
     sort_plans,
@@ -69,6 +71,17 @@ class ParseTests(unittest.TestCase):
     def test_format_level_uses_decimal_comma(self):
         self.assertEqual(format_level(D("83.4")), "83,40")
         self.assertEqual(format_level(D("90")), "90,00")
+
+    def test_raiderio_score_has_one_decimal(self):
+        cases = {"2543,7": "2543.7", "2543.7": "2543.7", " 2543 ": "2543.0", "2,543.7": "2543.7", "2.543,7": "2543.7"}
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(parse_raiderio_score(text), D(expected))
+        self.assertIsNone(parse_raiderio_score("  "))
+        self.assertEqual(format_raiderio_score(D("2543")), "2543,0")
+        for text in ("2543,75", "abc", "-5", "100000", "2,5,4"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_raiderio_score(text)
 
     def test_format_deviation_is_signed(self):
         self.assertEqual(format_deviation(D("2.87")), "+2,87")
@@ -306,6 +319,16 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "race")), ["C", "B", "A"])
         self.assertEqual(self.names(sort_plans(plans, "realm")), ["C", "A", "B"])
 
+    def test_sort_by_raiderio_score(self):
+        characters = [
+            Character("A", raiderio_score=D("2543.7")),
+            Character("B"),
+            Character("C", raiderio_score=D("3012.4")),
+        ]
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual(self.names(sort_plans(plans, "raiderio")), ["A", "C", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "raiderio", descending=True)), ["C", "A", "B"])
+
     def test_names_follow_hungarian_alphabet(self):
         names = ["Zoli", "Ödön", "Oszkár", "Ábel", "abel"]
         plans = build_plan(make_settings(), [Character(name) for name in names], START)
@@ -399,20 +422,24 @@ class PersistenceTests(unittest.TestCase):
         data = LevelingData(
             make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"),
             [
-                Character("Thrall", "Shaman", "Enhancement", D("83.45"), race="Orc", realm="Draenor"),
+                Character(
+                    "Thrall", "Shaman", "Enhancement", D("83.45"), race="Orc", realm="Draenor", raiderio_score=D("2543.7")
+                ),
                 Character("Jaina", "Mage", level=D("1.00")),
             ],
         )
         save_data(self.path, data)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(raw["characters"][0]["level"], 83.45)  # olvasható szám a fájlban
+        self.assertEqual(raw["characters"][0]["raiderio_score"], 2543.7)
+        self.assertIsNone(raw["characters"][1]["raiderio_score"])
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings, data.settings)
         self.assertEqual(
-            [(c.name, c.realm, c.race, c.char_class, c.spec, c.level) for c in loaded.characters],
+            [(c.name, c.realm, c.race, c.char_class, c.spec, c.level, c.raiderio_score) for c in loaded.characters],
             [
-                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45")),
-                ("Jaina", "", "", "Mage", "", D("1.00")),
+                ("Thrall", "Draenor", "Orc", "Shaman", "Enhancement", D("83.45"), D("2543.7")),
+                ("Jaina", "", "", "Mage", "", D("1.00"), None),
             ],
         )
         self.assertEqual(list(Path(self.temp_dir.name).iterdir()), [self.path])  # nem marad ideiglenes fájl
@@ -453,7 +480,8 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
         arthas = loaded.characters[0]
         self.assertEqual(
-            (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level), ("", "", "", "", D("80.00"))
+            (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level, arthas.raiderio_score),
+            ("", "", "", "", D("80.00"), None),
         )
 
     def test_reads_files_of_the_first_version(self):

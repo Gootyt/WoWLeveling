@@ -36,6 +36,8 @@ from enum import Enum
 from pathlib import Path
 
 LEVEL_STEP = Decimal("0.01")  # a szintek két tizedesjegy pontosságúak
+RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám egy tizedesjegyű (pl. 2543,7)
+RAIDERIO_MAX = Decimal("99999.9")
 LEVEL_MIN = Decimal("1.00")
 LEVEL_MAX = Decimal("999.99")
 DEFAULT_START_LEVEL = Decimal("1.00")
@@ -101,6 +103,51 @@ def format_deviation(value: Decimal) -> str:
     if value < 0:
         return "−" + format_level(-value)
     return format_level(abs(value))
+
+
+def parse_raiderio_score(text: str) -> Decimal | None:
+    """Raider.io pontszám beolvasása legfeljebb egy tizedesjeggyel; üres szövegnél None.
+
+    Tizedesvessző és -pont is jó; ha mindkettő szerepel (pl. a weboldalról másolt
+    „2,543.7”), a hátrébb álló a tizedesjel, a másik ezres elválasztó.
+    """
+    original = text.strip()
+    text = original.replace(" ", "").replace("\u00a0", "")
+    if not text:
+        return None
+    if "," in text and "." in text:
+        thousands = "." if text.rfind(",") > text.rfind(".") else ","
+        text = text.replace(thousands, "")
+    match = _LEVEL_PATTERN.fullmatch(text)
+    if match is None:
+        raise ValueError(f"„{original}” nem érvényes Raider.io pontszám (példa: 2543,7).")
+    decimals = match.group(2)
+    if decimals is not None and len(decimals) > 1:
+        raise ValueError(f"„{original}”: a Raider.io pontszám legfeljebb egy tizedesjegyű lehet.")
+    value = Decimal(text.replace(",", "."))
+    if value > RAIDERIO_MAX:
+        raise ValueError(f"A Raider.io pontszám legfeljebb {format_raiderio_score(RAIDERIO_MAX)} lehet.")
+    return value.quantize(RAIDERIO_STEP)
+
+
+def format_raiderio_score(value: Decimal) -> str:
+    """Raider.io pontszám egy tizedesjeggyel, tizedesvesszővel (pl. 2543,7)."""
+    return f"{value:.1f}".replace(".", ",")
+
+
+def _raiderio_from_json(value: object) -> Decimal | None:
+    """Az adatfájlban tárolt Raider.io pontszám (hiányzó vagy üres: None)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise TypeError(f"hibás Raider.io pontszám: {value!r}")
+    try:
+        score = Decimal(str(value).strip().replace(",", "."))
+    except InvalidOperation:
+        raise ValueError(f"hibás Raider.io pontszám: {value!r}") from None
+    if not score.is_finite():
+        raise ValueError(f"hibás Raider.io pontszám: {value!r}")
+    return min(max(score, Decimal(0)), RAIDERIO_MAX).quantize(RAIDERIO_STEP)
 
 
 def _level_from_json(value: object) -> Decimal:
@@ -189,6 +236,7 @@ class Character:
     level: Decimal = DEFAULT_START_LEVEL
     race: str = ""  # faj, pl. Orc
     realm: str = ""  # szerver, pl. Draenor
+    raiderio_score: Decimal | None = None  # Raider.io (Mythic+) pontszám, ha meg van adva
     # Csak a program futása alatt használt azonosító, nem kerül mentésre.
     uid: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
@@ -200,6 +248,7 @@ class Character:
             "class": self.char_class,
             "spec": self.spec,
             "level": float(self.level),
+            "raiderio_score": None if self.raiderio_score is None else float(self.raiderio_score),
         }
 
     @classmethod
@@ -214,6 +263,7 @@ class Character:
             level=_level_from_json(data.get("level", default_level)),
             race=str(data.get("race", "")).strip(),
             realm=str(data.get("realm", "")).strip(),
+            raiderio_score=_raiderio_from_json(data.get("raiderio_score")),
         )
 
 
@@ -396,6 +446,7 @@ SORT_KEYS = {
     "spec": lambda plan: _text_sort_key(plan.character.spec) if plan.character.spec else None,
     "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
     "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
+    "raiderio": lambda plan: plan.character.raiderio_score,
     "level": lambda plan: plan.character.level,
     "start": lambda plan: plan.start,
     "deadline": lambda plan: plan.deadline,

@@ -36,9 +36,10 @@ class GuiTests(unittest.TestCase):
         self.root.destroy()
         self.temp_dir.cleanup()
 
-    def add(self, *names, level="", char_class="", spec="", race="", realm=""):
+    def add(self, *names, level="", char_class="", spec="", race="", realm="", score=""):
         for name in names:
             self.app.name_var.set(name)
+            self.app.raiderio_var.set(score)
             self.app.realm_var.set(realm)
             self.app.race_var.set(race)
             self.app.class_var.set(char_class)
@@ -131,6 +132,25 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(window.selected_var.get(), "Jaina-Ragnaros (Human)")
         window.sort_by("race")
         self.assertEqual(self.names(), ["Jaina", "Thrall", "Arthas"])
+
+    def test_raiderio_score_is_saved_shown_and_sortable(self):
+        self.add("Thrall", score="2543,7")
+        self.add("Jaina")
+        self.add("Arthas", score="3,012.4")  # a weboldalról másolt, ezres elválasztós alak is jó
+        self.assertEqual(self.app.raiderio_var.get(), "")
+        saved = load_data(self.path).characters
+        self.assertEqual([c.raiderio_score for c in saved], [D("2543.7"), None, D("3012.4")])
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            self.add("Sylvanas", score="2543,75")
+        warning.assert_called_once()
+        self.assertEqual(len(self.app.data.characters), 3)
+
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual([row["raiderio"] for row in self.rows()], ["2543,7", "–", "3012,4"])
+        window.sort_by("raiderio")
+        window.sort_by("raiderio")  # csökkenő: a legjobb pontszám elöl, a pontszám nélküli a végén
+        self.assertEqual(self.names(), ["Arthas", "Thrall", "Jaina"])
 
     def test_list_shows_which_day_level_we_are_at(self):
         today = date.today()
@@ -253,6 +273,7 @@ class GuiTests(unittest.TestCase):
                 "race": "–",
                 "class": "–",
                 "spec": "–",
+                "raiderio": "–",
                 "level": "1,00",
                 "start": format_date(today),
                 "deadline": format_date(today + timedelta(days=9)),
@@ -378,6 +399,12 @@ class GuiTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertIsNone(dialog.result)
         dialog.level_var.set("142,5")
+        dialog.raiderio_var.set("2543,75")
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            dialog.accept()
+        warning.assert_called_once()
+        self.assertIsNone(dialog.result)
+        dialog.raiderio_var.set("2543,7")
         dialog.accept()
         self.assertEqual(
             dialog.result,
@@ -387,6 +414,7 @@ class GuiTests(unittest.TestCase):
                 "race": "Orc",
                 "char_class": "Shaman",
                 "spec": "Enhancement",
+                "raiderio_score": D("2543.7"),
                 "level": D("142.50"),
             },
         )

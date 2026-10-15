@@ -38,9 +38,11 @@ from leveling import (
     format_date,
     format_deviation,
     format_level,
+    format_raiderio_score,
     load_data,
     parse_date,
     parse_level,
+    parse_raiderio_score,
     save_data,
     sort_plans,
 )
@@ -376,21 +378,26 @@ class CharacterDialog(tk.Toplevel):
         self.race_var = tk.StringVar(value=character.race)
         self.class_var = tk.StringVar(value=character.char_class)
         self.spec_var = tk.StringVar(value=character.spec)
+        score = character.raiderio_score
+        self.raiderio_var = tk.StringVar(value="" if score is None else format_raiderio_score(score))
         self.level_var = tk.StringVar(value=format_level(character.level))
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
+        score_entry = ttk.Entry(body, textvariable=self.raiderio_var, width=10)
+        level_box = LevelSpinbox(body, self.level_var)
         rows = (
             ("Név:", ttk.Entry(body, textvariable=self.name_var, width=26)),
             ("Realm:", ttk.Combobox(body, textvariable=self.realm_var, values=realms or [], width=24)),
             ("Faj:", ttk.Combobox(body, textvariable=self.race_var, values=WOW_RACES, width=24)),
             ("Kaszt:", ttk.Combobox(body, textvariable=self.class_var, values=WOW_CLASSES, width=24)),
             ("Spec:", ttk.Combobox(body, textvariable=self.spec_var, width=24)),
-            ("Jelenlegi szint:", LevelSpinbox(body, self.level_var)),
+            ("Raider.io pontszám:", score_entry),
+            ("Jelenlegi szint:", level_box),
         )
         for row, (text, widget) in enumerate(rows):
             ttk.Label(body, text=text).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
-            widget.grid(row=row, column=1, sticky="w" if isinstance(widget, LevelSpinbox) else "ew", pady=3)
+            widget.grid(row=row, column=1, sticky="w" if widget in (score_entry, level_box) else "ew", pady=3)
         name_entry, spec_box = rows[0][1], rows[4][1]
         link_spec_to_class(self.class_var, self.spec_var, spec_box)
         buttons = ttk.Frame(body)
@@ -415,12 +422,18 @@ class CharacterDialog(tk.Toplevel):
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self)
             return
+        try:
+            score = parse_raiderio_score(self.raiderio_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Hibás Raider.io pontszám", str(exc), parent=self)
+            return
         self.result = {
             "name": name,
             "realm": self.realm_var.get().strip(),
             "race": self.race_var.get().strip(),
             "char_class": self.class_var.get().strip(),
             "spec": self.spec_var.get().strip(),
+            "raiderio_score": score,
             "level": level,
         }
         self.destroy()
@@ -437,6 +450,7 @@ class CharacterListWindow(tk.Toplevel):
         ("race", "Faj", 105, "w", False),
         ("class", "Kaszt", 110, "w", False),
         ("spec", "Spec", 110, "w", False),
+        ("raiderio", "Raider.io", 85, "center", False),
         ("level", "Szint", 70, "center", False),
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
@@ -604,6 +618,7 @@ class CharacterListWindow(tk.Toplevel):
             character.race or "–",
             character.char_class or "–",
             character.spec or "–",
+            "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
             format_level(character.level),
             format_date(plan.start),
             format_date(plan.deadline),
@@ -760,6 +775,7 @@ class App:
         self.race_var = tk.StringVar()
         self.class_var = tk.StringVar()
         self.spec_var = tk.StringVar()
+        self.raiderio_var = tk.StringVar()
         self.new_level_var = tk.StringVar()
         self.feedback_var = tk.StringVar()
         self.summary_var = tk.StringVar()
@@ -905,18 +921,21 @@ class App:
         ttk.Label(level_cell, text="üresen hagyva: a kezdőszint", style="Hint.TLabel").pack(
             side="left", padx=(8, 0)
         )
+        raiderio_entry = ttk.Entry(new, textvariable=self.raiderio_var, width=10)
         fields = (
             ("Név:", self.name_entry),
             ("Realm:", self.realm_box),
             ("Faj:", race_box),
             ("Kaszt:", class_box),
             ("Spec:", self.spec_box),
+            ("Raider.io pontszám:", raiderio_entry),
             ("Jelenlegi szint:", level_cell),
         )
         for row, (text, widget) in enumerate(fields, start=1):
             field_label(new, text, row)
             widget.grid(row=row, column=1, sticky="w", pady=3)
-        for widget in (self.name_entry, self.realm_box, race_box, class_box, self.spec_box, level_box):
+        inputs = (self.name_entry, self.realm_box, race_box, class_box, self.spec_box, raiderio_entry, level_box)
+        for widget in inputs:
             widget.bind("<Return>", self.add_character)
         ttk.Button(new, text="Hozzáadás", command=self.add_character).grid(
             row=len(fields) + 1, column=1, sticky="w", pady=(6, 0)
@@ -985,6 +1004,11 @@ class App:
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self.root)
             return
+        try:
+            score = parse_raiderio_score(self.raiderio_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Hibás Raider.io pontszám", str(exc), parent=self.root)
+            return
         if any(character.name.casefold() == name.casefold() for character in self.data.characters):
             question = f"Már van „{name}” nevű karakter a listán.\nMégis hozzáadod?"
             if not messagebox.askyesno("Létező név", question, parent=self.root):
@@ -996,10 +1020,18 @@ class App:
             char_class=self.class_var.get().strip(),
             spec=self.spec_var.get().strip(),
             level=level,
+            raiderio_score=score,
         )
         self.data.characters.append(character)
         self.data_changed(select=character)
-        for variable in (self.name_var, self.realm_var, self.race_var, self.class_var, self.spec_var):
+        for variable in (
+            self.name_var,
+            self.realm_var,
+            self.race_var,
+            self.class_var,
+            self.spec_var,
+            self.raiderio_var,
+        ):
             variable.set("")
         self.new_level_var.set("")
         self.name_entry.focus_set()

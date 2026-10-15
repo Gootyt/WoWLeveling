@@ -9,8 +9,8 @@ megtervezéséhez és követéséhez.
 - A szintek **két tizedesjegy pontosságúak** (pl. `83,45`: a 83-as szint 45%-ánál
   tart a karakter). Tizedesvesszővel és -ponttal is beírhatók.
 - Új karakterek vehetők fel. Csak a név kötelező; megadható a realm, a faj, a
-  kaszt, a spec és a jelenlegi szint is (szint nélkül a karakter a kezdőszintről
-  indul). A spec választólistája mindig a kiválasztott kaszt specjeit kínálja, a
+  kaszt, a spec, a Raider.io pontszám és a jelenlegi szint is (szint nélkül a
+  karakter a kezdőszintről indul). A spec választólistája mindig a kiválasztott kaszt specjeit kínálja, a
   realm mező pedig a már használt realmeket. A karakterek szintje lehet a
   kezdőszint alatt vagy a célszint felett is.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
@@ -55,10 +55,12 @@ python wow_leveling.py masik_terv.json
    mezők nyilai egy egész szinttel léptetnek. Hibás érték esetén piros üzenet
    jelzi, mi a gond. A helyes beállításokat a program azonnal menti.
 2. **Új karakter** (a főablak jobb oldalán): írd be a nevét (és ha akarod, a
-   realmjét, faját, kasztját, specjét és jelenlegi szintjét), majd „Hozzáadás” vagy
-   Enter. A realm, a faj, a kaszt és a spec listából választható, de bármit
-   beírhatsz. Ha kasztot váltasz, és a már kiválasztott spec nem tartozik az új
-   kaszthoz, a spec mező kiürül. Az új karakter a lista végére kerül.
+   realmjét, faját, kasztját, specjét, Raider.io pontszámát és jelenlegi szintjét),
+   majd „Hozzáadás” vagy Enter. A realm, a faj, a kaszt és a spec listából
+   választható, de bármit beírhatsz. Ha kasztot váltasz, és a már kiválasztott spec
+   nem tartozik az új kaszthoz, a spec mező kiürül. A Raider.io pontszám egy
+   tizedesjegyig adható meg (pl. `2543,7`); a weboldalról ezres elválasztóval
+   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
