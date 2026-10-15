@@ -265,6 +265,41 @@ class GuiTests(unittest.TestCase):
             f"{self.gui.goal_day_phrase(goal_day, today)} célok látszanak.",
         )
 
+    def test_column_widths_follow_the_content(self):
+        self.add("Thrall", realm="Draenor")
+        self.app.open_list()
+        window = self.app.list_window
+        self.root.update()
+        cell, padding = window._cell_font, self.app.px(20)
+
+        def width(key):
+            return int(window.tree.column(key, "width"))
+
+        realm_before = width("realm")
+        self.assertGreaterEqual(realm_before, cell.measure("Draenor") + padding)
+        heading_width = window._heading_font.measure("Szinteltérés" + self.gui.SORT_ARROWS[False])
+        self.assertGreaterEqual(width("deviation"), heading_width)  # a fejléc sem lóg ki
+
+        # A kézzel kisebbre vett ablakot a frissítés nem méretezi vissza, ha a tartalom nem nőtt.
+        window.geometry(f"1000x{window.winfo_height()}")
+        self.root.update()
+        window.refresh()
+        self.root.update()
+        self.assertEqual(window.winfo_width(), 1000)
+
+        long_name = "Sylvanas Windrunner Banshee Queen"
+        self.add(long_name, realm="Twisting Nether")  # hosszabb tartalom: szélesebb oszlop és ablak
+        self.root.update()
+        self.assertGreaterEqual(width("realm"), cell.measure("Twisting Nether") + padding)
+        self.assertGreaterEqual(width("name"), cell.measure(long_name) + padding)
+        self.assertGreater(window.winfo_width(), 1000)
+
+        # Rövidebb tartalomhoz keskenyebb oszlop tartozik.
+        self.select(self.app.data.characters[1])
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            window.delete_selected()
+        self.assertEqual(width("realm"), realm_before)
+
     def test_list_shows_which_day_level_we_are_at(self):
         today = date.today()
         self.app.start_var.set(format_date(today - timedelta(days=4)))

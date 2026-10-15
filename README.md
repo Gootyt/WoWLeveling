@@ -23,6 +23,8 @@ megtervezéséhez és követéséhez.
 - **Előretekintés:** ha minden karakter teljesítette a mai célt, a lista
   automatikusan a holnapi célokat mutatja; ha azt is, a holnaputániakat, és így
   tovább. A lista tetején lévő jelölőnégyzettel ki- és bekapcsolható.
+- A lista oszlopai **automatikusan** olyan szélesek, amennyit a tartalmuk kíván;
+  ha a tartalom szélesebb lesz, az ablak is nő (legfeljebb a képernyő szélességéig).
 - A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
   szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
 - A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a

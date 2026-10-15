@@ -80,7 +80,6 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
-GOAL_HEADING_SAMPLES = ("Mai cél", "Holnapi cél", "Cél (12-31)")  # a cél oszlop lehetséges fejlécei
 
 BEHIND_COLOR = "#b35c00"
 
@@ -134,6 +133,15 @@ def link_spec_to_class(class_var: tk.StringVar, spec_var: tk.StringVar, spec_box
 
     spec_box.configure(values=specs_for_class(class_var.get()))
     class_var.trace_add("write", update)
+
+
+def style_font(style: ttk.Style, element: str, default: str) -> tkfont.Font:
+    """Egy ttk-stíluselem betűtípusa, a szövegek szélességének méréséhez."""
+    name = style.lookup(element, "font") or default
+    try:
+        return tkfont.nametofont(name)
+    except tk.TclError:
+        return tkfont.Font(font=name)
 
 
 def goal_heading(goal_day: date, today: date) -> str:
@@ -415,25 +423,25 @@ class CharacterDialog(tk.Toplevel):
 class CharacterListWindow(tk.Toplevel):
     """A karakterek listája és ütemterve külön ablakban."""
 
-    # azonosító, fejléc, alapszélesség (képpont), igazítás, nyúlhat-e
+    # azonosító, fejléc, igazítás, nyúlhat-e; a szélesség a tartalomhoz igazodik
     COLUMNS = (
-        ("position", "#", 36, "center", False),
-        ("name", "Név", 120, "w", False),
-        ("realm", "Realm", 120, "w", False),
-        ("race", "Faj", 105, "w", False),
-        ("class", "Kaszt", 110, "w", False),
-        ("spec", "Spec", 110, "w", False),
-        ("item_level", "Itemlevel", 80, "center", False),
-        ("raiderio", "Raider.io", 85, "center", False),
-        ("murlok", "Murlok.io", 85, "center", False),
-        ("level", "Szint", 70, "center", False),
-        ("start", "Kezdés", 92, "center", False),
-        ("deadline", "Céldátum", 92, "center", False),
-        ("goal", "Mai cél", 70, "center", False),
-        ("deviation", "Szinteltérés", 95, "center", False),
-        ("days", "Hátra (nap)", 90, "center", False),
-        ("pace", "Napi tempó", 90, "center", False),
-        ("status", "Állapot", 290, "w", True),
+        ("position", "#", "center", False),
+        ("name", "Név", "w", False),
+        ("realm", "Realm", "w", False),
+        ("race", "Faj", "w", False),
+        ("class", "Kaszt", "w", False),
+        ("spec", "Spec", "w", False),
+        ("item_level", "Itemlevel", "center", False),
+        ("raiderio", "Raider.io", "center", False),
+        ("murlok", "Murlok.io", "center", False),
+        ("level", "Szint", "center", False),
+        ("start", "Kezdés", "center", False),
+        ("deadline", "Céldátum", "center", False),
+        ("goal", "Mai cél", "center", False),
+        ("deviation", "Szinteltérés", "center", False),
+        ("days", "Hátra (nap)", "center", False),
+        ("pace", "Napi tempó", "center", False),
+        ("status", "Állapot", "w", True),
     )
 
     def __init__(self, app: App) -> None:
@@ -449,16 +457,19 @@ class CharacterListWindow(tk.Toplevel):
         self.day_var = tk.StringVar()
         self.look_ahead_var = tk.BooleanVar(value=app.data.look_ahead)
         self.look_ahead_info_var = tk.StringVar()
+        self._sized = False  # megkapta-e már az ablak a kezdeti méretét
+        self._content_width = 0  # a tartalom legutóbb mért szélessége
         self._build()
         self.update_score_controls()
         self.bind("<Escape>", lambda _event: self.close())
         self.refresh()
         self.minsize(app.px(640), app.px(360))
-        # Kisebb kijelzőn se lógjon ki: a szöveges oszlopok ilyenkor keskenyebbek lesznek.
+        # Kezdetben akkora, amekkorát a tartalom kíván (legfeljebb a képernyő szélessége);
+        # utána csak akkor nő, ha a tartalom szélesebb lesz, így nem ugrál.
         self.update_idletasks()
         width = min(self.winfo_reqwidth(), self.winfo_screenwidth() - app.px(40))
-        if width < self.winfo_reqwidth():
-            self.geometry(f"{width}x{self.winfo_reqheight()}")
+        self.geometry(f"{width}x{self.winfo_reqheight()}")
+        self._sized = True
 
     def _build(self) -> None:
         px = self.app.px
@@ -504,13 +515,13 @@ class CharacterListWindow(tk.Toplevel):
         self.tree = ttk.Treeview(
             table, columns=[column[0] for column in self.COLUMNS], show="headings", selectmode="browse", height=12
         )
-        heading_font = tkfont.nametofont("TkHeadingFont")
-        for key, heading, width, anchor, stretch in self.COLUMNS:
+        style = ttk.Style(self)
+        self._cell_font = style_font(style, "Treeview", "TkDefaultFont")
+        self._heading_font = style_font(style, "Treeview.Heading", "TkHeadingFont")
+        for key, heading, anchor, stretch in self.COLUMNS:
             self.tree.heading(key, text=heading, anchor=anchor, command=lambda key=key: self.sort_by(key))
-            labels = GOAL_HEADING_SAMPLES if key == "goal" else (heading,)
-            width = max(px(width), max(heading_font.measure(label + SORT_ARROWS[False]) for label in labels) + px(16))
             minwidth = px(200) if stretch else px(30)
-            self.tree.column(key, width=width, minwidth=minwidth, anchor=anchor, stretch=stretch)
+            self.tree.column(key, minwidth=minwidth, anchor=anchor, stretch=stretch)
         for status, color in STATUS_COLORS.items():
             self.tree.tag_configure(status.value, foreground=color)
         vertical = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
@@ -579,10 +590,11 @@ class CharacterListWindow(tk.Toplevel):
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
 
         self.tree.delete(*self.tree.get_children())
+        rows = []
         for plan in plans:
-            self.tree.insert(
-                "", "end", iid=plan.character.uid, values=self._row_values(plan), tags=(plan.status.value,)
-            )
+            values = self._row_values(plan)
+            rows.append(values)
+            self.tree.insert("", "end", iid=plan.character.uid, values=values, tags=(plan.status.value,))
         headings = {"goal": goal_heading(goal_day, today)}
         for key, heading, *_ in self.COLUMNS:
             text = headings.get(key, heading)
@@ -591,6 +603,7 @@ class CharacterListWindow(tk.Toplevel):
         if settings.mode == PARALLEL:  # párhuzamos ütemezésnél mindenki ugyanakkor kezd
             shown.remove("start")
         self.tree.configure(displaycolumns=shown)
+        self._fit_columns(rows, headings, shown)
         if keep is not None and self.tree.exists(keep):
             self.tree.selection_set(keep)
             self.tree.focus(keep)
@@ -609,6 +622,37 @@ class CharacterListWindow(tk.Toplevel):
         self.day_var.set(progress.describe() if progress is not None else "")
         behind = progress is not None and not progress.finished and progress.today >= 1 and progress.days_ahead < 0
         self.day_label.configure(style="Late.TLabel" if behind else "Good.TLabel")
+
+    def _fit_columns(self, rows: list[tuple], headings: dict[str, str], shown: list[str]) -> None:
+        """Minden oszlop olyan széles, amennyit a fejléce és a leghosszabb cellája kíván."""
+        arrow = self._heading_font.measure(SORT_ARROWS[False])  # a rendezés jele se lógjon ki
+        padding = self.app.px(20)
+        total = 0
+        for index, (key, heading, *_) in enumerate(self.COLUMNS):
+            title = self._heading_font.measure(headings.get(key, heading)) + arrow
+            cells = max((self._cell_font.measure(str(row[index])) for row in rows), default=0)
+            width = max(title, cells) + padding
+            self.tree.column(key, width=width)
+            if key in shown:
+                total += width
+        self._grow_to_fit(total)
+
+    def _grow_to_fit(self, columns_width: int) -> None:
+        """Ha a táblázat szélesebb lett, mint amennyi hely jut neki, az ablak is nő
+        (legfeljebb a képernyő szélességéig).
+
+        Csak a tartalom növekedésekor nő, így a kézzel kisebbre vett ablakot nem írja
+        felül. (Látható táblázatnál a Tk nem jelzi az oszlopok miatti új méretigényt,
+        ezért a szükséges szélességet az oszlopok összegéből számoljuk.)
+        """
+        grown = columns_width > self._content_width
+        self._content_width = columns_width
+        if not (self._sized and grown):
+            return
+        missing = columns_width + self.app.px(4) - self.tree.winfo_width()
+        if missing > 0:
+            limit = self.winfo_screenwidth() - self.app.px(40)
+            self.geometry(f"{min(self.winfo_width() + missing, limit)}x{self.winfo_height()}")
 
     @staticmethod
     def _row_values(plan: CharacterPlan) -> tuple:
