@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# A program saját adatfájljai (beállítások, karakterek)
+szintezes_adatok*.json
+*.tmp
