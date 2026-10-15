@@ -185,12 +185,13 @@ class Settings:
 class Character:
     name: str
     char_class: str = ""
+    spec: str = ""  # specializáció, pl. Frost
     level: Decimal = DEFAULT_START_LEVEL
     # Csak a program futása alatt használt azonosító, nem kerül mentésre.
     uid: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "class": self.char_class, "level": float(self.level)}
+        return {"name": self.name, "class": self.char_class, "spec": self.spec, "level": float(self.level)}
 
     @classmethod
     def from_dict(cls, data: dict, default_level: Decimal = DEFAULT_START_LEVEL) -> Character:
@@ -200,6 +201,7 @@ class Character:
         return cls(
             name=name,
             char_class=str(data.get("class", "")).strip(),
+            spec=str(data.get("spec", "")).strip(),
             level=_level_from_json(data.get("level", default_level)),
         )
 
@@ -375,7 +377,12 @@ def _text_sort_key(text: str) -> tuple[str, str]:
 SORT_KEYS = {
     "position": lambda plan: plan.position,
     "name": lambda plan: _text_sort_key(plan.character.name),
-    "class": lambda plan: _text_sort_key(plan.character.char_class) if plan.character.char_class else None,
+    "class": lambda plan: (
+        (_text_sort_key(plan.character.char_class), _text_sort_key(plan.character.spec))
+        if plan.character.char_class
+        else None
+    ),
+    "spec": lambda plan: _text_sort_key(plan.character.spec) if plan.character.spec else None,
     "level": lambda plan: plan.character.level,
     "start": lambda plan: plan.start,
     "deadline": lambda plan: plan.deadline,

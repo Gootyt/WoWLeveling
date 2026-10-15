@@ -36,15 +36,24 @@ class GuiTests(unittest.TestCase):
         self.root.destroy()
         self.temp_dir.cleanup()
 
-    def add(self, *names, level=""):
+    def add(self, *names, level="", char_class="", spec=""):
         for name in names:
             self.app.name_var.set(name)
+            self.app.class_var.set(char_class)
+            self.app.spec_var.set(spec)
             self.app.new_level_var.set(level)
             self.app.add_character()
 
     def rows(self):
+        """A lista sorai a nézet sorrendjében, oszlopazonosító szerint."""
         tree = self.app.list_window.tree
-        return [tuple(str(value) for value in tree.item(iid, "values")) for iid in tree.get_children()]
+        columns = [column[0] for column in self.gui.CharacterListWindow.COLUMNS]
+        return [
+            {key: str(value) for key, value in zip(columns, tree.item(iid, "values"))} for iid in tree.get_children()
+        ]
+
+    def names(self):
+        return [row["name"] for row in self.rows()]
 
     def select(self, character):
         window = self.app.list_window
@@ -59,13 +68,13 @@ class GuiTests(unittest.TestCase):
         self.app.open_list()
         window = self.app.list_window
         self.assertIsInstance(window, tk.Toplevel)
-        self.assertEqual([row[1] for row in self.rows()], ["Thrall", "Jaina"])
+        self.assertEqual(self.names(), ["Thrall", "Jaina"])
 
         self.app.open_list()  # a már nyitott ablakot csak előtérbe hozza
         self.assertIs(self.app.list_window, window)
 
         self.add("Arthas")  # a nyitott lista azonnal frissül, és kijelöli az új karaktert
-        self.assertEqual([row[1] for row in self.rows()], ["Thrall", "Jaina", "Arthas"])
+        self.assertEqual(self.names(), ["Thrall", "Jaina", "Arthas"])
         self.assertEqual(window.selected_var.get(), "Arthas")
 
         window.close()
@@ -82,6 +91,40 @@ class GuiTests(unittest.TestCase):
             self.add("Sylvanas", level="45,678")
         warning.assert_called_once()
         self.assertEqual(len(self.app.data.characters), 3)
+
+    def test_spec_is_saved_and_shown_in_the_list(self):
+        self.add("Thrall", char_class="Shaman", spec="Enhancement")
+        self.add("Jaina", char_class="Mage")
+        self.assertEqual((self.app.class_var.get(), self.app.spec_var.get()), ("", ""))
+        saved = load_data(self.path).characters
+        self.assertEqual([(c.char_class, c.spec) for c in saved], [("Shaman", "Enhancement"), ("Mage", "")])
+
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual([(row["class"], row["spec"]) for row in self.rows()], [("Shaman", "Enhancement"), ("Mage", "–")])
+        self.select(self.app.data.characters[0])
+        self.assertEqual(window.selected_var.get(), "Thrall (Shaman, Enhancement)")
+        window.sort_by("spec")
+        window.sort_by("spec")  # csökkenő sorrendben is a spec nélküli karakter marad a végén
+        self.assertEqual(self.names(), ["Thrall", "Jaina"])
+
+    def test_spec_choices_follow_the_class(self):
+        def choices():
+            return tuple(self.root.tk.splitlist(self.app.spec_box.cget("values")))
+
+        self.assertEqual(choices(), self.gui.ALL_SPECS)  # kaszt nélkül minden spec választható
+        self.app.class_var.set("mage")
+        self.assertEqual(choices(), ("Arcane", "Fire", "Frost"))
+        self.app.spec_var.set("Frost")
+        self.app.class_var.set("Death Knight")  # a Frost a Death Knightnál is létezik
+        self.assertEqual(self.app.spec_var.get(), "Frost")
+        self.app.class_var.set("Paladin")  # a Frost nem Paladin spec, ezért törlődik
+        self.assertEqual(self.app.spec_var.get(), "")
+        self.app.class_var.set("Hunter")
+        self.assertIn("Beast Mastery", choices())
+        self.app.spec_var.set("Saját spec")  # a kézzel beírt szöveg megmarad
+        self.app.class_var.set("Warrior")
+        self.assertEqual(self.app.spec_var.get(), "Saját spec")
 
     def test_empty_name_is_rejected(self):
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
@@ -158,19 +201,23 @@ class GuiTests(unittest.TestCase):
 
         thrall, jaina = self.rows()
         self.assertEqual(
-            thrall[3:11],
-            (
-                "1,00",
-                format_date(today),
-                format_date(today + timedelta(days=9)),
-                "9,90",
-                "−8,90",
-                "10",
-                "8,90",
-                "Ütemben – ma még 8,90 szint",
-            ),
+            thrall,
+            {
+                "position": "1",
+                "name": "Thrall",
+                "class": "–",
+                "spec": "–",
+                "level": "1,00",
+                "start": format_date(today),
+                "deadline": format_date(today + timedelta(days=9)),
+                "goal": "9,90",
+                "deviation": "−8,90",
+                "days": "10",
+                "pace": "8,90",
+                "status": "Ütemben – ma még 8,90 szint",
+            },
         )
-        self.assertEqual((jaina[7], jaina[10]), ("+84,55", "Kész – elérte a célszintet"))
+        self.assertEqual((jaina["deviation"], jaina["status"]), ("+84,55", "Kész – elérte a célszintet"))
         self.assertEqual([tree.item(iid, "tags")[0] for iid in tree.get_children()], ["on_track", "done"])
         self.assertIn("mai teendő összesen: 8,90 szint", self.app.list_window.summary_var.get())
 
@@ -191,17 +238,14 @@ class GuiTests(unittest.TestCase):
         window = self.app.list_window
         tree = window.tree
 
-        def names():
-            return [row[1] for row in self.rows()]
-
         self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
         self.assertEqual(tree.heading("position", "text"), "# ▲")
         window.sort_by("deviation")
-        self.assertEqual(names(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
-        self.assertEqual([row[7] for row in self.rows()], ["−4,90", "−2,96", "−2,86", "+43,77"])
+        self.assertEqual(self.names(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
+        self.assertEqual([row["deviation"] for row in self.rows()], ["−4,90", "−2,96", "−2,86", "+43,77"])
         self.assertEqual((tree.heading("deviation", "text"), tree.heading("position", "text")), ("Szinteltérés ▲", "#"))
         window.sort_by("deviation")
-        self.assertEqual(names(), ["Jaina", "Arthas", "Sylvanas", "Thrall"])
+        self.assertEqual(self.names(), ["Jaina", "Arthas", "Sylvanas", "Thrall"])
         self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
 
         # Rendezett nézetben nem lehet átrendezni, a karakterek sorrendje (és a céldátumok) nem változik.
@@ -215,7 +259,7 @@ class GuiTests(unittest.TestCase):
         # Szintmódosítás után újrarendeződik, a kijelölés megmarad.
         window.level_var.set("1")
         window.apply_level()  # Jaina: 1 − 6,23 = −5,23, a nézet végére kerül
-        self.assertEqual(names(), ["Arthas", "Sylvanas", "Thrall", "Jaina"])
+        self.assertEqual(self.names(), ["Arthas", "Sylvanas", "Thrall", "Jaina"])
         self.assertEqual(tree.selection(), (jaina.uid,))
 
         # Törléskor a nézetben szomszédos sor lesz kijelölve (az utolsó sor helyett az előző).
@@ -227,11 +271,11 @@ class GuiTests(unittest.TestCase):
         window.close()
         self.app.open_list()
         window = self.app.list_window
-        self.assertEqual(names(), ["Sylvanas", "Arthas", "Thrall"])  # 3 karakterrel: −2,96 / −3,45 / −4,90
+        self.assertEqual(self.names(), ["Sylvanas", "Arthas", "Thrall"])  # 3 karakterrel: −2,96 / −3,45 / −4,90
 
         # A # oszlop visszaállítja az eredeti sorrendet, és újra lehet átrendezni.
         window.sort_by("position")
-        self.assertEqual(names(), ["Thrall", "Arthas", "Sylvanas"])
+        self.assertEqual(self.names(), ["Thrall", "Arthas", "Sylvanas"])
         self.assertEqual(window.tree.heading("position", "text"), "# ▲")
         self.select(self.app.data.characters[1])
         self.assertNotIn("disabled", window._order_widgets[0].state())
@@ -264,7 +308,7 @@ class GuiTests(unittest.TestCase):
 
         window.move_selected(1)
         self.assertEqual([c.name for c in self.app.data.characters], ["Jaina", "Thrall", "Arthas"])
-        self.assertEqual([row[1] for row in self.rows()], ["Jaina", "Thrall", "Arthas"])
+        self.assertEqual(self.names(), ["Jaina", "Thrall", "Arthas"])
         self.assertEqual(window.tree.selection(), (thrall.uid,))
 
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
@@ -279,6 +323,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(dialog.level_var.get(), "1,00")
         dialog.name_var.set("  Go'el ")
         dialog.class_var.set("Shaman")
+        dialog.spec_var.set(" Enhancement ")
         dialog.level_var.set("42,555")
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
             dialog.accept()
@@ -286,7 +331,7 @@ class GuiTests(unittest.TestCase):
         self.assertIsNone(dialog.result)
         dialog.level_var.set("142,5")
         dialog.accept()
-        self.assertEqual(dialog.result, ("Go'el", "Shaman", D("142.50")))
+        self.assertEqual(dialog.result, ("Go'el", "Shaman", "Enhancement", D("142.50")))
 
     def test_calendar_popup_picks_a_date(self):
         picked = []

@@ -54,21 +54,24 @@ INTRO_TEXT = (
     "pontossággal adhatod meg (pl. 83,45)."
 )
 
-WOW_CLASSES = (
-    "Death Knight",
-    "Demon Hunter",
-    "Druid",
-    "Evoker",
-    "Hunter",
-    "Mage",
-    "Monk",
-    "Paladin",
-    "Priest",
-    "Rogue",
-    "Shaman",
-    "Warlock",
-    "Warrior",
-)
+# Kasztok és specializációik, a játékbeli angol elnevezésekkel.
+WOW_SPECS = {
+    "Death Knight": ("Blood", "Frost", "Unholy"),
+    "Demon Hunter": ("Havoc", "Vengeance", "Devourer"),
+    "Druid": ("Balance", "Feral", "Guardian", "Restoration"),
+    "Evoker": ("Devastation", "Preservation", "Augmentation"),
+    "Hunter": ("Beast Mastery", "Marksmanship", "Survival"),
+    "Mage": ("Arcane", "Fire", "Frost"),
+    "Monk": ("Brewmaster", "Mistweaver", "Windwalker"),
+    "Paladin": ("Holy", "Protection", "Retribution"),
+    "Priest": ("Discipline", "Holy", "Shadow"),
+    "Rogue": ("Assassination", "Outlaw", "Subtlety"),
+    "Shaman": ("Elemental", "Enhancement", "Restoration"),
+    "Warlock": ("Affliction", "Demonology", "Destruction"),
+    "Warrior": ("Arms", "Fury", "Protection"),
+}
+WOW_CLASSES = tuple(WOW_SPECS)
+ALL_SPECS = tuple(sorted({spec for specs in WOW_SPECS.values() for spec in specs}))
 
 HU_MONTHS = (
     "január",
@@ -128,6 +131,39 @@ def format_number(value: float) -> str:
 def article(word: str) -> str:
     """A szóhoz illő határozott névelő: „a Thrall”, de „az Arthas”."""
     return "az" if word[:1].lower() in tuple("aáeéiíoóöőuúüű") else "a"
+
+
+def specs_for_class(class_name: str) -> tuple[str, ...]:
+    """Az ismert kaszt specjei; üres vagy ismeretlen kasztnál az összes spec."""
+    wanted = class_name.strip().casefold()
+    for name, specs in WOW_SPECS.items():
+        if name.casefold() == wanted:
+            return specs
+    return ALL_SPECS
+
+
+def link_spec_to_class(class_var: tk.StringVar, spec_var: tk.StringVar, spec_box: ttk.Combobox) -> None:
+    """A spec-választó listája mindig a kiválasztott kaszt specjeit kínálja.
+
+    Kasztváltáskor a már kiválasztott spec törlődik, ha az biztosan nem az új
+    kaszthoz tartozik (a saját, kézzel beírt szöveg megmarad).
+    """
+    known = {spec.casefold() for spec in ALL_SPECS}
+
+    def update(*_args) -> None:
+        specs = specs_for_class(class_var.get())
+        spec_box.configure(values=specs)
+        spec = spec_var.get().strip().casefold()
+        if spec in known and spec not in {item.casefold() for item in specs}:
+            spec_var.set("")
+
+    spec_box.configure(values=specs_for_class(class_var.get()))
+    class_var.trace_add("write", update)
+
+
+def describe_class(character: Character) -> str:
+    """Kaszt és spec együtt, pl. „Death Knight, Unholy” (üres, ha egyik sincs megadva)."""
+    return ", ".join(part for part in (character.char_class, character.spec) if part)
 
 
 def place_over(window: tk.Toplevel, parent: tk.Misc) -> None:
@@ -300,9 +336,10 @@ class CharacterDialog(tk.Toplevel):
         self.title("Karakter szerkesztése")
         self.resizable(False, False)
         self.transient(parent.winfo_toplevel())
-        self.result: tuple[str, str, Decimal] | None = None
+        self.result: tuple[str, str, str, Decimal] | None = None
         self.name_var = tk.StringVar(value=character.name)
         self.class_var = tk.StringVar(value=character.char_class)
+        self.spec_var = tk.StringVar(value=character.spec)
         self.level_var = tk.StringVar(value=format_level(character.level))
 
         body = ttk.Frame(self, padding=12)
@@ -314,10 +351,14 @@ class CharacterDialog(tk.Toplevel):
         ttk.Combobox(body, textvariable=self.class_var, values=WOW_CLASSES, width=24).grid(
             row=1, column=1, sticky="ew", pady=3
         )
-        ttk.Label(body, text="Jelenlegi szint:").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=3)
-        LevelSpinbox(body, self.level_var).grid(row=2, column=1, sticky="w", pady=3)
+        ttk.Label(body, text="Spec:").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=3)
+        spec_box = ttk.Combobox(body, textvariable=self.spec_var, width=24)
+        spec_box.grid(row=2, column=1, sticky="ew", pady=3)
+        link_spec_to_class(self.class_var, self.spec_var, spec_box)
+        ttk.Label(body, text="Jelenlegi szint:").grid(row=3, column=0, sticky="w", padx=(0, 12), pady=3)
+        LevelSpinbox(body, self.level_var).grid(row=3, column=1, sticky="w", pady=3)
         buttons = ttk.Frame(body)
-        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Mentés", command=self.accept).pack(side="left", padx=(0, 6))
         ttk.Button(buttons, text="Mégse", command=self.destroy).pack(side="left")
 
@@ -338,7 +379,7 @@ class CharacterDialog(tk.Toplevel):
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self)
             return
-        self.result = (name, self.class_var.get().strip(), level)
+        self.result = (name, self.class_var.get().strip(), self.spec_var.get().strip(), level)
         self.destroy()
 
 
@@ -350,6 +391,7 @@ class CharacterListWindow(tk.Toplevel):
         ("position", "#", 36, "center", False),
         ("name", "Név", 130, "w", True),
         ("class", "Kaszt", 105, "w", True),
+        ("spec", "Spec", 100, "w", True),
         ("level", "Szint", 70, "center", False),
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
@@ -421,7 +463,7 @@ class CharacterListWindow(tk.Toplevel):
         selected.pack(fill="x", pady=(10, 0))
         level_row = ttk.Frame(selected)
         level_row.pack(fill="x")
-        ttk.Label(level_row, textvariable=self.selected_var, style="Strong.TLabel", width=30).pack(side="left")
+        ttk.Label(level_row, textvariable=self.selected_var, style="Strong.TLabel", width=-30).pack(side="left")
         ttk.Label(level_row, text="Jelenlegi szint:").pack(side="left", padx=(12, 4))
         self.level_spin = LevelSpinbox(level_row, self.level_var, on_step=self.apply_level)
         self.level_spin.pack(side="left")
@@ -495,6 +537,7 @@ class CharacterListWindow(tk.Toplevel):
             plan.position,
             character.name,
             character.char_class or "–",
+            character.spec or "–",
             format_level(character.level),
             format_date(plan.start),
             format_date(plan.deadline),
@@ -537,8 +580,8 @@ class CharacterListWindow(tk.Toplevel):
             self.selected_var.set("– nincs kijelölve –")
             self.level_var.set("")
         else:
-            suffix = f" ({character.char_class})" if character.char_class else ""
-            self.selected_var.set(character.name + suffix)
+            details = describe_class(character)
+            self.selected_var.set(f"{character.name} ({details})" if details else character.name)
             self.level_var.set(format_level(character.level))
 
     def sort_by(self, key: str) -> None:
@@ -597,7 +640,7 @@ class CharacterListWindow(tk.Toplevel):
         dialog = CharacterDialog(self, character)
         self.wait_window(dialog)
         if dialog.result is not None:
-            character.name, character.char_class, character.level = dialog.result
+            character.name, character.char_class, character.spec, character.level = dialog.result
             self.app.data_changed(select=character)
 
     def delete_selected(self) -> None:
@@ -648,6 +691,7 @@ class App:
         self.settings_message = tk.StringVar()
         self.name_var = tk.StringVar()
         self.class_var = tk.StringVar()
+        self.spec_var = tk.StringVar()
         self.new_level_var = tk.StringVar()
         self.feedback_var = tk.StringVar()
         self.summary_var = tk.StringVar()
@@ -785,9 +829,13 @@ class App:
         field_label(new, "Kaszt (nem kötelező):", 1)
         class_box = ttk.Combobox(new, textvariable=self.class_var, values=WOW_CLASSES, width=24)
         class_box.grid(row=1, column=1, sticky="w", pady=3)
-        field_label(new, "Jelenlegi szint:", 2)
+        field_label(new, "Spec (nem kötelező):", 2)
+        self.spec_box = ttk.Combobox(new, textvariable=self.spec_var, width=24)
+        self.spec_box.grid(row=2, column=1, sticky="w", pady=3)
+        link_spec_to_class(self.class_var, self.spec_var, self.spec_box)
+        field_label(new, "Jelenlegi szint:", 3)
         level_cell = ttk.Frame(new)
-        level_cell.grid(row=2, column=1, sticky="w", pady=3)
+        level_cell.grid(row=3, column=1, sticky="w", pady=3)
         level_box = LevelSpinbox(
             level_cell, self.new_level_var, empty_value=lambda: self.data.settings.start_level
         )
@@ -795,13 +843,13 @@ class App:
         ttk.Label(level_cell, text="üresen hagyva: a kezdőszint", style="Hint.TLabel").pack(
             side="left", padx=(8, 0)
         )
-        for widget in (self.name_entry, class_box, level_box):
+        for widget in (self.name_entry, class_box, self.spec_box, level_box):
             widget.bind("<Return>", self.add_character)
         ttk.Button(new, text="Hozzáadás", command=self.add_character).grid(
-            row=3, column=1, sticky="w", pady=(6, 0)
+            row=4, column=1, sticky="w", pady=(6, 0)
         )
         ttk.Label(new, textvariable=self.feedback_var, style="Ok.TLabel").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(4, 0)
+            row=5, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
 
         # A két keret beviteli mezői egy vonalba kerüljenek.
@@ -873,11 +921,14 @@ class App:
             question = f"Már van „{name}” nevű karakter a listán.\nMégis hozzáadod?"
             if not messagebox.askyesno("Létező név", question, parent=self.root):
                 return
-        character = Character(name=name, char_class=self.class_var.get().strip(), level=level)
+        character = Character(
+            name=name, char_class=self.class_var.get().strip(), spec=self.spec_var.get().strip(), level=level
+        )
         self.data.characters.append(character)
         self.data_changed(select=character)
         self.name_var.set("")
         self.class_var.set("")
+        self.spec_var.set("")
         self.new_level_var.set("")
         self.name_entry.focus_set()
         position = len(self.data.characters)

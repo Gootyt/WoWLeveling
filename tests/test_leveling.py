@@ -282,6 +282,18 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "level")), ["C", "A", "B"])
         self.assertEqual(self.names(sort_plans(plans, "level", descending=True)), ["A", "B", "C"])
 
+    def test_sort_by_spec_and_by_class_then_spec(self):
+        characters = [
+            Character("A", "Mage", "Frost"),
+            Character("B", "Death Knight", "Unholy"),
+            Character("C"),
+            Character("D", "Mage", "Arcane"),
+            Character("E", "Death Knight", "Blood"),
+        ]
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual(self.names(sort_plans(plans, "spec")), ["D", "E", "A", "B", "C"])
+        self.assertEqual(self.names(sort_plans(plans, "class")), ["E", "B", "D", "A", "C"])
+
     def test_names_follow_hungarian_alphabet(self):
         names = ["Zoli", "Ödön", "Oszkár", "Ábel", "abel"]
         plans = build_plan(make_settings(), [Character(name) for name in names], START)
@@ -299,7 +311,10 @@ class PersistenceTests(unittest.TestCase):
     def test_round_trip(self):
         data = LevelingData(
             make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"),
-            [Character("Thrall", "Shaman", D("83.45")), Character("Jaina", "Mage", D("1.00"))],
+            [
+                Character("Thrall", "Shaman", "Enhancement", D("83.45")),
+                Character("Jaina", "Mage", level=D("1.00")),
+            ],
         )
         save_data(self.path, data)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -307,8 +322,8 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings, data.settings)
         self.assertEqual(
-            [(c.name, c.char_class, c.level) for c in loaded.characters],
-            [("Thrall", "Shaman", D("83.45")), ("Jaina", "Mage", D("1.00"))],
+            [(c.name, c.char_class, c.spec, c.level) for c in loaded.characters],
+            [("Thrall", "Shaman", "Enhancement", D("83.45")), ("Jaina", "Mage", "", D("1.00"))],
         )
         self.assertEqual(list(Path(self.temp_dir.name).iterdir()), [self.path])  # nem marad ideiglenes fájl
 
@@ -346,7 +361,8 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings.mode, PARALLEL)
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
-        self.assertEqual((loaded.characters[0].char_class, loaded.characters[0].level), ("", D("80.00")))
+        arthas = loaded.characters[0]
+        self.assertEqual((arthas.char_class, arthas.spec, arthas.level), ("", "", D("80.00")))
 
     def test_reads_files_of_the_first_version(self):
         content = {
@@ -366,7 +382,7 @@ class PersistenceTests(unittest.TestCase):
             loaded.settings,
             Settings(date(2026, 10, 1), date(2026, 10, 10), date(2026, 11, 1), D("1.00"), D("80.00"), SEQUENTIAL),
         )
-        self.assertEqual(loaded.characters[0].level, D("23.00"))
+        self.assertEqual((loaded.characters[0].spec, loaded.characters[0].level), ("", D("23.00")))
 
 
 if __name__ == "__main__":
