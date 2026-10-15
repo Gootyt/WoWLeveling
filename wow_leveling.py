@@ -58,7 +58,8 @@ from leveling import (
     sort_plans,
 )
 import murlok
-from wow_data import ALL_SPECS, WOW_CLASSES, WOW_RACES, specs_for_class
+from recommend import recommend_combo
+from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, specs_for_class
 
 APP_TITLE = "WoW szintezés tervező"
 DATA_FILE_NAME = "szintezes_adatok.json"
@@ -420,6 +421,48 @@ class CharacterDialog(tk.Toplevel):
             "raiderio_score": score,
             "level": level,
         }
+        self.destroy()
+
+
+class FactionDialog(tk.Toplevel):
+    """Rákérdez, hogy Alliance vagy Horde karaktert ajánljon-e a program."""
+
+    def __init__(self, parent: tk.Misc, default: str | None = None) -> None:
+        super().__init__(parent)
+        self.withdraw()
+        self.title("Combó ajánlása")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+        self.result: str | None = None  # a választott frakció (None: mégse)
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Ally vagy Horda?", style="Strong.TLabel").pack(anchor="w")
+        ttk.Label(body, text="Melyik frakcióba ajánljak új karaktert?", style="Hint.TLabel").pack(
+            anchor="w", pady=(2, 10)
+        )
+        row = ttk.Frame(body)
+        row.pack(fill="x")
+        self.buttons = {}
+        for faction in FACTIONS:
+            button = ttk.Button(row, text=faction, command=lambda faction=faction: self.choose(faction))
+            button.pack(side="left", padx=(0, 6))
+            self.buttons[faction] = button
+        ttk.Button(row, text="Mégse", command=self.destroy).pack(side="left", padx=(12, 0))
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._invoke_focused())
+        place_over(self, parent)
+        show_modal(self)
+        self.buttons.get(default, self.buttons[ALLIANCE]).focus_set()  # Enterrel a legutóbbi választás
+
+    def _invoke_focused(self) -> None:
+        widget = self.focus_get()
+        if isinstance(widget, ttk.Button):
+            widget.invoke()
+
+    def choose(self, faction: str) -> None:
+        self.result = faction
         self.destroy()
 
 
@@ -868,6 +911,7 @@ class App:
         self._today = date.today()
         self._save_error_shown = False
         self._feedback_job: str | None = None
+        self._last_faction: str | None = None  # a combóajánlásnál legutóbb választott frakció
 
         root.title(APP_TITLE)
         self._setup_styles()
@@ -1068,8 +1112,11 @@ class App:
         )
         for widget in inputs:
             widget.bind("<Return>", self.add_character)
-        ttk.Button(new, text="Hozzáadás", command=self.add_character).grid(
-            row=len(fields) + 1, column=1, sticky="w", pady=(6, 0)
+        buttons = ttk.Frame(new)
+        buttons.grid(row=len(fields) + 1, column=1, sticky="w", pady=(6, 0))
+        ttk.Button(buttons, text="Hozzáadás", command=self.add_character).pack(side="left")
+        ttk.Button(buttons, text="Combó ajánlása…", command=self.show_combo_recommendation).pack(
+            side="left", padx=(8, 0)
         )
         ttk.Label(new, textvariable=self.feedback_var, style="Ok.TLabel", wraplength=self.px(400)).grid(
             row=len(fields) + 2, column=0, columnspan=2, sticky="w", pady=(4, 0)
@@ -1230,6 +1277,30 @@ class App:
         self.name_entry.focus_set()
         position = len(self.data.characters)
         self._show_feedback(f"✔ {name} felkerült a lista {position}. helyére (szint: {format_level(level)}).")
+
+    def _ask_faction(self) -> str | None:
+        """Ally vagy Horda? (None, ha a kérdést bezárták.)"""
+        dialog = FactionDialog(self.root, self._last_faction)
+        self.root.wait_window(dialog)
+        return dialog.result
+
+    def show_combo_recommendation(self, faction: str | None = None) -> None:
+        """Új karakter ajánlása: a választott frakcióban az a class/spec/faj combó, amelyből a
+        legkevesebb van (lásd recommend.recommend_combo). Kérésre kitölti vele az új karakter mezőit."""
+        faction = faction or self._ask_faction()
+        if faction is None:
+            return
+        self._last_faction = faction
+        recommendation = recommend_combo(self.data.characters, self.data.spec_scores, faction)
+        combo = recommendation.best
+        question = f"Ajánlott {faction} karakter:\n{combo.name}\n\nKitöltsem vele az új karakter mezőit?"
+        if not messagebox.askyesno("Combó ajánlása", question, detail=recommendation.describe(), parent=self.root):
+            return
+        self.class_var.set(combo.char_class)  # előbb a kaszt, mert a kasztváltás törölheti a specet
+        self.spec_var.set(combo.spec)
+        self.race_var.set(combo.race)
+        self.name_entry.focus_set()
+        self._show_feedback(f"✔ Kitöltve: {combo.name}. Írd be a nevét, majd kattints a „Hozzáadás” gombra.")
 
     def _show_feedback(self, text: str) -> None:
         self.feedback_var.set(text)

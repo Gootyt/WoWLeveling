@@ -15,6 +15,9 @@ megtervezéséhez és követéséhez.
   nélkül a karakter a kezdőszintről indul). A spec választólistája mindig a kiválasztott kaszt specjeit kínálja, a
   realm mező pedig a már használt realmeket. A karakterek szintje lehet a
   kezdőszint alatt vagy a célszint felett is.
+- **Combó ajánlása:** a program javasol egy class/spec/faj combót a választott
+  frakcióban (Alliance vagy Horde), amilyenből a legkevesebb (vagy egyáltalán
+  nincs) karakter van a listán – szerep, páncéltípus, kaszt, spec és faj szerint.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -73,7 +76,10 @@ python wow_leveling.py masik_terv.json
    nem tartozik az új kaszthoz, a spec mező kiürül. Az itemlevel két
    tizedesjegyig (pl. `327` vagy `326,55`), a Raider.io pontszám egy
    tizedesjegyig adható meg (pl. `2543,7`); a weboldalról ezres elválasztóval
-   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül.
+   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül. A
+   „Combó ajánlása…” gomb megkérdezi, hogy Alliance vagy Horde karaktert
+   ajánljon, majd javasol egy combót (lásd lent), és kérésre kitölti vele a faj, a
+   kaszt és a spec mezőt.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
@@ -165,6 +171,32 @@ napja.
   lezárt szintezési nap kell (a mai nap még nem számít bele), és legalább egy
   karakternek túl kell lépnie a kezdőszinten.
 
+**Combó ajánlása.** A választott frakcióban létrehozható class/spec/faj combók
+közül az a javaslat, amelyből a legkevesebb van a listán. A program a meglévő
+karaktereket öt szempont szerint számolja meg, ebben a sorrendben:
+
+1. szerep (tank, healer, DPS),
+2. páncéltípus (cloth, leather, mail, plate),
+3. kaszt,
+4. spec,
+5. faj.
+
+Az a combó nyer, amelynek a szerepéből van a legkevesebb; ha ebben több is
+egyforma, az, amelyiknek a páncéltípusából, és így tovább. Ha minden szempont
+szerint egyformák, a magasabb Murlok.io-pontszámú class/spec az első (pontszámok
+nélkül a kasztok ábécérendje dönt), a fajok közül pedig az alapfajok a
+szövetséges (allied) fajok előtt. A javaslat mellett a program megmutatja a
+számokat és a következő három jelöltet is.
+
+- Csak a játékban létrehozható faj–kaszt kombinációkat ajánlja (Midnight, 12.1-es
+  patch; pl. Evoker csak Dracthyr lehet). A 12.2-es patchben érkező Night Elf,
+  Troll és Undead Paladin még nincs benne.
+- A felismerhetetlen (kézzel beírt) kasztot, specet vagy fajt a számolás kihagyja.
+  Spec nélkül a szerep csak akkor számít, ha a kaszt minden specje ugyanazt a
+  szerepet tölti be (pl. Mage: DPS).
+- A meglévő karaktereket frakciótól függetlenül számolja (a Pandaren, Dracthyr,
+  Earthen és Haranir karakterek frakcióját a program nem tárolja).
+
 **Murlok.io oszlop.** A program a Murlok.io három Mythic+ rangsoroldalát kéri le
 ([tank](https://murlok.io/meta/tank/m+), [healer](https://murlok.io/meta/healer/m+),
 [DPS](https://murlok.io/meta/dps/m+)), és minden karakternél a kasztjához és
@@ -217,7 +249,9 @@ nem vész el), és alapbeállításokkal indul.
 - `wow_leveling.py` – a grafikus felület, ezt kell elindítani
 - `leveling.py` – az ütemezés számítása, mentés és betöltés
 - `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
-- `wow_data.py` – a kasztok, specek és fajok listája
+- `recommend.py` – a combóajánlás
+- `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
+  a választható faj–kaszt kombinációk
 - `tests/` – automatikus tesztek
 
 ## Tesztek

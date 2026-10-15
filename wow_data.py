@@ -1,7 +1,8 @@
-"""World of Warcraft játékadatok: kasztok, specializációk és fajok.
+"""World of Warcraft játékadatok: kasztok, specializációk, szerepek, páncéltípusok,
+fajok, frakciók és a választható faj–kaszt kombinációk (Midnight, 12.1-es patch).
 
 A programban ezek javaslatként jelennek meg, bármi más is beírható.
-Felület nélkül is használható (a Murlok.io-lekérés is innen ismeri a speceket).
+Felület nélkül is használható (a karakterjavaslat is innen ismeri a combókat).
 """
 
 from __future__ import annotations
@@ -56,8 +57,177 @@ WOW_RACES = (
 
 def specs_for_class(class_name: str) -> tuple[str, ...]:
     """Az ismert kaszt specjei; üres vagy ismeretlen kasztnál az összes spec."""
-    wanted = class_name.strip().casefold()
-    for name, specs in WOW_SPECS.items():
-        if name.casefold() == wanted:
-            return specs
-    return ALL_SPECS
+    found = find_class(class_name)
+    return WOW_SPECS[found] if found else ALL_SPECS
+
+
+# Szerepek (a Murlok.io rangsorai is így csoportosítják a speceket).
+TANK = "tank"
+HEALER = "healer"
+DPS = "DPS"
+ROLES = (TANK, HEALER, DPS)
+_TANK_SPECS = {
+    "Death Knight": ("Blood",),
+    "Demon Hunter": ("Vengeance",),
+    "Druid": ("Guardian",),
+    "Monk": ("Brewmaster",),
+    "Paladin": ("Protection",),
+    "Warrior": ("Protection",),
+}
+_HEALER_SPECS = {
+    "Druid": ("Restoration",),
+    "Evoker": ("Preservation",),
+    "Monk": ("Mistweaver",),
+    "Paladin": ("Holy",),
+    "Priest": ("Discipline", "Holy"),
+    "Shaman": ("Restoration",),
+}
+# (kaszt, spec) → szerep; ami nem tank vagy healer, az DPS.
+SPEC_ROLES = {
+    (char_class, spec): TANK
+    if spec in _TANK_SPECS.get(char_class, ())
+    else HEALER
+    if spec in _HEALER_SPECS.get(char_class, ())
+    else DPS
+    for char_class, specs in WOW_SPECS.items()
+    for spec in specs
+}
+
+# Páncéltípusok.
+CLOTH = "cloth"
+LEATHER = "leather"
+MAIL = "mail"
+PLATE = "plate"
+ARMOR_TYPES = (CLOTH, LEATHER, MAIL, PLATE)
+CLASS_ARMOR = {
+    "Death Knight": PLATE,
+    "Demon Hunter": LEATHER,
+    "Druid": LEATHER,
+    "Evoker": MAIL,
+    "Hunter": MAIL,
+    "Mage": CLOTH,
+    "Monk": LEATHER,
+    "Paladin": PLATE,
+    "Priest": CLOTH,
+    "Rogue": LEATHER,
+    "Shaman": MAIL,
+    "Warlock": CLOTH,
+    "Warrior": PLATE,
+}
+
+# Frakciók és a bennük választható fajok, a karakterkészítő sorrendjében: elöl az
+# alapfajok, utánuk a szövetséges (allied) fajok, amelyeket előbb fel kell oldani.
+# A Pandaren, a Dracthyr, az Earthen és a Haranir mindkét frakcióban választható.
+ALLIANCE = "Alliance"
+HORDE = "Horde"
+FACTIONS = (ALLIANCE, HORDE)
+FACTION_RACES = {
+    ALLIANCE: (
+        "Human",
+        "Dwarf",
+        "Night Elf",
+        "Gnome",
+        "Draenei",
+        "Worgen",
+        "Pandaren",
+        "Dracthyr",
+        "Void Elf",
+        "Lightforged Draenei",
+        "Dark Iron Dwarf",
+        "Kul Tiran",
+        "Mechagnome",
+        "Earthen",
+        "Haranir",
+    ),
+    HORDE: (
+        "Orc",
+        "Undead",
+        "Tauren",
+        "Troll",
+        "Blood Elf",
+        "Goblin",
+        "Pandaren",
+        "Dracthyr",
+        "Nightborne",
+        "Highmountain Tauren",
+        "Mag'har Orc",
+        "Zandalari Troll",
+        "Vulpera",
+        "Earthen",
+        "Haranir",
+    ),
+}
+
+# Faj–kaszt kombinációk (forrás: warcraft.wiki.gg, „Class by race”). Ezt a hat
+# kasztot minden faj választhatja, a többit csak az alább felsorolt fajok.
+# A 12.2-es patchtől a Night Elf, a Troll és az Undead is lehet Paladin.
+_CLASSES_FOR_ALL_RACES = ("Hunter", "Mage", "Priest", "Rogue", "Warlock", "Warrior")
+_RACE_EXTRA_CLASSES = {
+    "Blood Elf": ("Death Knight", "Demon Hunter", "Monk", "Paladin"),
+    "Dark Iron Dwarf": ("Death Knight", "Monk", "Paladin", "Shaman"),
+    "Dracthyr": ("Evoker",),
+    "Draenei": ("Death Knight", "Monk", "Paladin", "Shaman"),
+    "Dwarf": ("Death Knight", "Monk", "Paladin", "Shaman"),
+    "Earthen": ("Monk", "Paladin", "Shaman"),
+    "Gnome": ("Death Knight", "Monk"),
+    "Goblin": ("Death Knight", "Monk", "Shaman"),
+    "Haranir": ("Druid", "Monk", "Shaman"),
+    "Highmountain Tauren": ("Death Knight", "Druid", "Monk", "Shaman"),
+    "Human": ("Death Knight", "Monk", "Paladin"),
+    "Kul Tiran": ("Death Knight", "Druid", "Monk", "Shaman"),
+    "Lightforged Draenei": ("Death Knight", "Monk", "Paladin"),
+    "Mag'har Orc": ("Death Knight", "Monk", "Shaman"),
+    "Mechagnome": ("Death Knight", "Monk"),
+    "Night Elf": ("Death Knight", "Demon Hunter", "Druid", "Monk"),
+    "Nightborne": ("Death Knight", "Monk"),
+    "Orc": ("Death Knight", "Monk", "Shaman"),
+    "Pandaren": ("Death Knight", "Monk", "Shaman"),
+    "Tauren": ("Death Knight", "Druid", "Monk", "Paladin", "Shaman"),
+    "Troll": ("Death Knight", "Druid", "Monk", "Shaman"),
+    "Undead": ("Death Knight", "Monk"),
+    "Void Elf": ("Death Knight", "Demon Hunter", "Monk"),
+    "Vulpera": ("Death Knight", "Monk", "Shaman"),
+    "Worgen": ("Death Knight", "Druid", "Monk"),
+    "Zandalari Troll": ("Death Knight", "Druid", "Monk", "Paladin", "Shaman"),
+}
+# Faj → a választható kasztjai (a WOW_CLASSES sorrendjében).
+RACE_CLASSES = {
+    race: tuple(
+        char_class for char_class in WOW_CLASSES if char_class in _CLASSES_FOR_ALL_RACES or char_class in extras
+    )
+    for race, extras in _RACE_EXTRA_CLASSES.items()
+}
+
+
+def _name_key(text: str) -> str:
+    """Összehasonlítási kulcs: kisbetűs, csak betűk és számok („Mag’har orc” = „Mag'har Orc”)."""
+    return "".join(char for char in text.casefold() if char.isalnum())
+
+
+_CLASS_KEYS = {_name_key(name): name for name in WOW_CLASSES}
+_RACE_KEYS = {_name_key(name): name for name in WOW_RACES}
+
+
+def find_class(text: str) -> str | None:
+    """A beírt kaszt játékbeli neve (kis- és nagybetűtől, szóközöktől függetlenül), vagy None."""
+    return _CLASS_KEYS.get(_name_key(text))
+
+
+def find_spec(char_class: str, text: str) -> str | None:
+    """A beírt spec játékbeli neve az adott (már azonosított) kasztnál, vagy None."""
+    key = _name_key(text)
+    return next((spec for spec in WOW_SPECS.get(char_class, ()) if _name_key(spec) == key), None)
+
+
+def find_race(text: str) -> str | None:
+    """A beírt faj játékbeli neve, vagy None."""
+    return _RACE_KEYS.get(_name_key(text))
+
+
+def character_role(char_class: str, spec: str | None) -> str | None:
+    """A (már azonosított) kaszt és spec szerepe. Spec nélkül csak akkor ismert, ha a
+    kaszt minden specje ugyanazt a szerepet tölti be (pl. Mage: DPS)."""
+    if spec is not None:
+        return SPEC_ROLES[(char_class, spec)]
+    roles = {SPEC_ROLES[(char_class, item)] for item in WOW_SPECS[char_class]}
+    return roles.pop() if len(roles) == 1 else None

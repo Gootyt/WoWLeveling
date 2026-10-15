@@ -659,6 +659,54 @@ class GuiTests(unittest.TestCase):
             },
         )
 
+    def test_combo_recommendation_fills_the_new_character_form(self):
+        self.add("Garrosh", char_class="Warrior", spec="Protection", race="Orc")
+        self.app.data.spec_scores = SpecScores({"druid/restoration": D("3720"), "monk/mistweaver": D("3590")})
+        with mock.patch.object(self.app, "_ask_faction", return_value=None), mock.patch.object(
+            self.gui.messagebox, "askyesno"
+        ) as ask:
+            self.app.show_combo_recommendation()  # a frakciókérdést bezárták
+        ask.assert_not_called()
+
+        # Tank (plate, Warrior, Orc) már van: healer vagy DPS, nem plate, más kaszt és faj kell;
+        # ezek közül a Restoration Druidnak a legmagasabb a Murlok.io-pontszáma.
+        with mock.patch.object(self.app, "_ask_faction", return_value="Horde"), mock.patch.object(
+            self.gui.messagebox, "askyesno", return_value=False
+        ) as ask:
+            self.app.show_combo_recommendation()
+        self.assertEqual(
+            ask.call_args.args[1],
+            "Ajánlott Horde karakter:\nTauren Restoration Druid\n\nKitöltsem vele az új karakter mezőit?",
+        )
+        self.assertIn("• szerep – healer: még egy sincs", ask.call_args.kwargs["detail"])
+        self.assertEqual(self.app._last_faction, "Horde")  # legközelebb ez az alapértelmezett
+        self.assertEqual((self.app.race_var.get(), self.app.class_var.get(), self.app.spec_var.get()), ("", "", ""))
+
+        self.app.name_var.set("Hamuul")
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            self.app.show_combo_recommendation("Horde")
+        filled = (self.app.race_var.get(), self.app.class_var.get(), self.app.spec_var.get())
+        self.assertEqual(filled, ("Tauren", "Druid", "Restoration"))
+        self.assertEqual(self.app.name_var.get(), "Hamuul")  # a beírt név megmarad
+        self.assertIn("Kitöltve: Tauren Restoration Druid", self.app.feedback_var.get())
+        self.app.add_character()
+        hamuul = self.app.data.characters[-1]
+        self.assertEqual(
+            (hamuul.name, hamuul.race, hamuul.char_class, hamuul.spec), ("Hamuul", "Tauren", "Druid", "Restoration")
+        )
+
+    def test_faction_dialog(self):
+        def pick():
+            dialog = next(w for w in self.root.winfo_children() if isinstance(w, self.gui.FactionDialog))
+            self.assertEqual(list(dialog.buttons), ["Alliance", "Horde"])
+            dialog.choose("Alliance")
+
+        self.root.after(50, pick)
+        self.assertEqual(self.app._ask_faction(), "Alliance")
+        dialog = self.gui.FactionDialog(self.root, "Horde")
+        dialog.destroy()  # Mégse vagy Escape
+        self.assertIsNone(dialog.result)
+
     def test_calendar_popup_picks_a_date(self):
         picked = []
         popup = self.gui.CalendarPopup(self.root, date(2026, 12, 15), picked.append)
