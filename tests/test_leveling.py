@@ -14,6 +14,7 @@ from leveling import (
     Status,
     build_plan,
     deadlines,
+    format_deviation,
     format_level,
     leveling_windows,
     load_data,
@@ -21,6 +22,7 @@ from leveling import (
     parse_level,
     planned_level,
     save_data,
+    sort_plans,
 )
 
 START = date(2026, 10, 1)
@@ -65,6 +67,12 @@ class ParseTests(unittest.TestCase):
     def test_format_level_uses_decimal_comma(self):
         self.assertEqual(format_level(D("83.4")), "83,40")
         self.assertEqual(format_level(D("90")), "90,00")
+
+    def test_format_deviation_is_signed(self):
+        self.assertEqual(format_deviation(D("2.87")), "+2,87")
+        self.assertEqual(format_deviation(D("-2.13")), "−2,13")
+        self.assertEqual(format_deviation(D("0")), "0,00")
+        self.assertEqual(format_deviation(D("-0.00")), "0,00")
 
 
 class SettingsTests(unittest.TestCase):
@@ -160,6 +168,7 @@ class PlanTests(unittest.TestCase):
         self.assertIs(plan.status, Status.DONE)
         self.assertIsNone(plan.goal_today)
         self.assertIsNone(plan.pace)
+        self.assertEqual(plan.deviation, D("53.40"))  # a terv szerint ma estére 36,60 lenne
 
     def test_level_above_target_counts_as_done(self):
         plan = self.plan_for("95.5", START, make_settings(target_level="80"))
@@ -177,9 +186,11 @@ class PlanTests(unittest.TestCase):
         above = self.plan_for("82.5", START - timedelta(days=2), settings)
         self.assertIs(above.status, Status.AHEAD)
         self.assertEqual(above.status_text, "Előrébb jár (+2,50 szint)")
+        self.assertEqual(above.deviation, D("2.50"))
         below = self.plan_for("75.25", START - timedelta(days=2), settings)
         self.assertIs(below.status, Status.BEHIND)
         self.assertEqual(below.status_text, "Kezdőszint alatt (−4,75 szint)")
+        self.assertEqual(below.deviation, D("-4.75"))
         self.assertEqual(below.pace, D("1.48"))  # 14,75 szint 10 nap alatt, felfelé kerekítve
 
     def test_statuses_relative_to_daily_goal(self):
@@ -197,6 +208,7 @@ class PlanTests(unittest.TestCase):
                 plan = self.plan_for(level, today)
                 self.assertIs(plan.status, expected)
                 self.assertEqual(plan.goal_today, D("18.80"))
+                self.assertEqual(plan.deviation, D(level) - D("18.80"))
                 self.assertEqual(plan.levels_due_today, max(D(0), D("18.80") - D(level)))
 
     def test_status_text_uses_two_decimals(self):
@@ -219,6 +231,7 @@ class PlanTests(unittest.TestCase):
         plan = self.plan_for("70.25", START + timedelta(days=10))
         self.assertIs(plan.status, Status.OVERDUE)
         self.assertEqual(plan.days_left, 0)
+        self.assertEqual(plan.deviation, D("-19.75"))
         self.assertEqual(plan.levels_due_today, D("19.75"))
         self.assertEqual(plan.status_text, "Lejárt a céldátum – még 19,75 szint")
 
@@ -236,6 +249,43 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([plan.character.name for plan in plans], ["A", "B", "C"])
         self.assertEqual([(plan.deadline - START).days for plan in plans], [10, 15, 20])
         self.assertEqual([plan.status for plan in plans], [Status.ON_TRACK, Status.NOT_STARTED, Status.NOT_STARTED])
+
+
+class SortTests(unittest.TestCase):
+    def plans(self, *levels, today=START + timedelta(days=1)):
+        characters = [Character(name, level=D(level)) for name, level in zip("ABCDE", levels)]
+        return build_plan(make_settings(first_days=9, last_days=29), characters, today)
+
+    @staticmethod
+    def names(plans):
+        return [plan.character.name for plan in plans]
+
+    def test_sort_by_deviation(self):
+        plans = self.plans("10", "20", "3")  # mai célok: 18,80 / 9,90 / 6,93
+        self.assertEqual([plan.deviation for plan in plans], [D("-8.80"), D("10.10"), D("-3.93")])
+        self.assertEqual(self.names(sort_plans(plans, "deviation")), ["A", "C", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "deviation", descending=True)), ["B", "C", "A"])
+        self.assertEqual(self.names(sort_plans(plans)), ["A", "B", "C"])  # alapból az eredeti sorrend
+
+    def test_sort_by_status_puts_most_urgent_first(self):
+        plans = self.plans("10", "20", "3")
+        self.assertEqual([plan.status for plan in plans], [Status.ON_TRACK, Status.AHEAD, Status.BEHIND])
+        self.assertEqual(self.names(sort_plans(plans, "status")), ["C", "A", "B"])
+
+    def test_missing_values_stay_last(self):
+        plans = self.plans("10", "90", "3")  # B kész, nincs mai célja
+        self.assertEqual(self.names(sort_plans(plans, "goal")), ["C", "A", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "goal", descending=True)), ["A", "C", "B"])
+
+    def test_equal_values_keep_list_order(self):
+        plans = self.plans("5", "5", "1")
+        self.assertEqual(self.names(sort_plans(plans, "level")), ["C", "A", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "level", descending=True)), ["A", "B", "C"])
+
+    def test_names_follow_hungarian_alphabet(self):
+        names = ["Zoli", "Ödön", "Oszkár", "Ábel", "abel"]
+        plans = build_plan(make_settings(), [Character(name) for name in names], START)
+        self.assertEqual(self.names(sort_plans(plans, "name")), ["abel", "Ábel", "Oszkár", "Ödön", "Zoli"])
 
 
 class PersistenceTests(unittest.TestCase):

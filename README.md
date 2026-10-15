@@ -13,7 +13,10 @@ megtervezéséhez és követéséhez.
   kezdőszint alatt vagy a célszint felett is.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
-  hátralévő napok, a szükséges tempó és az állapot (színkódolva).
+  **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
+  a szükséges tempó és az állapot (színkódolva).
+- A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
+  szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -54,8 +57,14 @@ python wow_leveling.py masik_terv.json
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés,
    dupla kattintás szerkesztés.
-5. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal. A sorrend határozza meg,
-   melyik karakternek kell elsőként, melyiknek utoljára elérnie a célszintet.
+5. **Rendezés**: kattints egy oszlop fejlécére; újabb kattintásra megfordul az
+   irány (a fejlécben ▲ = növekvő, ▼ = csökkenő). A rendezés csak a nézetet
+   változtatja meg, a karakterek sorrendjét nem. A # oszlopra kattintva visszakapod
+   az eredeti sorrendet. Az üres értékek (pl. a kész karakterek mai célja) mindig a
+   lista végére kerülnek, az „Állapot” szerinti rendezés pedig a legsürgősebbel kezd.
+6. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal (csak a # szerinti
+   nézetben). A sorrend határozza meg, melyik karakternek kell elsőként, melyiknek
+   utoljára elérnie a célszintet.
 
 ## Hogyan számol a program?
 
@@ -75,6 +84,12 @@ céldátumáig (mindkét napot beleértve) egyenletes tempóban jut el a célszi
 például a kezdőszint 1,00, a célszint 90,00, és erre 10 nap van, akkor az első nap
 végére 9,90, a második végére 18,80 a cél, és így tovább. A mai célt a program két
 tizedesjegyre lefelé, a szükséges tempót felfelé kerekíti.
+
+**Szinteltérés.** A karakter jelenlegi szintje mínusz az a szint, ahol a terv
+szerint a mai nap végén tartania kellene. Pozitív érték: ennyivel jár a terv
+előtt, negatív: ennyivel van mögötte. Ha a szintezés már tart, ez éppen a
+„Szint” és a „Mai cél” különbsége. A kezdés előtt a kezdőszinthez, a céldátum
+után a célszinthez viszonyít a program.
 
 **Hátralévő napok, tempó.** A céldátumig hátralévő szintezési napok száma (a mai
 nappal együtt), és hogy átlagosan hány szintet kell naponta szerezni a célszintig.

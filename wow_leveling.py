@@ -35,11 +35,13 @@ from leveling import (
     Status,
     build_plan,
     format_date,
+    format_deviation,
     format_level,
     load_data,
     parse_date,
     parse_level,
     save_data,
+    sort_plans,
 )
 
 APP_TITLE = "WoW szintezés tervező"
@@ -91,6 +93,9 @@ HINT_COLOR = "#5f6368"
 SELECTED_DAY_COLOR = "#1f5fae"
 HOVER_DAY_COLOR = "#cfe0f5"
 OTHER_MONTH_COLOR = "#9aa0a6"
+
+SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
+PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
 
 # Az „Ütemben” állapot az alapértelmezett betűszínnel jelenik meg.
 STATUS_COLORS = {
@@ -349,6 +354,7 @@ class CharacterListWindow(tk.Toplevel):
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
         ("goal", "Mai cél", 70, "center", False),
+        ("deviation", "Szinteltérés", 95, "center", False),
         ("days", "Hátralévő napok", 100, "center", False),
         ("pace", "Tempó (szint/nap)", 110, "center", False),
         ("status", "Állapot", 290, "w", True),
@@ -363,6 +369,7 @@ class CharacterListWindow(tk.Toplevel):
         self.summary_var = tk.StringVar()
         self.selected_var = tk.StringVar()
         self.level_var = tk.StringVar()
+        self.order_hint_var = tk.StringVar()
         self._build()
         self.bind("<Escape>", lambda _event: self.close())
         self.refresh()
@@ -376,7 +383,9 @@ class CharacterListWindow(tk.Toplevel):
         ttk.Label(
             body,
             text="A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie "
-            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni.",
+            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni, a "
+            "„Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
+            "mögött (−). A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend.",
             style="Hint.TLabel",
             wraplength=px(860),
             justify="left",
@@ -391,8 +400,8 @@ class CharacterListWindow(tk.Toplevel):
         )
         heading_font = tkfont.nametofont("TkHeadingFont")
         for key, heading, width, anchor, stretch in self.COLUMNS:
-            self.tree.heading(key, text=heading, anchor=anchor)
-            width = max(px(width), heading_font.measure(heading) + px(16))
+            self.tree.heading(key, text=heading, anchor=anchor, command=lambda key=key: self.sort_by(key))
+            width = max(px(width), heading_font.measure(heading + SORT_ARROWS[False]) + px(16))
             self.tree.column(key, width=width, minwidth=px(30), anchor=anchor, stretch=stretch)
         for status, color in STATUS_COLORS.items():
             self.tree.tag_configure(status.value, foreground=color)
@@ -430,15 +439,9 @@ class CharacterListWindow(tk.Toplevel):
         delete_button = ttk.Button(action_row, text="Törlés", command=self.delete_selected)
         for button in (up_button, down_button, edit_button, delete_button):
             button.pack(side="left", padx=(0, 6))
-        self._selection_widgets = (
-            self.level_spin,
-            set_button,
-            plus_button,
-            up_button,
-            down_button,
-            edit_button,
-            delete_button,
-        )
+        ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel").pack(side="left", padx=(6, 0))
+        self._selection_widgets = (self.level_spin, set_button, plus_button, edit_button, delete_button)
+        self._order_widgets = (up_button, down_button)  # csak az eredeti sorrendben használhatók
 
         footer = ttk.Frame(body)
         footer.pack(fill="x", pady=(10, 0))
@@ -451,7 +454,8 @@ class CharacterListWindow(tk.Toplevel):
         """A táblázat újraszámolása és újrarajzolása."""
         settings = self.app.data.settings
         today = date.today()
-        plans = build_plan(settings, self.app.data.characters, today)
+        sort_key, descending = self.app.list_sort
+        plans = sort_plans(build_plan(settings, self.app.data.characters, today), sort_key, descending)
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
 
         self.tree.delete(*self.tree.get_children())
@@ -459,6 +463,8 @@ class CharacterListWindow(tk.Toplevel):
             self.tree.insert(
                 "", "end", iid=plan.character.uid, values=self._row_values(plan), tags=(plan.status.value,)
             )
+        for key, heading, *_ in self.COLUMNS:
+            self.tree.heading(key, text=heading + (SORT_ARROWS[descending] if key == sort_key else ""))
         shown = [column[0] for column in self.COLUMNS]
         if settings.mode == PARALLEL:  # párhuzamos ütemezésnél mindenki ugyanakkor kezd
             shown.remove("start")
@@ -493,6 +499,7 @@ class CharacterListWindow(tk.Toplevel):
             format_date(plan.start),
             format_date(plan.deadline),
             "–" if plan.goal_today is None else format_level(plan.goal_today),
+            format_deviation(plan.deviation),
             days,
             "–" if plan.pace is None else format_level(plan.pace),
             plan.status_text,
@@ -522,6 +529,10 @@ class CharacterListWindow(tk.Toplevel):
         character = self._selected_character()
         for widget in self._selection_widgets:
             widget.state(["!disabled" if character else "disabled"])
+        in_plan_order = self.app.list_sort == PLAN_ORDER
+        for widget in self._order_widgets:
+            widget.state(["!disabled" if character and in_plan_order else "disabled"])
+        self.order_hint_var.set("" if in_plan_order else "Az átrendezéshez rendezd a listát a # oszlop szerint.")
         if character is None:
             self.selected_var.set("– nincs kijelölve –")
             self.level_var.set("")
@@ -529,6 +540,12 @@ class CharacterListWindow(tk.Toplevel):
             suffix = f" ({character.char_class})" if character.char_class else ""
             self.selected_var.set(character.name + suffix)
             self.level_var.set(format_level(character.level))
+
+    def sort_by(self, key: str) -> None:
+        """Rendezés oszlop szerint; ugyanarra az oszlopra kattintva megfordul az irány."""
+        current, descending = self.app.list_sort
+        self.app.list_sort = (key, not descending if key == current else False)
+        self.refresh()
 
     def _on_double_click(self, event: tk.Event) -> None:
         row = self.tree.identify_row(event.y)
@@ -564,7 +581,7 @@ class CharacterListWindow(tk.Toplevel):
 
     def move_selected(self, offset: int) -> None:
         character = self._selected_character()
-        if character is None:
+        if character is None or self.app.list_sort != PLAN_ORDER:
             return
         characters = self.app.data.characters
         index = characters.index(character)
@@ -590,10 +607,13 @@ class CharacterListWindow(tk.Toplevel):
         question = f"Biztosan törlöd {article(character.name)} „{character.name}” nevű karaktert a listáról?"
         if not messagebox.askyesno("Karakter törlése", question, parent=self):
             return
-        characters = self.app.data.characters
-        index = characters.index(character)
-        characters.pop(index)
-        neighbour = characters[min(index, len(characters) - 1)] if characters else None
+        # A törölt sor helyére a nézetben következő (vagy utolsóként az előző) sor kerül kijelölésre.
+        rows = self.tree.get_children()
+        index = rows.index(character.uid)
+        remaining = [uid for uid in rows if uid != character.uid]
+        neighbour_uid = remaining[min(index, len(remaining) - 1)] if remaining else None
+        self.app.data.characters.remove(character)
+        neighbour = next((c for c in self.app.data.characters if c.uid == neighbour_uid), None)
         self.app.data_changed(select=neighbour)
 
     def close(self) -> None:
@@ -608,6 +628,7 @@ class App:
         self.root = root
         self.data_path = Path(data_path)
         self.list_window: CharacterListWindow | None = None
+        self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
         self._today = date.today()
         self._save_error_shown = False

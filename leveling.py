@@ -27,6 +27,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -91,6 +92,15 @@ def parse_level(text: str) -> Decimal:
 def format_level(value: Decimal) -> str:
     """Szint vagy szintkülönbség két tizedesjeggyel, tizedesvesszővel (pl. 83,45)."""
     return f"{value:.2f}".replace(".", ",")
+
+
+def format_deviation(value: Decimal) -> str:
+    """Előjeles szinteltérés: +2,87, −2,13 vagy 0,00."""
+    if value > 0:
+        return "+" + format_level(value)
+    if value < 0:
+        return "−" + format_level(-value)
+    return format_level(abs(value))
 
 
 def _level_from_json(value: object) -> Decimal:
@@ -213,6 +223,7 @@ class CharacterPlan:
     start: date  # a karakter szintezésének kezdőnapja
     deadline: date  # eddig kell elérnie a célszintet
     goal_today: Decimal | None  # a mai nap végéig elérendő szint (None: kész vagy még nem kezdte)
+    deviation: Decimal  # a jelenlegi szint eltérése a terv szerinti mai szinttől (+: előrébb jár)
     days_left: int | None  # hátralévő szintezési napok a céldátumig, a mai napot is beleértve
     pace: Decimal | None  # a szükséges átlagos tempó (szint/nap), felfelé kerekítve
     status: Status
@@ -291,9 +302,22 @@ def _plan_character(
     level = character.level
     start_level, target = settings.start_level, settings.target_level
     remaining = target - level
+    # A terv szerinti szint a mai nap végén: kezdés előtt a kezdőszint, a céldátumtól a célszint.
+    planned_today = planned_level(start, deadline, start_level, target, today)
 
     def plan(status, text, goal=None, days_left=None, pace=None):
-        return CharacterPlan(character, position, start, deadline, goal, days_left, pace, status, text)
+        return CharacterPlan(
+            character=character,
+            position=position,
+            start=start,
+            deadline=deadline,
+            goal_today=goal,
+            deviation=level - planned_today,
+            days_left=days_left,
+            pace=pace,
+            status=status,
+            status_text=text,
+        )
 
     if remaining <= 0:
         return plan(Status.DONE, "Kész – elérte a célszintet")
@@ -312,7 +336,7 @@ def _plan_character(
             status, text = Status.NOT_STARTED, f"Még nem kezdődött (indulás: {format_date(start)})"
         return plan(status, text, days_left=days_left, pace=pace)
 
-    goal = planned_level(start, deadline, start_level, target, today)
+    goal = planned_today
     expected = planned_level(start, deadline, start_level, target, today - timedelta(days=1))
     if level > goal:
         status, text = Status.AHEAD, f"Előrébb jár (+{format_level(level - goal)} szint)"
@@ -323,6 +347,57 @@ def _plan_character(
     else:
         status, text = Status.BEHIND, f"Lemaradásban – ma még {format_level(goal - level)} szint"
     return plan(status, text, goal=goal, days_left=days_left, pace=pace)
+
+
+# Az „Állapot” szerinti rendezés sorrendje: elöl a legsürgősebbek.
+STATUS_URGENCY = (
+    Status.OVERDUE,
+    Status.BEHIND,
+    Status.ON_TRACK,
+    Status.GOAL_MET,
+    Status.AHEAD,
+    Status.NOT_STARTED,
+    Status.DONE,
+)
+
+# A magyar ábécében az ö/ő az o, az ü/ű az u után következik.
+_HUNGARIAN_LETTERS = str.maketrans({"ö": "o\uffff", "ő": "o\uffff", "ü": "u\uffff", "ű": "u\uffff"})
+
+
+def _text_sort_key(text: str) -> tuple[str, str]:
+    """Kis- és nagybetűt nem megkülönböztető, a magyar ábécéhez igazodó rendezési kulcs."""
+    folded = unicodedata.normalize("NFC", text.casefold())
+    base = unicodedata.normalize("NFD", folded.translate(_HUNGARIAN_LETTERS))
+    return "".join(char for char in base if not unicodedata.combining(char)), folded
+
+
+# A lista oszlopai szerinti rendezési kulcsok; None: nincs érték (a lista végére kerül).
+SORT_KEYS = {
+    "position": lambda plan: plan.position,
+    "name": lambda plan: _text_sort_key(plan.character.name),
+    "class": lambda plan: _text_sort_key(plan.character.char_class) if plan.character.char_class else None,
+    "level": lambda plan: plan.character.level,
+    "start": lambda plan: plan.start,
+    "deadline": lambda plan: plan.deadline,
+    "goal": lambda plan: plan.goal_today,
+    "deviation": lambda plan: plan.deviation,
+    "days": lambda plan: plan.days_left,
+    "pace": lambda plan: plan.pace,
+    "status": lambda plan: (STATUS_URGENCY.index(plan.status), plan.deviation),
+}
+
+
+def sort_plans(plans: list[CharacterPlan], key: str = "position", descending: bool = False) -> list[CharacterPlan]:
+    """A tervek rendezése a `key` oszlop szerint.
+
+    Csak a megjelenítés sorrendjét adja meg, a karakterek sorrendjét (és így a
+    céldátumokat) nem változtatja. Az üres értékek mindig a végére kerülnek, az
+    egyenlő értékűek pedig a lista eredeti sorrendjében maradnak.
+    """
+    get = SORT_KEYS[key]
+    present = [plan for plan in plans if get(plan) is not None]
+    missing = [plan for plan in plans if get(plan) is None]
+    return sorted(present, key=get, reverse=descending) + missing
 
 
 @dataclass

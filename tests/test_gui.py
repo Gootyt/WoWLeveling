@@ -158,16 +158,84 @@ class GuiTests(unittest.TestCase):
 
         thrall, jaina = self.rows()
         self.assertEqual(
-            thrall[3:10],
-            ("1,00", format_date(today), format_date(today + timedelta(days=9)), "9,90", "10", "8,90", "Ütemben – ma még 8,90 szint"),
+            thrall[3:11],
+            (
+                "1,00",
+                format_date(today),
+                format_date(today + timedelta(days=9)),
+                "9,90",
+                "−8,90",
+                "10",
+                "8,90",
+                "Ütemben – ma még 8,90 szint",
+            ),
         )
-        self.assertEqual(jaina[9], "Kész – elérte a célszintet")
+        self.assertEqual((jaina[7], jaina[10]), ("+84,55", "Kész – elérte a célszintet"))
         self.assertEqual([tree.item(iid, "tags")[0] for iid in tree.get_children()], ["on_track", "done"])
         self.assertIn("mai teendő összesen: 8,90 szint", self.app.list_window.summary_var.get())
 
         self.assertNotIn("start", tree["displaycolumns"])  # párhuzamosan mindenki ugyanakkor kezd
         self.app.mode_var.set(SEQUENTIAL)
         self.assertIn("start", tree["displaycolumns"])
+
+    def test_list_can_be_sorted_by_deviation(self):
+        today = date.today()
+        self.app.start_var.set(format_date(today))
+        self.app.first_var.set(format_date(today + timedelta(days=9)))
+        self.app.last_var.set(format_date(today + timedelta(days=29)))
+        self.add("Thrall", level="5")  # céldátum: 9 nap múlva, mai cél 9,90 → −4,90
+        self.add("Jaina", level="50")  # 16 nap múlva, mai cél 6,23 → +43,77
+        self.add("Arthas", level="2")  # 22 nap múlva, mai cél 4,86 → −2,86
+        self.add("Sylvanas", level="1")  # 29 nap múlva, mai cél 3,96 → −2,96
+        self.app.open_list()
+        window = self.app.list_window
+        tree = window.tree
+
+        def names():
+            return [row[1] for row in self.rows()]
+
+        self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
+        self.assertEqual(tree.heading("position", "text"), "# ▲")
+        window.sort_by("deviation")
+        self.assertEqual(names(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
+        self.assertEqual([row[7] for row in self.rows()], ["−4,90", "−2,96", "−2,86", "+43,77"])
+        self.assertEqual((tree.heading("deviation", "text"), tree.heading("position", "text")), ("Szinteltérés ▲", "#"))
+        window.sort_by("deviation")
+        self.assertEqual(names(), ["Jaina", "Arthas", "Sylvanas", "Thrall"])
+        self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
+
+        # Rendezett nézetben nem lehet átrendezni, a karakterek sorrendje (és a céldátumok) nem változik.
+        jaina = self.app.data.characters[1]
+        self.select(jaina)
+        self.assertIn("disabled", window._order_widgets[0].state())
+        self.assertTrue(window.order_hint_var.get())
+        window.move_selected(-1)
+        self.assertEqual([c.name for c in self.app.data.characters], ["Thrall", "Jaina", "Arthas", "Sylvanas"])
+
+        # Szintmódosítás után újrarendeződik, a kijelölés megmarad.
+        window.level_var.set("1")
+        window.apply_level()  # Jaina: 1 − 6,23 = −5,23, a nézet végére kerül
+        self.assertEqual(names(), ["Arthas", "Sylvanas", "Thrall", "Jaina"])
+        self.assertEqual(tree.selection(), (jaina.uid,))
+
+        # Törléskor a nézetben szomszédos sor lesz kijelölve (az utolsó sor helyett az előző).
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            window.delete_selected()
+        self.assertEqual(window.selected_var.get(), "Thrall")
+
+        # A rendezés az ablak újranyitása után is megmarad.
+        window.close()
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual(names(), ["Sylvanas", "Arthas", "Thrall"])  # 3 karakterrel: −2,96 / −3,45 / −4,90
+
+        # A # oszlop visszaállítja az eredeti sorrendet, és újra lehet átrendezni.
+        window.sort_by("position")
+        self.assertEqual(names(), ["Thrall", "Arthas", "Sylvanas"])
+        self.assertEqual(window.tree.heading("position", "text"), "# ▲")
+        self.select(self.app.data.characters[1])
+        self.assertNotIn("disabled", window._order_widgets[0].state())
+        self.assertEqual(window.order_hint_var.get(), "")
 
     def test_level_changes_reordering_and_deletion(self):
         self.add("Thrall", "Jaina", "Arthas")
