@@ -4,9 +4,13 @@ Grafikus felületű Python program World of Warcraft karakterek szintezésének
 megtervezéséhez és követéséhez.
 
 - Megadható a szintezés kezdete, az a dátum, amikorra az **első**, illetve az
-  **utolsó** karakternek el kell érnie a maximum szintet, és maga a **maximum szint**.
-- Új karakterek vehetők fel (név, kaszt nem kötelező). **Minden karakter 1-es
-  szintről indul.**
+  **utolsó** karakternek el kell érnie a célszintet, valamint a **kezdőszint** és a
+  **célszint**.
+- A szintek **két tizedesjegy pontosságúak** (pl. `83,45`: a 83-as szint 45%-ánál
+  tart a karakter). Tizedesvesszővel és -ponttal is beírhatók.
+- Új karakterek vehetők fel (a kaszt és a jelenlegi szint nem kötelező; szint
+  nélkül a karakter a kezdőszintről indul). A karakterek szintje lehet a
+  kezdőszint alatt vagy a célszint felett is.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   hátralévő napok, a szükséges tempó és az állapot (színkódolva).
@@ -39,18 +43,19 @@ python wow_leveling.py masik_terv.json
 
 1. **Beállítások** (főablak): a dátumokat `ÉÉÉÉ-HH-NN` alakban kell megadni
    (pl. `2026-10-15`; a `2026.10.15.` alakot is elfogadja), vagy a ▼ gombbal
-   naptárból választhatsz. Hibás érték esetén piros üzenet jelzi, mi a gond.
-   A helyes beállításokat a program azonnal menti.
-2. **Új karakter**: írd be a nevét (és ha akarod, a kasztját), majd
-   „Hozzáadás” vagy Enter. Az új karakter a lista végére kerül.
+   naptárból választhatsz. A kezdő- és a célszint két tizedesjegyig adható meg; a
+   mezők nyilai egy egész szinttel léptetnek. Hibás érték esetén piros üzenet
+   jelzi, mi a gond. A helyes beállításokat a program azonnal menti.
+2. **Új karakter**: írd be a nevét (és ha akarod, a kasztját és a jelenlegi
+   szintjét), majd „Hozzáadás” vagy Enter. Az új karakter a lista végére kerül.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
-   (Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint” gombot. Billentyűvel:
-   `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés, dupla kattintás
-   szerkesztés.
+   (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
+   gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés,
+   dupla kattintás szerkesztés.
 5. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal. A sorrend határozza meg,
-   melyik karakternek kell elsőként, melyiknek utoljára elérnie a maximum szintet.
+   melyik karakternek kell elsőként, melyiknek utoljára elérnie a célszintet.
 
 ## Hogyan számol a program?
 
@@ -65,25 +70,27 @@ céldátum 2026-10-19, az utolsó 2026-11-24, és 5 karakter van, a céldátumok
 - *Egymás után* – az első karakter a kezdőnapon kezd, a többiek mindig az előző
   karakter céldátumát követő napon. Ilyenkor a listában a „Kezdés” oszlop is látszik.
 
-**Mai cél.** A program úgy számol, hogy a karakter a kezdőnapjától a céldátumáig
-(mindkét napot beleértve) egyenletes tempóban halad 1-es szintről a maximum
-szintig. Ha például 10 nap alatt kell 1-ről 90-re jutni, akkor az első nap végére
-9-es, a második végére 18-as szint a cél, és így tovább.
+**Mai cél.** A terv szerint a karakter a kezdőnapján a kezdőszinten áll, és a
+céldátumáig (mindkét napot beleértve) egyenletes tempóban jut el a célszintig. Ha
+például a kezdőszint 1,00, a célszint 90,00, és erre 10 nap van, akkor az első nap
+végére 9,90, a második végére 18,80 a cél, és így tovább. A mai célt a program két
+tizedesjegyre lefelé, a szükséges tempót felfelé kerekíti.
 
 **Hátralévő napok, tempó.** A céldátumig hátralévő szintezési napok száma (a mai
-nappal együtt), és hogy átlagosan hány szintet kell naponta szerezni a hátralévő
-szintekből.
+nappal együtt), és hogy átlagosan hány szintet kell naponta szerezni a célszintig.
+Ha egy karakter a kezdőszint alatt van, a hiányzó szintek is beleszámítanak.
 
 **Állapotok:**
 
 | Állapot | Jelentés |
 |---|---|
-| Kész | elérte a maximum szintet |
+| Kész | elérte (vagy meghaladta) a célszintet |
 | Előrébb jár | a mai célnál is magasabb szinten van |
 | Mai cél teljesítve | pontosan a mai célnál tart |
 | Ütemben | a tegnapi célt elérte, a maiból még hiányzik valamennyi |
 | Lemaradásban | a tegnapi célt sem érte el |
-| Lejárt a céldátum | a céldátum elmúlt, de még nincs maximum szinten |
+| Kezdőszint alatt | a szintezése még nem kezdődött el, és a kezdőszint alatt van |
+| Lejárt a céldátum | a céldátum elmúlt, de még nincs célszinten |
 | Még nem kezdődött | a szintezése még nem kezdődött el |
 
 A lista alján a „mai teendő összesen” azt mutatja, hány szintet kell ma még
@@ -97,9 +104,10 @@ előrébb járni.
 
 A beállítások és a karakterek a program mappájában lévő `szintezes_adatok.json`
 fájlba kerülnek (egyszerű, olvasható JSON). Ha ezt a fájlt elmented, az adataid is
-megvannak. Ha a fájl megsérül, a program átnevezi
-(`szintezes_adatok.hibas-<időpont>.json`, így nem vész el), és alapbeállításokkal
-indul.
+megvannak. A program korábbi (maximum szintes) változatának adatfájlját is
+beolvassa: ilyenkor a kezdőszint 1,00, a célszint a korábbi maximum szint lesz. Ha
+a fájl megsérül, a program átnevezi (`szintezes_adatok.hibas-<időpont>.json`, így
+nem vész el), és alapbeállításokkal indul.
 
 ## Fájlok
 

@@ -18,15 +18,16 @@ import sys
 import tkinter as tk
 from collections import Counter
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 from leveling import (
-    MAX_LEVEL_LIMIT,
+    LEVEL_MAX,
+    LEVEL_MIN,
     PARALLEL,
     SEQUENTIAL,
-    START_LEVEL,
     Character,
     CharacterPlan,
     LevelingData,
@@ -34,10 +35,10 @@ from leveling import (
     Status,
     build_plan,
     format_date,
+    format_level,
     load_data,
     parse_date,
     parse_level,
-    parse_max_level,
     save_data,
 )
 
@@ -45,9 +46,10 @@ APP_TITLE = "WoW szintezés tervező"
 DATA_FILE_NAME = "szintezes_adatok.json"
 
 INTRO_TEXT = (
-    "Minden karakter 1-es szintről indul. Add meg, mikor kezdődik a szintezés, mikorra érje el "
-    "az első, illetve az utolsó karakter a maximum szintet, és mekkora legyen a maximum szint. "
-    "A köztes karakterek céldátumait a program egyenletesen osztja el, és kiszámolja a napi célokat."
+    "Add meg, mikor kezdődik a szintezés, mikorra érje el az első, illetve az utolsó karakter a "
+    "célszintet, és hogy a terv melyik szintről melyikre vezet. A köztes karakterek céldátumait a "
+    "program egyenletesen osztja el, és kiszámolja a napi célokat. A szinteket két tizedesjegy "
+    "pontossággal adhatod meg (pl. 83,45)."
 )
 
 WOW_CLASSES = (
@@ -167,6 +169,37 @@ class DateField(ttk.Frame):
         self.entry.icursor("end")
 
 
+class LevelSpinbox(ttk.Spinbox):
+    """Szintmező két tizedesjegy pontossággal (pl. 83,45).
+
+    A nyilak, a fel/le billentyűk és az egérgörgő egy egész szinttel léptetnek.
+    """
+
+    def __init__(self, master: tk.Misc, variable: tk.StringVar, on_step=None, empty_value=None) -> None:
+        super().__init__(master, textvariable=variable, width=8)
+        self._variable = variable
+        self._on_step = on_step  # léptetés után hívódik meg
+        self._empty_value = empty_value  # üres mezőnél innen indul a léptetés
+        # A Tk saját léptetése nem ismeri a tizedesvesszőt, ezért itt kezeljük.
+        self.bind("<<Increment>>", lambda _event: self._step(1))
+        self.bind("<<Decrement>>", lambda _event: self._step(-1))
+
+    def _step(self, delta: int) -> str:
+        text = self._variable.get()
+        try:
+            if not text.strip() and self._empty_value is not None:
+                value = self._empty_value()
+            else:
+                value = parse_level(text)
+        except ValueError:
+            self.bell()
+            return "break"
+        self._variable.set(format_level(min(max(value + delta, LEVEL_MIN), LEVEL_MAX)))
+        if self._on_step is not None:
+            self._on_step()
+        return "break"
+
+
 class CalendarPopup(tk.Toplevel):
     """Egyszerű naptár a dátum kiválasztásához (külső csomag nélkül)."""
 
@@ -256,17 +289,16 @@ class CalendarPopup(tk.Toplevel):
 class CharacterDialog(tk.Toplevel):
     """Egy karakter nevének, kasztjának és szintjének szerkesztése."""
 
-    def __init__(self, parent: tk.Misc, character: Character, max_level: int) -> None:
+    def __init__(self, parent: tk.Misc, character: Character) -> None:
         super().__init__(parent)
         self.withdraw()
         self.title("Karakter szerkesztése")
         self.resizable(False, False)
         self.transient(parent.winfo_toplevel())
-        self.result: tuple[str, str, int] | None = None
-        self._max_level = max_level
+        self.result: tuple[str, str, Decimal] | None = None
         self.name_var = tk.StringVar(value=character.name)
         self.class_var = tk.StringVar(value=character.char_class)
-        self.level_var = tk.StringVar(value=str(min(character.level, max_level)))
+        self.level_var = tk.StringVar(value=format_level(character.level))
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
@@ -278,9 +310,7 @@ class CharacterDialog(tk.Toplevel):
             row=1, column=1, sticky="ew", pady=3
         )
         ttk.Label(body, text="Jelenlegi szint:").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=3)
-        ttk.Spinbox(body, from_=START_LEVEL, to=max_level, width=6, textvariable=self.level_var).grid(
-            row=2, column=1, sticky="w", pady=3
-        )
+        LevelSpinbox(body, self.level_var).grid(row=2, column=1, sticky="w", pady=3)
         buttons = ttk.Frame(body)
         buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Mentés", command=self.accept).pack(side="left", padx=(0, 6))
@@ -299,7 +329,7 @@ class CharacterDialog(tk.Toplevel):
             messagebox.showwarning("Hiányzó név", "A karakter neve nem lehet üres.", parent=self)
             return
         try:
-            level = parse_level(self.level_var.get(), self._max_level)
+            level = parse_level(self.level_var.get())
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self)
             return
@@ -315,10 +345,10 @@ class CharacterListWindow(tk.Toplevel):
         ("position", "#", 36, "center", False),
         ("name", "Név", 130, "w", True),
         ("class", "Kaszt", 105, "w", True),
-        ("level", "Szint", 50, "center", False),
+        ("level", "Szint", 70, "center", False),
         ("start", "Kezdés", 92, "center", False),
         ("deadline", "Céldátum", 92, "center", False),
-        ("goal", "Mai cél", 62, "center", False),
+        ("goal", "Mai cél", 70, "center", False),
         ("days", "Hátralévő napok", 100, "center", False),
         ("pace", "Tempó (szint/nap)", 110, "center", False),
         ("status", "Állapot", 290, "w", True),
@@ -346,7 +376,7 @@ class CharacterListWindow(tk.Toplevel):
         ttk.Label(
             body,
             text="A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie "
-            "a maximum szintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni.",
+            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni.",
             style="Hint.TLabel",
             wraplength=px(860),
             justify="left",
@@ -384,14 +414,7 @@ class CharacterListWindow(tk.Toplevel):
         level_row.pack(fill="x")
         ttk.Label(level_row, textvariable=self.selected_var, style="Strong.TLabel", width=30).pack(side="left")
         ttk.Label(level_row, text="Jelenlegi szint:").pack(side="left", padx=(12, 4))
-        self.level_spin = ttk.Spinbox(
-            level_row,
-            from_=START_LEVEL,
-            to=MAX_LEVEL_LIMIT,
-            width=5,
-            textvariable=self.level_var,
-            command=self.apply_level,
-        )
+        self.level_spin = LevelSpinbox(level_row, self.level_var, on_step=self.apply_level)
         self.level_spin.pack(side="left")
         self.level_spin.bind("<Return>", lambda _event: self.apply_level())
         set_button = ttk.Button(level_row, text="Beállítás", command=self.apply_level)
@@ -444,12 +467,12 @@ class CharacterListWindow(tk.Toplevel):
             self.tree.selection_set(keep)
             self.tree.focus(keep)
             self.tree.see(keep)
-        self.level_spin.configure(to=settings.max_level)
         self._sync_selection()
 
         mode = "párhuzamos" if settings.mode == PARALLEL else "egymás utáni"
         self.header_var.set(
-            f"Ma: {long_date(today)}   ·   Maximum szint: {settings.max_level}   ·   Ütemezés: {mode}"
+            f"Ma: {long_date(today)}   ·   Kezdőszint: {format_level(settings.start_level)}   ·   "
+            f"Célszint: {format_level(settings.target_level)}   ·   Ütemezés: {mode}"
         )
         self.summary_var.set(self._summary(plans))
 
@@ -466,12 +489,12 @@ class CharacterListWindow(tk.Toplevel):
             plan.position,
             character.name,
             character.char_class or "–",
-            character.level,
+            format_level(character.level),
             format_date(plan.start),
             format_date(plan.deadline),
-            "–" if plan.goal_today is None else plan.goal_today,
+            "–" if plan.goal_today is None else format_level(plan.goal_today),
             days,
-            "–" if plan.pace is None else format_number(plan.pace),
+            "–" if plan.pace is None else format_level(plan.pace),
             plan.status_text,
         )
 
@@ -480,12 +503,12 @@ class CharacterListWindow(tk.Toplevel):
         if not plans:
             return "Még nincs karakter a listán. Új karaktert a főablakban adhatsz hozzá."
         counts = Counter(plan.status for plan in plans)
-        parts = [f"Összesen {len(plans)} karakter", f"max. szinten: {counts[Status.DONE]}"]
+        parts = [f"Összesen {len(plans)} karakter", f"célszinten: {counts[Status.DONE]}"]
         behind = counts[Status.BEHIND] + counts[Status.OVERDUE]
         if behind:
             parts.append(f"lemaradásban: {behind}")
         due = sum(plan.levels_due_today for plan in plans)
-        parts.append(f"mai teendő összesen: {due} szint" if due else "mára nincs több teendő")
+        parts.append(f"mai teendő összesen: {format_level(due)} szint" if due else "mára nincs több teendő")
         return "   ·   ".join(parts)
 
     def _selected_character(self) -> Character | None:
@@ -505,7 +528,7 @@ class CharacterListWindow(tk.Toplevel):
         else:
             suffix = f" ({character.char_class})" if character.char_class else ""
             self.selected_var.set(character.name + suffix)
-            self.level_var.set(str(character.level))
+            self.level_var.set(format_level(character.level))
 
     def _on_double_click(self, event: tk.Event) -> None:
         row = self.tree.identify_row(event.y)
@@ -519,22 +542,22 @@ class CharacterListWindow(tk.Toplevel):
         if character is None:
             return
         try:
-            level = parse_level(self.level_var.get(), self.app.data.settings.max_level)
+            level = parse_level(self.level_var.get())
         except ValueError as exc:
             messagebox.showwarning("Hibás szint", str(exc), parent=self)
-            self.level_var.set(str(character.level))
+            self.level_var.set(format_level(character.level))
             return
         self._set_level(character, level)
 
     def change_level(self, delta: int) -> None:
+        """Egész szintnyi léptetés; a szint a kezdő- és célszinten kívül is lehet."""
         character = self._selected_character()
         if character is not None:
-            max_level = self.app.data.settings.max_level
-            self._set_level(character, min(max(character.level + delta, START_LEVEL), max_level))
+            self._set_level(character, min(max(character.level + delta, LEVEL_MIN), LEVEL_MAX))
 
-    def _set_level(self, character: Character, level: int) -> None:
+    def _set_level(self, character: Character, level: Decimal) -> None:
         if level == character.level:
-            self.level_var.set(str(level))
+            self.level_var.set(format_level(level))
             return
         character.level = level
         self.app.data_changed(select=character)
@@ -554,7 +577,7 @@ class CharacterListWindow(tk.Toplevel):
         character = self._selected_character()
         if character is None:
             return
-        dialog = CharacterDialog(self, character, self.app.data.settings.max_level)
+        dialog = CharacterDialog(self, character)
         self.wait_window(dialog)
         if dialog.result is not None:
             character.name, character.char_class, character.level = dialog.result
@@ -596,18 +619,28 @@ class App:
 
         settings = self.data.settings
         self.start_var = tk.StringVar(value=format_date(settings.start_date))
-        self.first_var = tk.StringVar(value=format_date(settings.first_max_date))
-        self.last_var = tk.StringVar(value=format_date(settings.last_max_date))
-        self.max_level_var = tk.StringVar(value=str(settings.max_level))
+        self.first_var = tk.StringVar(value=format_date(settings.first_target_date))
+        self.last_var = tk.StringVar(value=format_date(settings.last_target_date))
+        self.start_level_var = tk.StringVar(value=format_level(settings.start_level))
+        self.target_level_var = tk.StringVar(value=format_level(settings.target_level))
         self.mode_var = tk.StringVar(value=settings.mode)
         self.settings_message = tk.StringVar()
         self.name_var = tk.StringVar()
         self.class_var = tk.StringVar()
+        self.new_level_var = tk.StringVar()
         self.feedback_var = tk.StringVar()
         self.summary_var = tk.StringVar()
 
         self._build()
-        for variable in (self.start_var, self.first_var, self.last_var, self.max_level_var, self.mode_var):
+        settings_vars = (
+            self.start_var,
+            self.first_var,
+            self.last_var,
+            self.start_level_var,
+            self.target_level_var,
+            self.mode_var,
+        )
+        for variable in settings_vars:
             variable.trace_add("write", self._on_settings_edited)
         self._show_settings_problems(settings.errors())
         self.refresh()
@@ -692,19 +725,20 @@ class App:
         settings.grid(row=2, column=0, sticky="ew")
         date_rows = (
             ("Szintezés kezdete:", self.start_var),
-            ("Első karakter max. szinten:", self.first_var),
-            ("Utolsó karakter max. szinten:", self.last_var),
+            ("Első karakter célszinten:", self.first_var),
+            ("Utolsó karakter célszinten:", self.last_var),
         )
         for row, (text, variable) in enumerate(date_rows):
             field_label(settings, text, row)
             DateField(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
-        field_label(settings, "Maximum szint:", 3)
-        ttk.Spinbox(
-            settings, from_=START_LEVEL + 1, to=MAX_LEVEL_LIMIT, width=6, textvariable=self.max_level_var
-        ).grid(row=3, column=1, sticky="w", pady=3)
-        field_label(settings, "Ütemezés:", 4, sticky="nw")
+        for row, (text, variable) in enumerate(
+            (("Kezdőszint:", self.start_level_var), ("Célszint:", self.target_level_var)), start=3
+        ):
+            field_label(settings, text, row)
+            LevelSpinbox(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
+        field_label(settings, "Ütemezés:", 5, sticky="nw")
         modes = ttk.Frame(settings)
-        modes.grid(row=4, column=1, sticky="w", pady=3)
+        modes.grid(row=5, column=1, sticky="w", pady=3)
         ttk.Radiobutton(
             modes,
             text="Párhuzamosan – mindegyik a kezdő naptól szintez",
@@ -720,7 +754,7 @@ class App:
         self.settings_message_label = ttk.Label(
             settings, textvariable=self.settings_message, wraplength=wrap, justify="left"
         )
-        self.settings_message_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.settings_message_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         new = ttk.LabelFrame(body, text="Új karakter hozzáadása", padding=10)
         new.grid(row=3, column=0, sticky="ew", pady=(12, 0))
@@ -730,13 +764,23 @@ class App:
         field_label(new, "Kaszt (nem kötelező):", 1)
         class_box = ttk.Combobox(new, textvariable=self.class_var, values=WOW_CLASSES, width=24)
         class_box.grid(row=1, column=1, sticky="w", pady=3)
-        for widget in (self.name_entry, class_box):
+        field_label(new, "Jelenlegi szint:", 2)
+        level_cell = ttk.Frame(new)
+        level_cell.grid(row=2, column=1, sticky="w", pady=3)
+        level_box = LevelSpinbox(
+            level_cell, self.new_level_var, empty_value=lambda: self.data.settings.start_level
+        )
+        level_box.pack(side="left")
+        ttk.Label(level_cell, text="üresen hagyva: a kezdőszint", style="Hint.TLabel").pack(
+            side="left", padx=(8, 0)
+        )
+        for widget in (self.name_entry, class_box, level_box):
             widget.bind("<Return>", self.add_character)
         ttk.Button(new, text="Hozzáadás", command=self.add_character).grid(
-            row=2, column=1, sticky="w", pady=(6, 0)
+            row=3, column=1, sticky="w", pady=(6, 0)
         )
         ttk.Label(new, textvariable=self.feedback_var, style="Ok.TLabel").grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
+            row=4, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
 
         # A két keret beviteli mezői egy vonalba kerüljenek.
@@ -757,18 +801,23 @@ class App:
         problems = []
         date_fields = (
             ("start_date", "Szintezés kezdete", self.start_var),
-            ("first_max_date", "Első karakter céldátuma", self.first_var),
-            ("last_max_date", "Utolsó karakter céldátuma", self.last_var),
+            ("first_target_date", "Első karakter céldátuma", self.first_var),
+            ("last_target_date", "Utolsó karakter céldátuma", self.last_var),
         )
         for key, label, variable in date_fields:
             try:
                 values[key] = parse_date(variable.get())
             except ValueError as exc:
                 problems.append(f"{label}: {exc}")
-        try:
-            values["max_level"] = parse_max_level(self.max_level_var.get())
-        except ValueError as exc:
-            problems.append(str(exc))
+        level_fields = (
+            ("start_level", "Kezdőszint", self.start_level_var),
+            ("target_level", "Célszint", self.target_level_var),
+        )
+        for key, label, variable in level_fields:
+            try:
+                values[key] = parse_level(variable.get())
+            except ValueError as exc:
+                problems.append(f"{label}: {exc}")
         if problems:
             self._show_settings_problems(problems)
             return
@@ -793,17 +842,25 @@ class App:
             messagebox.showwarning("Hiányzó név", "Add meg az új karakter nevét!", parent=self.root)
             self.name_entry.focus_set()
             return
+        level_text = self.new_level_var.get()
+        try:
+            level = parse_level(level_text) if level_text.strip() else self.data.settings.start_level
+        except ValueError as exc:
+            messagebox.showwarning("Hibás szint", str(exc), parent=self.root)
+            return
         if any(character.name.casefold() == name.casefold() for character in self.data.characters):
             question = f"Már van „{name}” nevű karakter a listán.\nMégis hozzáadod?"
             if not messagebox.askyesno("Létező név", question, parent=self.root):
                 return
-        character = Character(name=name, char_class=self.class_var.get().strip())
+        character = Character(name=name, char_class=self.class_var.get().strip(), level=level)
         self.data.characters.append(character)
         self.data_changed(select=character)
         self.name_var.set("")
         self.class_var.set("")
+        self.new_level_var.set("")
         self.name_entry.focus_set()
-        self._show_feedback(f"✔ {name} felkerült a lista {len(self.data.characters)}. helyére (1. szintről indul).")
+        position = len(self.data.characters)
+        self._show_feedback(f"✔ {name} felkerült a lista {position}. helyére (szint: {format_level(level)}).")
 
     def _show_feedback(self, text: str) -> None:
         self.feedback_var.set(text)
@@ -842,13 +899,13 @@ class App:
         characters = self.data.characters
         settings = self.data.settings
         if characters:
-            done = sum(1 for character in characters if character.level >= settings.max_level)
-            lines = [f"Karakterek száma: {len(characters)} (ebből max. szinten: {done})"]
-            span = (settings.last_max_date - settings.first_max_date).days
+            done = sum(1 for character in characters if character.level >= settings.target_level)
+            lines = [f"Karakterek száma: {len(characters)} (ebből célszinten: {done})"]
+            span = (settings.last_target_date - settings.first_target_date).days
             if len(characters) > 1 and span > 0:
                 every = span / (len(characters) - 1)
                 every_text = str(int(every)) if every.is_integer() else f"kb. {format_number(every)}"
-                lines.append(f"A karakterek {every_text} naponként érik el a maximum szintet.")
+                lines.append(f"A karakterek {every_text} naponként érik el a célszintet.")
             self.summary_var.set("\n".join(lines))
         else:
             self.summary_var.set("Még nincs karakter a listán.")
