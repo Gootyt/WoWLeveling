@@ -20,6 +20,7 @@ from leveling import (
     format_deviation,
     format_level,
     format_raiderio_score,
+    format_spec_score,
     leveling_windows,
     load_data,
     parse_date,
@@ -80,6 +81,7 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(parse_raiderio_score(text), D(expected))
         self.assertIsNone(parse_raiderio_score("  "))
         self.assertEqual(format_raiderio_score(D("2543")), "2543,0")
+        self.assertEqual((format_spec_score(D("3891")), format_spec_score(D("3712.5"))), ("3891", "3712,5"))
         for text in ("2543,75", "abc", "-5", "100000", "2,5,4"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_raiderio_score(text)

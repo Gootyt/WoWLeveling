@@ -135,6 +135,11 @@ def format_raiderio_score(value: Decimal) -> str:
     return f"{value:.1f}".replace(".", ",")
 
 
+def format_spec_score(value: Decimal) -> str:
+    """A Murlok.io-pontszám: egész számként, ha az (pl. 3891), különben egy tizedesjeggyel."""
+    return str(int(value)) if value == value.to_integral_value() else format_raiderio_score(value)
+
+
 def _raiderio_from_json(value: object) -> Decimal | None:
     """Az adatfájlban tárolt Raider.io pontszám (hiányzó vagy üres: None)."""
     if value is None or value == "":

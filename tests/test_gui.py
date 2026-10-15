@@ -184,7 +184,7 @@ class GuiTests(unittest.TestCase):
         self.wait_for_fetch(app)
         self.assertEqual(len(calls), 1)
         tree = app.list_window.tree
-        self.assertEqual([tree.set(iid, "murlok") for iid in tree.get_children()], ["3891,0", "4050,0", "–"])
+        self.assertEqual([tree.set(iid, "murlok") for iid in tree.get_children()], ["3891", "4050", "–"])
         self.assertTrue(app.score_status_var.get().startswith("Murlok.io-pontszámok: "))
         self.assertEqual(load_data(app.data_path).spec_scores.scores["paladin/holy"], D("4050"))
 

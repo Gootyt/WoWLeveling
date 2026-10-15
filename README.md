@@ -22,6 +22,8 @@ megtervezéséhez és követéséhez.
   mai cél mögött”).
 - A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
   szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
+- A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a
+  [Murlok.io](https://murlok.io) Mythic+ rangsorából (a program magától lekéri).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -115,6 +117,24 @@ napja a kezdőnap, az utolsó az utolsó karakter céldátuma. Ha ez a nap a mai
 karakterek együtt éppen a mai célnál tartanak; ha korábbi, ennyi nappal le vannak
 maradva.
 
+**Murlok.io oszlop.** A program a Murlok.io három Mythic+ rangsoroldalát kéri le
+([tank](https://murlok.io/meta/tank/m+), [healer](https://murlok.io/meta/healer/m+),
+[DPS](https://murlok.io/meta/dps/m+)), és minden karakternél a kasztjához és
+specjéhez tartozó pontszámot írja ki (pl. Unholy Death Knight: 3891). A Murlok.io
+ezt a Blizzard Battle.net API adataiból, a spec legjobb játékosai alapján számolja,
+és 8 óránként frissíti; ez a játékbeli Mythic+ rating, ami közel áll a Raider.io
+pontszámhoz, de nem pontosan ugyanaz.
+
+- A lekérés a lista megnyitásakor magától elindul, ha a tárolt adat 8 óránál
+  régebbi, vagy bármikor a „Frissítés a Murlok.io-ról” gombbal. A háttérben fut, a
+  program közben használható; az eredmény (és az esetleges hiba) a lista tetején
+  látszik.
+- Internetkapcsolat kell hozzá. A program csak ezt a három nyilvános oldalt kéri le,
+  rólad vagy a karaktereidről nem küld semmit. A lekért pontszámok az adatfájlba is
+  bekerülnek, így netkapcsolat nélkül a legutóbbi adatok látszanak.
+- Csak akkor van érték, ha a karakternél a kaszt és a spec is meg van adva (a
+  listában szereplő angol nevekkel, pl. „Death Knight” és „Unholy”).
+
 **Állapotok:**
 
 | Állapot | Jelentés |
@@ -148,6 +168,8 @@ nem vész el), és alapbeállításokkal indul.
 
 - `wow_leveling.py` – a grafikus felület, ezt kell elindítani
 - `leveling.py` – az ütemezés számítása, mentés és betöltés
+- `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
+- `wow_data.py` – a kasztok, specek és fajok listája
 - `tests/` – automatikus tesztek
 
 ## Tesztek
