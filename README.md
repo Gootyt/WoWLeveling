@@ -85,6 +85,13 @@ python wow_leveling.py masik_terv.json
 6. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal (csak a # szerinti
    nézetben). A sorrend határozza meg, melyik karakternek kell elsőként, melyiknek
    utoljára elérnie a célszintet.
+7. **Murlok.io szerinti sorrend**: ez a gomb az összes karakter sorrendjét
+   beállítja a Murlok.io-pontszámok alapján, körönként. Az első körbe minden
+   class/specből egy karakter kerül (a legmagasabb szintű), a körön belül a
+   magasabb pontszámú spec van elöl; a második körbe ugyanígy a következő karakter
+   minden class/specből, és így tovább. Akinek nincs pontszáma (nincs megadva vagy
+   ismeretlen a class/spec), a lista végére kerül. A program átrendezés előtt
+   rákérdez, utána a lista a # szerinti nézetre vált.
 
 ## Hogyan számol a program?
 

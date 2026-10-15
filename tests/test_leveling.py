@@ -25,6 +25,7 @@ from leveling import (
     leveling_windows,
     load_data,
     lookahead_day,
+    murlok_order,
     parse_date,
     parse_item_level,
     parse_level,
@@ -494,6 +495,41 @@ class SpecScoresTests(unittest.TestCase):
         plans = build_plan(make_settings(), characters, START, scores)
         self.assertEqual([plan.spec_score for plan in plans], [D("3500"), None, D("4050")])
         self.assertEqual([p.character.name for p in sort_plans(plans, "murlok", descending=True)], ["C", "A", "B"])
+
+
+class MurlokOrderTests(unittest.TestCase):
+    SCORES = SpecScores({"paladin/holy": D("4050"), "death knight/unholy": D("3891"), "mage/frost": D("3575")})
+
+    @staticmethod
+    def names(characters):
+        return [character.name for character in characters]
+
+    def test_each_round_takes_one_character_per_spec(self):
+        characters = [
+            Character("A", "Mage", "Frost", D("50")),
+            Character("B", "Mage", "Frost", D("60")),
+            Character("C", "Death Knight", "Unholy", D("40")),
+            Character("D", "Paladin", "Holy", D("30")),
+            Character("E", "Mage", "Frost", D("55")),
+            Character("F"),  # nincs class/spec: a végére kerül
+            Character("G", "death knight", "unholy", D("45")),
+        ]
+        # 1. kör: Holy Paladin (4050), Unholy DK (3891, a magasabb szintű G), Frost Mage (3575, B)
+        # 2. kör: Unholy DK (C), Frost Mage (E); 3. kör: Frost Mage (A); végül F
+        self.assertEqual(self.names(murlok_order(characters, self.SCORES)), ["D", "G", "B", "C", "E", "A", "F"])
+
+    def test_ties_keep_the_current_order(self):
+        scores = SpecScores({"mage/frost": D("3575"), "mage/fire": D("3575")})
+        characters = [
+            Character("A", "Mage", "Fire", D("50")),
+            Character("B", "Mage", "Frost", D("60")),
+            Character("C", "Mage", "Frost", D("60")),
+        ]
+        self.assertEqual(self.names(murlok_order(characters, scores)), ["A", "B", "C"])
+
+    def test_without_scores_nothing_moves(self):
+        characters = [Character("A", "Mage", "Frost"), Character("B"), Character("C", "Rogue", "Outlaw")]
+        self.assertEqual(self.names(murlok_order(characters, SpecScores())), ["A", "B", "C"])
 
 
 class PersistenceTests(unittest.TestCase):

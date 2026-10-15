@@ -694,6 +694,34 @@ class SpecScores:
         return cls(scores=scores, fetched_at=datetime.fromisoformat(fetched_at) if fetched_at else None)
 
 
+def murlok_order(characters: list[Character], spec_scores: SpecScores) -> list[Character]:
+    """Szintezési sorrend a Murlok.io-pontszámok alapján.
+
+    Körönként minden class/specből egy karakter kerül sorra, mindig a legmagasabb
+    szintű a még hátralévők közül; egy körön belül a magasabb pontszámú spec van
+    elöl. Akinek nincs pontszáma (nincs megadva vagy ismeretlen a class/spec), a
+    végére kerül. Egyenlőség esetén a mostani sorrend dönt.
+    """
+    groups: dict[str, list[Character]] = {}  # spec kulcsa → karakterei, a mostani sorrendben
+    unranked = []
+    for character in characters:
+        if spec_scores.score_for(character) is None:
+            unranked.append(character)
+        else:
+            groups.setdefault(SpecScores.spec_key(character.char_class, character.spec), []).append(character)
+    for members in groups.values():
+        members.sort(key=lambda character: character.level, reverse=True)
+    ranked_specs = sorted(groups, key=lambda key: spec_scores.scores[key], reverse=True)
+    rounds = max((len(members) for members in groups.values()), default=0)
+    order = [
+        groups[key][round_index]
+        for round_index in range(rounds)
+        for key in ranked_specs
+        if round_index < len(groups[key])
+    ]
+    return order + unranked
+
+
 @dataclass
 class LevelingData:
     """A program összes mentendő adata."""

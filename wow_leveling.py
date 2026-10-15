@@ -47,6 +47,7 @@ from leveling import (
     goal_day_phrase,
     load_data,
     lookahead_day,
+    murlok_order,
     parse_date,
     parse_item_level,
     parse_level,
@@ -554,9 +555,12 @@ class CharacterListWindow(tk.Toplevel):
         action_row.pack(fill="x", pady=(8, 0))
         up_button = ttk.Button(action_row, text="▲ Feljebb", command=lambda: self.move_selected(-1))
         down_button = ttk.Button(action_row, text="▼ Lejjebb", command=lambda: self.move_selected(1))
+        self.murlok_order_button = ttk.Button(
+            action_row, text="Murlok.io szerinti sorrend", command=self.order_by_murlok
+        )
         edit_button = ttk.Button(action_row, text="Szerkesztés…", command=self.edit_selected)
         delete_button = ttk.Button(action_row, text="Törlés", command=self.delete_selected)
-        for button in (up_button, down_button, edit_button, delete_button):
+        for button in (up_button, down_button, self.murlok_order_button, edit_button, delete_button):
             button.pack(side="left", padx=(0, 6))
         ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel").pack(side="left", padx=(6, 0))
         self._selection_widgets = (self.level_spin, set_button, plus_button, edit_button, delete_button)
@@ -758,6 +762,39 @@ class CharacterListWindow(tk.Toplevel):
             return
         character.level = level
         self.app.data_changed(select=character)
+
+    def order_by_murlok(self) -> None:
+        """Az összes karakter szintezési sorrendje a Murlok.io-pontszámok alapján (lásd murlok_order)."""
+        title = "Murlok.io szerinti sorrend"
+        data = self.app.data
+        if not data.spec_scores.scores:
+            message = (
+                "Még nincsenek Murlok.io-pontszámok. Kérd le őket a „Frissítés a Murlok.io-ról” "
+                "gombbal, majd próbáld újra."
+            )
+            messagebox.showinfo(title, message, parent=self)
+            return
+        new_order = murlok_order(data.characters, data.spec_scores)
+        if new_order == data.characters:
+            messagebox.showinfo(title, "A karakterek sorrendje már most is a Murlok.io szerinti.", parent=self)
+            return
+        question = (
+            "Átrendezed az összes karaktert a Murlok.io-pontszámok alapján?\n\n"
+            "Körönként minden class/specből egy karakter kerül sorra (mindig a legmagasabb szintű), "
+            "a körön belül a magasabb pontszámú spec van elöl. A céldátumok az új sorrendhez igazodnak."
+        )
+        unranked = sum(1 for character in data.characters if data.spec_scores.score_for(character) is None)
+        if unranked:
+            single = unranked == 1
+            question += (
+                f"\n\n{unranked} karakternek nincs Murlok.io-pontszáma (nincs megadva vagy ismeretlen a "
+                f"class/spec), {'ő' if single else 'ők'} a lista végére {'kerül' if single else 'kerülnek'}."
+            )
+        if not messagebox.askyesno(title, question, parent=self):
+            return
+        data.characters[:] = new_order
+        self.app.list_sort = PLAN_ORDER  # hogy az új sorrend látszódjon
+        self.app.data_changed(select=self._selected_character())
 
     def move_selected(self, offset: int) -> None:
         character = self._selected_character()

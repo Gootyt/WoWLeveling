@@ -14,7 +14,7 @@ try:
 except ImportError:
     tk = None
 
-from leveling import SEQUENTIAL, format_date, load_data
+from leveling import SEQUENTIAL, SpecScores, format_date, load_data
 
 D = Decimal
 
@@ -299,6 +299,38 @@ class GuiTests(unittest.TestCase):
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
             window.delete_selected()
         self.assertEqual(width("realm"), realm_before)
+
+    def test_murlok_order_button_reorders_all_characters(self):
+        self.add("Jaina", char_class="Mage", spec="Frost", level="60")
+        self.add("Illidan")  # nincs class/spec
+        self.add("Uther", char_class="Paladin", spec="Holy", level="30")
+        self.add("Khadgar", char_class="Mage", spec="Frost", level="70")
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertNotIn("disabled", window.murlok_order_button.state())  # kijelölés nélkül is használható
+
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            window.order_by_murlok()  # még nincsenek pontszámok
+        self.assertIn("Még nincsenek Murlok.io-pontszámok", info.call_args.args[1])
+
+        self.app.data.spec_scores = SpecScores({"paladin/holy": D("4050"), "mage/frost": D("3575")})
+        window.sort_by("name")
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False) as ask:
+            window.order_by_murlok()
+        self.assertIn("1 karakternek nincs Murlok.io-pontszáma", ask.call_args.args[1])
+        self.assertEqual([c.name for c in self.app.data.characters], ["Jaina", "Illidan", "Uther", "Khadgar"])
+
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            window.order_by_murlok()
+        expected = ["Uther", "Khadgar", "Jaina", "Illidan"]
+        self.assertEqual([c.name for c in self.app.data.characters], expected)
+        self.assertEqual([c.name for c in load_data(self.path).characters], expected)
+        self.assertEqual(self.app.list_sort, self.gui.PLAN_ORDER)  # az új sorrend látszik
+        self.assertEqual(self.names(), expected)
+
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            window.order_by_murlok()
+        self.assertIn("már most is a Murlok.io szerinti", info.call_args.args[1])
 
     def test_list_shows_which_day_level_we_are_at(self):
         today = date.today()
