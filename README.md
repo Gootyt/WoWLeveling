@@ -19,6 +19,9 @@ megtervezéséhez és követéséhez.
   frakcióban (Alliance vagy Horde), amilyenből a legkevesebb (vagy egyáltalán
   nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
   páncéltípus, kaszt, spec és faj szerint.
+- A főablak **Gear** gombja a karakterlista egy másolatát nyitja meg külön
+  ablakban, saját rendezéssel. Ez a felszerelés (gear) követésére készül, egyelőre
+  ugyanazt mutatja, mint a karakterlista.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -82,7 +85,9 @@ python wow_leveling.py masik_terv.json
    ajánljon, majd javasol egy combót (lásd lent), és kérésre kitölti vele a faj, a
    kaszt és a spec mezőt.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
-   változásra azonnal frissül.
+   változásra azonnal frissül. A mellette lévő **Gear** gomb a lista másolatát
+   nyitja meg egy másik ablakban: ugyanazt tudja, de a rendezése független a
+   karakterlistáétól (egyelőre nincs benne más).
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.

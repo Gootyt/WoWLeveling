@@ -469,6 +469,12 @@ class FactionDialog(tk.Toplevel):
 class CharacterListWindow(tk.Toplevel):
     """A karakterek listája és ütemterve külön ablakban."""
 
+    TITLE = "Karakterek listája"
+    # Az App ezekben az attribútumaiban tartja nyilván az ablakot és a nézet rendezését
+    # (a rendezés az ablak bezárása után is megmarad).
+    WINDOW_ATTRIBUTE = "list_window"
+    SORT_ATTRIBUTE = "list_sort"
+
     # azonosító, fejléc, igazítás, nyúlhat-e; a szélesség a tartalomhoz igazodik
     COLUMNS = (
         ("position", "#", "center", False),
@@ -493,7 +499,7 @@ class CharacterListWindow(tk.Toplevel):
     def __init__(self, app: App) -> None:
         super().__init__(app.root)
         self.app = app
-        self.title(f"Karakterek listája – {APP_TITLE}")
+        self.title(f"{self.TITLE} – {APP_TITLE}")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.header_var = tk.StringVar()
         self.summary_var = tk.StringVar()
@@ -633,7 +639,7 @@ class CharacterListWindow(tk.Toplevel):
         today = date.today()
         # Előretekintéskor az első olyan nap céljai, amelyet még nem teljesített minden karakter.
         goal_day = lookahead_day(settings, data.characters, today) if data.look_ahead else today
-        sort_key, descending = self.app.list_sort
+        sort_key, descending = self.view_sort
         plans = build_plan(settings, data.characters, today, data.spec_scores, goal_day)
         plans = sort_plans(plans, sort_key, descending)
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
@@ -761,7 +767,7 @@ class CharacterListWindow(tk.Toplevel):
         character = self._selected_character()
         for widget in self._selection_widgets:
             widget.state(["!disabled" if character else "disabled"])
-        in_plan_order = self.app.list_sort == PLAN_ORDER
+        in_plan_order = self.view_sort == PLAN_ORDER
         for widget in self._order_widgets:
             widget.state(["!disabled" if character and in_plan_order else "disabled"])
         self.order_hint_var.set("" if in_plan_order else "Az átrendezéshez rendezd a listát a # oszlop szerint.")
@@ -774,8 +780,8 @@ class CharacterListWindow(tk.Toplevel):
 
     def sort_by(self, key: str) -> None:
         """Rendezés oszlop szerint; ugyanarra az oszlopra kattintva megfordul az irány."""
-        current, descending = self.app.list_sort
-        self.app.list_sort = (key, not descending if key == current else False)
+        current, descending = self.view_sort
+        self.view_sort = (key, not descending if key == current else False)
         self.refresh()
 
     def _on_double_click(self, event: tk.Event) -> None:
@@ -840,12 +846,12 @@ class CharacterListWindow(tk.Toplevel):
         if not messagebox.askyesno(title, question, parent=self):
             return
         data.characters[:] = new_order
-        self.app.list_sort = PLAN_ORDER  # hogy az új sorrend látszódjon
+        self.view_sort = PLAN_ORDER  # hogy az új sorrend látszódjon
         self.app.data_changed(select=self._selected_character())
 
     def move_selected(self, offset: int) -> None:
         character = self._selected_character()
-        if character is None or self.app.list_sort != PLAN_ORDER:
+        if character is None or self.view_sort != PLAN_ORDER:
             return
         characters = self.app.data.characters
         index = characters.index(character)
@@ -889,13 +895,31 @@ class CharacterListWindow(tk.Toplevel):
         """A Murlok.io frissítés gomb csak akkor használható, ha éppen nem fut lekérés."""
         self.score_button.state(["!disabled" if self.app.can_fetch_scores() else "disabled"])
 
+    @property
+    def view_sort(self) -> tuple[str, bool]:
+        """A nézet rendezése: (oszlop, csökkenő-e)."""
+        return getattr(self.app, self.SORT_ATTRIBUTE)
+
+    @view_sort.setter
+    def view_sort(self, value: tuple[str, bool]) -> None:
+        setattr(self.app, self.SORT_ATTRIBUTE, value)
+
     def close(self) -> None:
-        self.app.list_window = None
+        setattr(self.app, self.WINDOW_ATTRIBUTE, None)
         self.destroy()
 
 
+class GearWindow(CharacterListWindow):
+    """A karakterlista másolata a felszerelés (gear) követéséhez, saját ablakban és saját
+    rendezéssel. Egyelőre ugyanazt mutatja, mint a karakterlista."""
+
+    TITLE = "Gear"
+    WINDOW_ATTRIBUTE = "gear_window"
+    SORT_ATTRIBUTE = "gear_sort"
+
+
 class App:
-    """A főablak: beállítások, új karakter felvétele, a lista megnyitása."""
+    """A főablak: beállítások, új karakter felvétele, a karakterlista és a Gear ablak megnyitása."""
 
     def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None) -> None:
         self.root = root
@@ -906,7 +930,9 @@ class App:
         self._score_error: str | None = None
         self.score_status_var = tk.StringVar()
         self.list_window: CharacterListWindow | None = None
+        self.gear_window: GearWindow | None = None
         self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
+        self.gear_sort = PLAN_ORDER  # a Gear ablak rendezése
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
         self._today = date.today()
         self._save_error_shown = False
@@ -1125,8 +1151,9 @@ class App:
         footer = ttk.Frame(body)
         footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
+        ttk.Button(footer, text="Gear", command=self.open_gear).pack(side="right", anchor="n")
         ttk.Button(footer, text="Karakterlista megnyitása…", command=self.open_list).pack(
-            side="right", anchor="n"
+            side="right", anchor="n", padx=(0, 6)
         )
 
     def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
@@ -1309,14 +1336,26 @@ class App:
         self._feedback_job = self.root.after(6000, lambda: self.feedback_var.set(""))
 
     def open_list(self) -> None:
-        if self.list_window is not None and self.list_window.winfo_exists():
-            self.list_window.deiconify()
-            self.list_window.lift()
-            self.list_window.focus_set()
+        self._open_window(CharacterListWindow)
+
+    def open_gear(self) -> None:
+        self._open_window(GearWindow)
+
+    def _open_window(self, window_class: type[CharacterListWindow]) -> None:
+        """Megnyitja a listaablakot; ha már nyitva van, csak előtérbe hozza."""
+        window = getattr(self, window_class.WINDOW_ATTRIBUTE)
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            window.focus_set()
             return
-        self.list_window = CharacterListWindow(self)
+        setattr(self, window_class.WINDOW_ATTRIBUTE, window_class(self))
         self._update_score_status()
         self.refresh_spec_scores()  # ha a tárolt adat már régebbi 8 óránál
+
+    def open_windows(self) -> list[CharacterListWindow]:
+        """A nyitott listaablakok (karakterlista, Gear)."""
+        return [window for window in (self.list_window, self.gear_window) if window is not None]
 
     def can_fetch_scores(self) -> bool:
         return self._fetch_scores is not None and not self._score_fetch_running
@@ -1368,8 +1407,8 @@ class App:
         else:
             text = "Murlok.io-pontszámok: még nincsenek lekérve"
         self.score_status_var.set(text)
-        if self.list_window is not None:
-            self.list_window.update_score_controls()
+        for window in self.open_windows():
+            window.update_score_controls()
 
     def data_changed(self, select: Character | None = None) -> None:
         """Módosítás után: mentés, majd minden ablak frissítése."""
@@ -1409,8 +1448,8 @@ class App:
             self.summary_var.set("\n".join(lines))
         else:
             self.summary_var.set("Még nincs karakter a listán.")
-        if self.list_window is not None:
-            self.list_window.refresh(select=select)
+        for window in self.open_windows():
+            window.refresh(select=select)
 
     def _watch_date(self) -> None:
         """Éjfél után frissíti a napi célokat, ha a program végig nyitva marad."""

@@ -11,8 +11,9 @@ from unittest import mock
 
 try:
     import tkinter as tk
+    from tkinter import ttk
 except ImportError:
-    tk = None
+    tk = ttk = None
 
 from leveling import SEQUENTIAL, SpecScores, format_date, load_data
 
@@ -49,16 +50,27 @@ class GuiTests(unittest.TestCase):
             self.app.new_level_var.set(level)
             self.app.add_character()
 
-    def rows(self):
-        """A lista sorai a nézet sorrendjében, oszlopazonosító szerint."""
-        tree = self.app.list_window.tree
-        columns = [column[0] for column in self.gui.CharacterListWindow.COLUMNS]
+    def rows(self, window=None):
+        """A lista (vagy a megadott listaablak) sorai a nézet sorrendjében, oszlopazonosító szerint."""
+        window = window or self.app.list_window
+        tree = window.tree
+        columns = [column[0] for column in window.COLUMNS]
         return [
             {key: str(value) for key, value in zip(columns, tree.item(iid, "values"))} for iid in tree.get_children()
         ]
 
-    def names(self):
-        return [row["name"] for row in self.rows()]
+    def names(self, window=None):
+        return [row["name"] for row in self.rows(window)]
+
+    def find_button(self, widget, text):
+        """A widget alatt az adott feliratú gomb (vagy None)."""
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Button) and child.cget("text") == text:
+                return child
+            found = self.find_button(child, text)
+            if found is not None:
+                return found
+        return None
 
     def select(self, character):
         window = self.app.list_window
@@ -84,6 +96,33 @@ class GuiTests(unittest.TestCase):
 
         window.close()
         self.assertIsNone(self.app.list_window)
+
+    def test_gear_button_opens_a_separate_copy_of_the_list(self):
+        self.add("Thrall", "Jaina")
+        self.find_button(self.root, "Gear").invoke()
+        gear = self.app.gear_window
+        self.assertIsInstance(gear, self.gui.GearWindow)
+        self.assertEqual(gear.title(), f"Gear – {self.gui.APP_TITLE}")
+        self.assertIsNone(self.app.list_window)  # a karakterlista külön ablak
+        self.assertEqual(self.names(gear), ["Thrall", "Jaina"])
+        self.app.open_gear()  # a már nyitott ablakot csak előtérbe hozza
+        self.assertIs(self.app.gear_window, gear)
+
+        self.app.open_list()
+        window = self.app.list_window
+        self.assertEqual(self.rows(gear), self.rows(window))  # ugyanazok az oszlopok és sorok
+        gear.sort_by("name")  # saját rendezése van
+        self.assertEqual((self.names(gear), self.names(window)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
+        self.assertEqual((self.app.gear_sort, self.app.list_sort), (("name", False), self.gui.PLAN_ORDER))
+
+        self.add("Arthas")  # minden változás mindkét ablakban azonnal látszik
+        self.assertEqual(self.names(gear), ["Arthas", "Jaina", "Thrall"])
+        self.assertEqual(self.names(window), ["Thrall", "Jaina", "Arthas"])
+        gear.close()
+        self.assertIsNone(self.app.gear_window)
+        self.assertIs(self.app.list_window, window)
+        self.app.open_gear()
+        self.assertEqual(self.names(self.app.gear_window), ["Arthas", "Jaina", "Thrall"])  # a rendezés megmarad
 
     def test_new_character_level_defaults_to_start_level(self):
         self.app.start_level_var.set("80")
