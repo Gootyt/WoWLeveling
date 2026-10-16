@@ -34,6 +34,7 @@ from leveling import (
     parse_item_level,
     parse_level,
     parse_raiderio_score,
+    plan_item_levels,
     planned_level,
     save_data,
     sort_plans,
@@ -654,6 +655,63 @@ class MurlokOrderTests(unittest.TestCase):
     def test_without_scores_nothing_moves(self):
         characters = [Character("A", "Mage", "Frost"), Character("B"), Character("C", "Rogue", "Outlaw")]
         self.assertEqual(self.names(murlok_order(characters, SpecScores())), ["A", "B", "C"])
+
+
+class ItemLevelPlanTests(unittest.TestCase):
+    SCORES = SpecScores({"paladin/holy": D("4050"), "mage/frost": D("3575"), "warrior/arms": D("3500")})
+
+    @staticmethod
+    def characters(*item_levels):
+        """A: Frost Mage, B: Holy Paladin, C: Arms Warrior, D: nincs kasztja (a Murlok.io-sorrend végére kerül)."""
+        specs = (("Mage", "Frost"), ("Paladin", "Holy"), ("Warrior", "Arms"), ("", ""))
+        return [
+            Character(name, char_class, spec, item_level=None if item_level is None else D(item_level))
+            for name, (char_class, spec), item_level in zip("ABCD", specs, item_levels)
+        ]
+
+    def test_planned_item_levels_follow_the_murlok_order(self):
+        characters = self.characters("321", "325", "310", None)
+        plan = plan_item_levels(characters, self.SCORES, D("330"))
+        # Murlok.io-sorrend: B, A, C, D. (330 − itemlevel) / hely: B 5/1, A 9/2, C 20/3; a második legnagyobb 5.
+        self.assertEqual(plan.step, D("5"))
+        self.assertEqual([plan.planned[c] for c in characters], [D("320.00"), D("325.00"), D("315.00"), D("310.00")])
+        self.assertEqual([plan.deviation(c) for c in characters], [D("1.00"), D("0.00"), D("-5.00"), None])
+
+    def test_second_lowest_deviation_is_exactly_zero(self):
+        characters = self.characters("320.25", "329", "320.5", "320")
+        plan = plan_item_levels(characters, self.SCORES, D("330.5"))
+        self.assertEqual(plan.step.quantize(D("0.0001")), D("3.3333"))  # 10/3: nem véges tizedes tört
+        self.assertEqual(plan.planned[characters[2]], D("320.50"))
+        deviations = sorted(plan.deviation(c) for c in characters)
+        self.assertEqual(deviations, [D("-3.58"), D("0.00"), D("1.83"), D("2.83")])
+
+    def test_unusual_values(self):
+        # Ha szinte mindenki a célitemlevel felett van, X negatív: a tervezett érték lefelé haladva nő.
+        characters = [Character(name, item_level=D(ilvl)) for name, ilvl in (("A", "340"), ("B", "335"), ("C", "320"))]
+        plan = plan_item_levels(characters, SpecScores(), D("330"))
+        self.assertEqual(plan.step, D("-2.5"))
+        self.assertEqual(sorted(plan.deviation(c) for c in characters), [D("-17.50"), D("0.00"), D("7.50")])
+        # A tervezett itemlevel nem lehet negatív.
+        characters = [Character(name, item_level=D(ilvl)) for name, ilvl in (("A", "0"), ("B", "2"), ("C", "9"))]
+        plan = plan_item_levels(characters, SpecScores(), D("10"))
+        self.assertEqual([plan.planned[c] for c in characters], [D("6.00"), D("2.00"), D("0")])
+
+    def test_needs_a_target_and_two_item_levels(self):
+        characters = self.characters("321", None, None, None)
+        self.assertIn("nincs megadva célitemlevel", plan_item_levels(characters, self.SCORES, None).problem)
+        plan = plan_item_levels(characters, self.SCORES, D("330"))
+        self.assertIsNone(plan.step)
+        self.assertEqual(plan.problem, "legalább két karakternél meg kell adni az itemlevelt.")
+        self.assertIsNone(plan.deviation(characters[0]))
+
+    def test_plans_carry_the_item_level_columns(self):
+        characters = self.characters("321", "325", "310", None)
+        settings = dataclasses.replace(make_settings(), target_item_level=D("330"))
+        plans = build_plan(settings, characters, START, self.SCORES)
+        self.assertEqual([plan.planned_item_level for plan in plans], [D("320"), D("325"), D("315"), D("310")])
+        by_deviation = sort_plans(plans, "item_level_deviation")
+        self.assertEqual([plan.character.name for plan in by_deviation], ["C", "B", "A", "D"])
+        self.assertIsNone(build_plan(make_settings(), characters, START, self.SCORES)[0].planned_item_level)
 
 
 class PersistenceTests(unittest.TestCase):

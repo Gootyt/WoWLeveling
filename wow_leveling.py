@@ -20,7 +20,7 @@ import threading
 import tkinter as tk
 from collections import Counter
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
@@ -51,6 +51,7 @@ from leveling import (
     lookahead_day,
     murlok_order,
     parse_date,
+    plan_item_levels,
     parse_item_level,
     parse_level,
     parse_raiderio_score,
@@ -84,6 +85,7 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
+GEAR_ORDER = ("item_level_deviation", False)  # a Gear ablak alapból az itemlevel-eltérés szerint rendez
 
 BEHIND_COLOR = "#b35c00"
 
@@ -474,6 +476,13 @@ class CharacterListWindow(tk.Toplevel):
     # (a rendezés az ablak bezárása után is megmarad).
     WINDOW_ATTRIBUTE = "list_window"
     SORT_ATTRIBUTE = "list_sort"
+    HINT_TEXT = (
+        "A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie a célszintet. "
+        "A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor a következő "
+        "napé), a „Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
+        "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ rangsorában. "
+        "A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend."
+    )
 
     # azonosító, fejléc, igazítás, nyúlhat-e; a szélesség a tartalomhoz igazodik
     COLUMNS = (
@@ -539,12 +548,7 @@ class CharacterListWindow(tk.Toplevel):
         )
         ttk.Label(
             body,
-            text="A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie "
-            "a célszintet. A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor "
-            "a következő napé), a "
-            "„Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
-            "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ "
-            "rangsorában. A fejlécekre kattintva rendezheted a nézetet; a # oszlop az eredeti sorrend.",
+            text=self.HINT_TEXT,
             style="Hint.TLabel",
             wraplength=px(860),
             justify="left",
@@ -562,6 +566,7 @@ class CharacterListWindow(tk.Toplevel):
 
         table = ttk.Frame(body)
         table.pack(fill="both", expand=True)
+        self.table_frame = table
         table.rowconfigure(0, weight=1)
         table.columnconfigure(0, weight=1)
         self.tree = ttk.Treeview(
@@ -728,6 +733,12 @@ class CharacterListWindow(tk.Toplevel):
             "spec": character.spec or "–",
             "level": format_level(character.level),
             "item_level": "–" if character.item_level is None else format_item_level(character.item_level),
+            "planned_item_level": (
+                "–" if plan.planned_item_level is None else format_item_level(plan.planned_item_level)
+            ),
+            "item_level_deviation": (
+                "–" if plan.item_level_deviation is None else format_deviation(plan.item_level_deviation)
+            ),
             "raiderio": "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
             "murlok": "–" if plan.spec_score is None else format_compact(plan.spec_score),
             "start": format_date(plan.start),
@@ -909,13 +920,60 @@ class CharacterListWindow(tk.Toplevel):
         self.destroy()
 
 
+GEAR_COLUMNS = (
+    ("planned_item_level", "Tervezett itemlevel", "center", False),
+    ("item_level_deviation", "Itemlevel-eltérés", "center", False),
+)
+
+
+def item_level_step_text(step: Decimal) -> str:
+    """X kiírása két tizedesjeggyel (pl. „2,35”, „kb. 3,42”, „−2,50”)."""
+    rounded = step.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    text = format_deviation(rounded).lstrip("+")
+    return text if rounded == step else f"kb. {text}"
+
+
 class GearWindow(CharacterListWindow):
     """A karakterlista másolata a felszerelés (gear) követéséhez, saját ablakban és saját
-    rendezéssel. Egyelőre ugyanazt mutatja, mint a karakterlista."""
+    rendezéssel; a tervezett itemlevelt és az attól való eltérést is mutatja."""
 
     TITLE = "Gear"
     WINDOW_ATTRIBUTE = "gear_window"
     SORT_ATTRIBUTE = "gear_sort"
+    # Az „Itemlevel” után a tervezett itemlevel és az eltérés.
+    COLUMNS = tuple(
+        column
+        for base in CharacterListWindow.COLUMNS
+        for column in ((base, *GEAR_COLUMNS) if base[0] == "item_level" else (base,))
+    )
+    HINT_TEXT = (
+        "A „Tervezett itemlevel” a Murlok.io szerinti sorrend (mint a „Murlok.io szerinti sorrend” gombnál) "
+        "első karakterénél a célitemlevel − X, minden következőnél újabb X-szel kevesebb. Az "
+        "„Itemlevel-eltérés” a valós és a tervezett itemlevel különbsége (+: a terv felett, −: alatta); a "
+        "táblázat alapból eszerint van rendezve. X-et a program úgy állítja be, hogy a 2. sorban 0 legyen az "
+        "eltérés, így az 1. sorban negatív. A fejlécekre kattintva más oszlop szerint is rendezheted."
+    )
+
+    def _build(self) -> None:
+        super()._build()
+        self.gear_info_var = tk.StringVar()
+        self.gear_info_label = ttk.Label(self.table_frame.master, textvariable=self.gear_info_var)
+        self.gear_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
+
+    def refresh(self, select: Character | None = None) -> None:
+        super().refresh(select)
+        data = self.app.data
+        target = data.settings.target_item_level
+        item_levels = plan_item_levels(data.characters, data.spec_scores, target)
+        if item_levels.step is None:
+            self.gear_info_var.set(f"Tervezett itemlevel: {item_levels.problem}")
+            self.gear_info_label.configure(style="Late.TLabel")
+        else:
+            self.gear_info_var.set(
+                f"Célitemlevel: {format_item_level(target)}   ·   X = {item_level_step_text(item_levels.step)} "
+                "(ennyivel csökken a tervezett itemlevel karakterenként)"
+            )
+            self.gear_info_label.configure(style="Strong.TLabel")
 
 
 class App:
@@ -932,7 +990,7 @@ class App:
         self.list_window: CharacterListWindow | None = None
         self.gear_window: GearWindow | None = None
         self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
-        self.gear_sort = PLAN_ORDER  # a Gear ablak rendezése
+        self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
         self._today = date.today()
         self._save_error_shown = False

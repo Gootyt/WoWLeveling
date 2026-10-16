@@ -110,7 +110,9 @@ class GuiTests(unittest.TestCase):
 
         self.app.open_list()
         window = self.app.list_window
-        self.assertEqual(self.rows(gear), self.rows(window))  # ugyanazok az oszlopok és sorok
+        list_rows = self.rows(window)  # a karakterlista oszlopai a Gear ablakban is ugyanazt mutatják
+        self.assertEqual([{key: row[key] for key in list_rows[0]} for row in self.rows(gear)], list_rows)
+        self.assertEqual((self.app.gear_sort, self.app.list_sort), (self.gui.GEAR_ORDER, self.gui.PLAN_ORDER))
         gear.sort_by("name")  # saját rendezése van
         self.assertEqual((self.names(gear), self.names(window)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
         self.assertEqual((self.app.gear_sort, self.app.list_sort), (("name", False), self.gui.PLAN_ORDER))
@@ -123,6 +125,47 @@ class GuiTests(unittest.TestCase):
         self.assertIs(self.app.list_window, window)
         self.app.open_gear()
         self.assertEqual(self.names(self.app.gear_window), ["Arthas", "Jaina", "Thrall"])  # a rendezés megmarad
+
+    def test_gear_window_plans_item_levels(self):
+        self.app.target_item_level_var.set("330")
+        self.app.data.spec_scores = SpecScores(
+            {"paladin/holy": D("4050"), "mage/frost": D("3575"), "warrior/arms": D("3500")}
+        )
+        self.add("Jaina", char_class="Mage", spec="Frost", item_level="321")
+        self.add("Uther", char_class="Paladin", spec="Holy", item_level="325")
+        self.add("Varian", char_class="Warrior", spec="Arms", item_level="310")
+        self.add("Anduin")  # nincs itemlevel
+        self.app.open_gear()
+        gear = self.app.gear_window
+        columns = [column[0] for column in gear.COLUMNS]
+        start = columns.index("item_level")  # az „Itemlevel” után következnek
+        self.assertEqual(
+            columns[start : start + 4], ["item_level", "planned_item_level", "item_level_deviation", "raiderio"]
+        )
+        # Murlok.io-sorrend: Uther, Jaina, Varian, Anduin; X = 5, így a tervezett itemlevel 325, 320, 315, 310.
+        # Az eltérés szerint rendezve az 1. sor negatív, a 2. sorban 0 áll.
+        self.assertEqual(
+            [(row["name"], row["planned_item_level"], row["item_level_deviation"]) for row in self.rows(gear)],
+            [
+                ("Varian", "315,00", "−5,00"),
+                ("Uther", "325,00", "0,00"),
+                ("Jaina", "320,00", "+1,00"),
+                ("Anduin", "310,00", "–"),
+            ],
+        )
+        self.assertEqual(gear.tree.heading("item_level_deviation", "text"), "Itemlevel-eltérés ▲")
+        self.assertEqual(
+            gear.gear_info_var.get(),
+            "Célitemlevel: 330,00   ·   X = 5,00 (ennyivel csökken a tervezett itemlevel karakterenként)",
+        )
+
+        self.app.target_item_level_var.set("")  # célitemlevel nélkül nincs terv
+        self.assertEqual({row["planned_item_level"] for row in self.rows(gear)}, {"–"})
+        self.assertEqual(
+            gear.gear_info_var.get(), "Tervezett itemlevel: nincs megadva célitemlevel (a főablakban adhatod meg)."
+        )
+        self.app.open_list()  # a karakterlistában nincsenek ilyen oszlopok
+        self.assertNotIn("planned_item_level", [column[0] for column in self.app.list_window.COLUMNS])
 
     def test_new_character_level_defaults_to_start_level(self):
         self.app.start_level_var.set("80")

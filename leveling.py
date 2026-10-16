@@ -364,6 +364,8 @@ class CharacterPlan:
     status: Status
     status_text: str
     spec_score: Decimal | None = None  # a karakter specjének pontszáma a Murlok.io rangsorában
+    planned_item_level: Decimal | None = None  # a tervezett itemlevel (lásd plan_item_levels)
+    item_level_deviation: Decimal | None = None  # valós − tervezett itemlevel (+: a terv felett)
 
     @property
     def levels_due(self) -> Decimal:
@@ -435,16 +437,21 @@ def build_plan(
     today = today or date.today()
     goal_day = goal_day or today
     windows = leveling_windows(settings, len(characters))
+    item_levels = plan_item_levels(characters, spec_scores or SpecScores(), settings.target_item_level)
     return [
-        _plan_character(
-            character,
-            position,
-            start,
-            deadline,
-            settings,
-            today,
-            spec_scores.score_for(character) if spec_scores is not None else None,
-            goal_day,
+        replace(
+            _plan_character(
+                character,
+                position,
+                start,
+                deadline,
+                settings,
+                today,
+                spec_scores.score_for(character) if spec_scores is not None else None,
+                goal_day,
+            ),
+            planned_item_level=item_levels.planned.get(character),
+            item_level_deviation=item_levels.deviation(character),
         )
         for position, (character, (start, deadline)) in enumerate(zip(characters, windows), start=1)
     ]
@@ -569,6 +576,8 @@ SORT_KEYS = {
     "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
     "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
     "item_level": lambda plan: plan.character.item_level,
+    "planned_item_level": lambda plan: plan.planned_item_level,
+    "item_level_deviation": lambda plan: plan.item_level_deviation,
     "raiderio": lambda plan: plan.character.raiderio_score,
     "murlok": lambda plan: plan.spec_score,
     "level": lambda plan: plan.character.level,
@@ -889,6 +898,57 @@ def murlok_order(characters: list[Character], spec_scores: SpecScores) -> list[C
         if round_index < len(groups[key])
     ]
     return order + unranked
+
+
+@dataclass(frozen=True)
+class ItemLevelPlan:
+    """A karakterek tervezett itemlevele (lásd plan_item_levels)."""
+
+    step: Decimal | None  # X: ennyivel kisebb a tervezett itemlevel karakterenként (None: nem számolható)
+    planned: dict  # karakter → tervezett itemlevel
+    problem: str = ""  # ha nem számolható, miért nem
+
+    def deviation(self, character: Character) -> Decimal | None:
+        """Valós − tervezett itemlevel (None, ha valamelyik nem ismert)."""
+        planned = self.planned.get(character)
+        if planned is None or character.item_level is None:
+            return None
+        return character.item_level - planned
+
+
+def plan_item_levels(
+    characters: list[Character], spec_scores: SpecScores, target_item_level: Decimal | None
+) -> ItemLevelPlan:
+    """Tervezett itemlevel a Murlok.io szerinti sorrend (lásd murlok_order) alapján.
+
+    Az első karakteré a célitemlevel − X, a másodiké az elsőénél is X-szel kevesebb,
+    és így tovább: a k-adiké célitemlevel − k·X (legalább 0). X-et úgy választja, hogy
+    az itemlevel-eltérés (valós − tervezett) szerint növekvő sorrendben a második
+    helyen pontosan 0 álljon, így az elsőn negatív érték. Mivel a k-adik karakter
+    eltérése k·(X − (célitemlevel − itemlevel) / k), ez a hányadosok közül a második
+    legnagyobb (csak a megadott itemlevelű karaktereket nézve).
+    """
+    if target_item_level is None:
+        return ItemLevelPlan(None, {}, "nincs megadva célitemlevel (a főablakban adhatod meg).")
+    order = murlok_order(characters, spec_scores)
+    ratios = sorted(
+        (
+            (target_item_level - character.item_level) / position
+            for position, character in enumerate(order, start=1)
+            if character.item_level is not None
+        ),
+        reverse=True,
+    )
+    if len(ratios) < 2:
+        return ItemLevelPlan(None, {}, "legalább két karakternél meg kell adni az itemlevelt.")
+    step = ratios[1]
+    planned = {
+        character: max(
+            Decimal(0), (target_item_level - position * step).quantize(ITEM_LEVEL_STEP, rounding=ROUND_HALF_UP)
+        )
+        for position, character in enumerate(order, start=1)
+    }
+    return ItemLevelPlan(step, planned)
 
 
 @dataclass

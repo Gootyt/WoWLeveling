@@ -20,8 +20,9 @@ megtervezéséhez és követéséhez.
   nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
   páncéltípus, kaszt, spec és faj szerint.
 - A főablak **Gear** gombja a karakterlista egy másolatát nyitja meg külön
-  ablakban, saját rendezéssel. Ez a felszerelés (gear) követésére készül, egyelőre
-  ugyanazt mutatja, mint a karakterlista.
+  ablakban, saját rendezéssel. Ebben az „Itemlevel” oszlop után a **tervezett
+  itemlevel** és az **itemlevel-eltérés** is látszik, és alapból az eltérés szerint
+  rendez (lásd lent).
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -87,8 +88,8 @@ python wow_leveling.py masik_terv.json
    kaszt és a spec mezőt.
 3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
    változásra azonnal frissül. A mellette lévő **Gear** gomb a lista másolatát
-   nyitja meg egy másik ablakban: ugyanazt tudja, de a rendezése független a
-   karakterlistáétól (egyelőre nincs benne más).
+   nyitja meg egy másik ablakban: ugyanazt tudja, a rendezése független a
+   karakterlistáétól, és a tervezett itemlevel oszlopai is benne vannak.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
@@ -177,6 +178,23 @@ napja.
 - Az utolsó céldátum nem lehet korábbi az elsőnél. A számoláshoz legalább egy
   lezárt szintezési nap kell (a mai nap még nem számít bele), és legalább egy
   karakternek túl kell lépnie a kezdőszinten.
+
+**Tervezett itemlevel (Gear ablak).** A Murlok.io szerinti sorrendben (ugyanaz,
+mint a „Murlok.io szerinti sorrend” gombnál) az első karakter tervezett itemlevele a
+célitemlevel − X, a másodiké az elsőé − X, és így tovább: a k-adiké célitemlevel −
+k·X (0-nál nem kevesebb). Az **itemlevel-eltérés** a valós és a tervezett itemlevel
+különbsége (+: a terv felett, −: alatta), a Gear ablak alapból eszerint rendez
+növekvő sorrendben. X-et a program magától állítja be úgy, hogy ebben a sorrendben
+a 2. sorban 0 legyen az eltérés, így az 1. sorban negatív: a (célitemlevel −
+itemlevel) / sorszám hányadosok közül a második legnagyobb. X értéke a táblázat
+fölött látszik.
+
+- Csak a megadott itemlevelű karakterek számítanak bele X-be, de tervezett
+  itemlevelet minden karakter kap. Kell hozzá célitemlevel (a főablakban) és
+  legalább két karakternél itemlevel.
+- Ha szinte minden karakter a célitemlevel felett van, X negatív lehet; ilyenkor a
+  tervezett itemlevel a sorrendben lefelé haladva nő.
+- Murlok.io-pontszámok nélkül a sorrend a lista sorrendje.
 
 **Combó ajánlása.** A választott frakcióban létrehozható class/spec/faj combók
 közül az a javaslat, amelyből a legkevesebb van a listán. A program a meglévő
