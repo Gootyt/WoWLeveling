@@ -5,7 +5,7 @@ megtervezéséhez és követéséhez.
 
 - Megadható a szintezés kezdete, az a dátum, amikorra az **első**, illetve az
   **utolsó** karakternek el kell érnie a célszintet, valamint a **kezdőszint** és a
-  **célszint**.
+  **célszint**. A **célitemlevel** is megadható (nem kötelező).
 - A két céldátum egy gombnyomással **kiszámolható a karakterek mostani
   szintjéből** (az eddigi tempó alapján).
 - A szintek **két tizedesjegy pontosságúak** (pl. `83,45`: a 83-as szint 45%-ánál
@@ -68,7 +68,8 @@ python wow_leveling.py masik_terv.json
 1. **Beállítások** (főablak): a dátumokat `ÉÉÉÉ-HH-NN` alakban kell megadni
    (pl. `2026-10-15`; a `2026.10.15.` alakot is elfogadja), vagy a ▼ gombbal
    naptárból választhatsz. A kezdő- és a célszint két tizedesjegyig adható meg; a
-   mezők nyilai egy egész szinttel léptetnek. Hibás érték esetén piros üzenet
+   mezők nyilai egy egész szinttel léptetnek. A célitemlevel nem kötelező, két
+   tizedesjegyig adható meg (pl. `326,55`). Hibás érték esetén piros üzenet
    jelzi, mi a gond. A helyes beállításokat a program azonnal menti. A két
    céldátum melletti „Kiszámolás a mostani szintekből” gomb a karakterek eddigi
    tempójából számolja ki az első és az utolsó céldátumot (lásd lent); beállítás

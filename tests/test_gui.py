@@ -487,6 +487,27 @@ class GuiTests(unittest.TestCase):
             self.app.estimate_target_dates()
         self.assertIn("Előbb javítsd ki a beállításokat", info.call_args.args[1])
 
+    def test_target_item_level_is_optional_and_saved(self):
+        self.assertEqual(self.app.target_item_level_var.get(), "")  # alapból nincs megadva
+        self.assertIsNone(self.app.data.settings.target_item_level)
+        self.app.target_item_level_var.set("330,5")
+        self.assertEqual(load_data(self.path).settings.target_item_level, D("330.50"))
+        self.assertTrue(self.app.settings_message.get().startswith("✔"))
+
+        self.app.target_item_level_var.set("330,555")
+        message = self.app.settings_message.get()
+        self.assertIn("Célitemlevel: „330,555”: az itemlevel legfeljebb két tizedesjegyű lehet.", message)
+        self.assertEqual(self.app.data.settings.target_item_level, D("330.50"))  # a hibás érték nem kerül be
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.estimate_target_dates()  # amíg hibás, a céldátumok sem állíthatók be
+        self.assertIn("Előbb javítsd ki a beállításokat", info.call_args.args[1])
+
+        self.app.target_item_level_var.set("")
+        self.assertIsNone(load_data(self.path).settings.target_item_level)
+        self.app.target_item_level_var.set("331")
+        app = self.gui.App(tk.Toplevel(self.root), self.path)  # újraindítás után is megvan
+        self.assertEqual(app.target_item_level_var.get(), "331,00")
+
     def test_invalid_settings_are_reported_and_not_applied(self):
         before = self.app.data.settings
         self.app.first_var.set("2026-02-30")

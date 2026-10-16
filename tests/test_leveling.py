@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import re
 import tempfile
@@ -665,7 +666,9 @@ class PersistenceTests(unittest.TestCase):
 
     def test_round_trip(self):
         data = LevelingData(
-            make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"),
+            dataclasses.replace(
+                make_settings(mode=SEQUENTIAL, start_level="80", target_level="90.5"), target_item_level=D("330.55")
+            ),
             [
                 Character(
                     "Thrall",
@@ -683,6 +686,7 @@ class PersistenceTests(unittest.TestCase):
         save_data(self.path, data)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(raw["characters"][0]["level"], 83.45)  # olvasható szám a fájlban
+        self.assertEqual(raw["settings"]["target_item_level"], 330.55)
         self.assertEqual(raw["characters"][0]["raiderio_score"], 2543.7)
         self.assertIsNone(raw["characters"][1]["raiderio_score"])
         self.assertEqual((raw["characters"][0]["item_level"], raw["characters"][1]["item_level"]), (327.55, None))
@@ -757,6 +761,7 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings.mode, PARALLEL)
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
+        self.assertIsNone(loaded.settings.target_item_level)  # nem kötelező
         arthas = loaded.characters[0]
         self.assertEqual(
             (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level, arthas.raiderio_score),

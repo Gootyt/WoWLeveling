@@ -231,7 +231,7 @@ def _level_from_json(value: object) -> Decimal:
 
 @dataclass
 class Settings:
-    """A szintezés időkerete, kezdő- és célszintje."""
+    """A szintezés időkerete, kezdő- és célszintje, valamint a célitemlevel."""
 
     start_date: date  # a szintezés kezdete
     first_target_date: date  # eddig kell az első karakternek elérnie a célszintet
@@ -239,6 +239,7 @@ class Settings:
     start_level: Decimal = DEFAULT_START_LEVEL  # a terv szerint innen indulnak a karakterek
     target_level: Decimal = DEFAULT_TARGET_LEVEL  # ezt kell elérniük a céldátumig
     mode: str = PARALLEL
+    target_item_level: Decimal | None = None  # a karakterek célitemlevele, ha meg van adva
 
     @classmethod
     def default(cls, today: date | None = None) -> Settings:
@@ -275,6 +276,7 @@ class Settings:
             "start_level": float(self.start_level),
             "target_level": float(self.target_level),
             "mode": self.mode,
+            "target_item_level": None if self.target_item_level is None else float(self.target_item_level),
         }
 
     @classmethod
@@ -291,6 +293,7 @@ class Settings:
             start_level=_level_from_json(data.get("start_level", DEFAULT_START_LEVEL)),
             target_level=_level_from_json(target),
             mode=mode if mode in MODES else PARALLEL,
+            target_item_level=_decimal_from_json(data.get("target_item_level"), ITEM_LEVEL_MAX, ITEM_LEVEL_STEP),
         )
 
 

@@ -949,6 +949,10 @@ class App:
         self.last_var = tk.StringVar(value=format_date(settings.last_target_date))
         self.start_level_var = tk.StringVar(value=format_level(settings.start_level))
         self.target_level_var = tk.StringVar(value=format_level(settings.target_level))
+        target_item_level = settings.target_item_level
+        self.target_item_level_var = tk.StringVar(
+            value="" if target_item_level is None else format_item_level(target_item_level)
+        )
         self.mode_var = tk.StringVar(value=settings.mode)
         self.settings_message = tk.StringVar()
         self.name_var = tk.StringVar()
@@ -969,6 +973,7 @@ class App:
             self.last_var,
             self.start_level_var,
             self.target_level_var,
+            self.target_item_level_var,
             self.mode_var,
         )
         for variable in settings_vars:
@@ -1072,9 +1077,16 @@ class App:
         ):
             field_label(settings, text, row)
             LevelSpinbox(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
-        field_label(settings, "Ütemezés:", 5, sticky="nw")
+        field_label(settings, "Célitemlevel:", 5)
+        item_level_cell = ttk.Frame(settings)
+        item_level_cell.grid(row=5, column=1, columnspan=2, sticky="w", pady=3)
+        ttk.Entry(item_level_cell, textvariable=self.target_item_level_var, width=10).pack(side="left")
+        ttk.Label(item_level_cell, text="nem kötelező (pl. 326,55)", style="Hint.TLabel").pack(
+            side="left", padx=(8, 0)
+        )
+        field_label(settings, "Ütemezés:", 6, sticky="nw")
         modes = ttk.Frame(settings)
-        modes.grid(row=5, column=1, columnspan=2, sticky="w", pady=3)
+        modes.grid(row=6, column=1, columnspan=2, sticky="w", pady=3)
         ttk.Radiobutton(
             modes,
             text="Párhuzamosan – mindegyik a kezdő naptól szintez",
@@ -1090,7 +1102,7 @@ class App:
         self.settings_message_label = ttk.Label(
             settings, textvariable=self.settings_message, wraplength=self.px(520), justify="left"
         )
-        self.settings_message_label.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.settings_message_label.grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         new = ttk.LabelFrame(body, text="Új karakter hozzáadása", padding=10)
         new.grid(row=2, column=1, sticky="nsew", padx=(12, 0))
@@ -1166,6 +1178,7 @@ class App:
             ("last_target_date", "Utolsó karakter céldátuma", self.last_var, parse_date),
             ("start_level", "Kezdőszint", self.start_level_var, parse_level),
             ("target_level", "Célszint", self.target_level_var, parse_level),
+            ("target_item_level", "Célitemlevel", self.target_item_level_var, parse_item_level),
         )
         for key, label, variable, parse in fields:
             try:
