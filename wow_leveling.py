@@ -19,6 +19,8 @@ import sys
 import threading
 import tkinter as tk
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -27,6 +29,7 @@ from tkinter import messagebox, ttk
 
 from leveling import (
     HU_MONTHS,
+    ITEM_LEVEL_MAX,
     LEVEL_MAX,
     LEVEL_MIN,
     PARALLEL,
@@ -53,6 +56,7 @@ from leveling import (
     parse_date,
     plan_item_levels,
     parse_item_level,
+    reached_target_item_level,
     parse_level,
     parse_raiderio_score,
     save_data,
@@ -222,17 +226,55 @@ class DateField(ttk.Frame):
         self.entry.icursor("end")
 
 
-class LevelSpinbox(ttk.Spinbox):
-    """Szintmező két tizedesjegy pontossággal (pl. 83,45).
+@dataclass(frozen=True)
+class NumberField:
+    """Két tizedesjegyű szám a karakteren (szint vagy itemlevel), a beolvasásához és kiírásához."""
 
-    A nyilak, a fel/le billentyűk és az egérgörgő egy egész szinttel léptetnek.
+    attribute: str  # a Character mezője
+    label: str  # a listaablak alján, a kijelölt karakternél
+    unit: str  # a léptetőgomb felirata: „+1 <unit>”
+    error_title: str
+    parse: Callable[[str], Decimal | None]  # hibás szövegnél ValueError
+    format: Callable[[Decimal], str]
+    minimum: Decimal
+    maximum: Decimal
+
+
+LEVEL_FIELD = NumberField(
+    "level", "Jelenlegi szint:", "szint", "Hibás szint", parse_level, format_level, LEVEL_MIN, LEVEL_MAX
+)
+# Az itemlevel üresen is hagyható (None: nincs megadva).
+ITEM_LEVEL_FIELD = NumberField(
+    "item_level",
+    "Itemlevel:",
+    "itemlevel",
+    "Hibás itemlevel",
+    parse_item_level,
+    format_item_level,
+    Decimal(0),
+    ITEM_LEVEL_MAX,
+)
+
+
+class NumberSpinbox(ttk.Spinbox):
+    """Szám két tizedesjegy pontossággal (pl. 83,45), alapból szint.
+
+    A nyilak, a fel/le billentyűk és az egérgörgő egy egésszel léptetnek.
     """
 
-    def __init__(self, master: tk.Misc, variable: tk.StringVar, on_step=None, empty_value=None) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        variable: tk.StringVar,
+        on_step=None,
+        empty_value=None,
+        field: NumberField = LEVEL_FIELD,
+    ) -> None:
         super().__init__(master, textvariable=variable, width=8)
         self._variable = variable
         self._on_step = on_step  # léptetés után hívódik meg
         self._empty_value = empty_value  # üres mezőnél innen indul a léptetés
+        self._field = field
         # A Tk saját léptetése nem ismeri a tizedesvesszőt, ezért itt kezeljük.
         self.bind("<<Increment>>", lambda _event: self._step(1))
         self.bind("<<Decrement>>", lambda _event: self._step(-1))
@@ -243,11 +285,14 @@ class LevelSpinbox(ttk.Spinbox):
             if not text.strip() and self._empty_value is not None:
                 value = self._empty_value()
             else:
-                value = parse_level(text)
+                value = self._field.parse(text)
         except ValueError:
+            value = None
+        if value is None:  # hibás vagy üres mező
             self.bell()
             return "break"
-        self._variable.set(format_level(min(max(value + delta, LEVEL_MIN), LEVEL_MAX)))
+        field = self._field
+        self._variable.set(field.format(min(max(value + delta, field.minimum), field.maximum)))
         if self._on_step is not None:
             self._on_step()
         return "break"
@@ -364,7 +409,7 @@ class CharacterDialog(tk.Toplevel):
         body.pack(fill="both", expand=True)
         item_level_entry = ttk.Entry(body, textvariable=self.item_level_var, width=10)
         score_entry = ttk.Entry(body, textvariable=self.raiderio_var, width=10)
-        level_box = LevelSpinbox(body, self.level_var)
+        level_box = NumberSpinbox(body, self.level_var)
         rows = (
             ("Név:", ttk.Entry(body, textvariable=self.name_var, width=26)),
             ("Realm:", ttk.Combobox(body, textvariable=self.realm_var, values=realms or [], width=24)),
@@ -476,6 +521,7 @@ class CharacterListWindow(tk.Toplevel):
     # (a rendezés az ablak bezárása után is megmarad).
     WINDOW_ATTRIBUTE = "list_window"
     SORT_ATTRIBUTE = "list_sort"
+    EDITED_FIELD = LEVEL_FIELD  # ezt lehet módosítani az ablak alján a kijelölt karakternél
     HINT_TEXT = (
         "A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie a célszintet. "
         "A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor a következő "
@@ -513,7 +559,7 @@ class CharacterListWindow(tk.Toplevel):
         self.header_var = tk.StringVar()
         self.summary_var = tk.StringVar()
         self.selected_var = tk.StringVar()
-        self.level_var = tk.StringVar()
+        self.value_var = tk.StringVar()  # a kijelölt karakter módosítható száma (lásd EDITED_FIELD)
         self.order_hint_var = tk.StringVar()
         self.day_var = tk.StringVar()
         self.look_ahead_var = tk.BooleanVar(value=app.data.look_ahead)
@@ -591,20 +637,21 @@ class CharacterListWindow(tk.Toplevel):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Delete>", lambda _event: self.delete_selected())
         for key, delta in (("<plus>", 1), ("<KP_Add>", 1), ("<minus>", -1), ("<KP_Subtract>", -1)):
-            self.tree.bind(key, lambda _event, delta=delta: self.change_level(delta))
+            self.tree.bind(key, lambda _event, delta=delta: self.change_value(delta))
 
         selected = ttk.LabelFrame(body, text="Kijelölt karakter", padding=8)
         selected.pack(fill="x", pady=(10, 0))
-        level_row = ttk.Frame(selected)
-        level_row.pack(fill="x")
-        ttk.Label(level_row, textvariable=self.selected_var, style="Strong.TLabel", width=-30).pack(side="left")
-        ttk.Label(level_row, text="Jelenlegi szint:").pack(side="left", padx=(12, 4))
-        self.level_spin = LevelSpinbox(level_row, self.level_var, on_step=self.apply_level)
-        self.level_spin.pack(side="left")
-        self.level_spin.bind("<Return>", lambda _event: self.apply_level())
-        set_button = ttk.Button(level_row, text="Beállítás", command=self.apply_level)
+        value_row = ttk.Frame(selected)
+        value_row.pack(fill="x")
+        field = self.EDITED_FIELD
+        ttk.Label(value_row, textvariable=self.selected_var, style="Strong.TLabel", width=-30).pack(side="left")
+        ttk.Label(value_row, text=field.label).pack(side="left", padx=(12, 4))
+        self.value_spin = NumberSpinbox(value_row, self.value_var, on_step=self.apply_value, field=field)
+        self.value_spin.pack(side="left")
+        self.value_spin.bind("<Return>", lambda _event: self.apply_value())
+        set_button = ttk.Button(value_row, text="Beállítás", command=self.apply_value)
         set_button.pack(side="left", padx=(6, 0))
-        plus_button = ttk.Button(level_row, text="+1 szint", command=lambda: self.change_level(1))
+        plus_button = ttk.Button(value_row, text=f"+1 {field.unit}", command=lambda: self.change_value(1))
         plus_button.pack(side="left", padx=(6, 0))
 
         action_row = ttk.Frame(selected)
@@ -619,7 +666,7 @@ class CharacterListWindow(tk.Toplevel):
         for button in (up_button, down_button, self.murlok_order_button, edit_button, delete_button):
             button.pack(side="left", padx=(0, 6))
         ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel").pack(side="left", padx=(6, 0))
-        self._selection_widgets = (self.level_spin, set_button, plus_button, edit_button, delete_button)
+        self._selection_widgets = (self.value_spin, set_button, plus_button, edit_button, delete_button)
         self._order_widgets = (up_button, down_button)  # csak az eredeti sorrendben használhatók
 
         footer = ttk.Frame(body)
@@ -646,7 +693,7 @@ class CharacterListWindow(tk.Toplevel):
         goal_day = lookahead_day(settings, data.characters, today) if data.look_ahead else today
         sort_key, descending = self.view_sort
         plans = build_plan(settings, data.characters, today, data.spec_scores, goal_day)
-        plans = sort_plans(plans, sort_key, descending)
+        plans = sort_plans(self._shown_plans(plans), sort_key, descending)
         keep = select.uid if select is not None else next(iter(self.tree.selection()), None)
 
         self.tree.delete(*self.tree.get_children())
@@ -660,7 +707,7 @@ class CharacterListWindow(tk.Toplevel):
             text = headings.get(key, heading)
             self.tree.heading(key, text=text + (SORT_ARROWS[descending] if key == sort_key else ""))
         shown = [column[0] for column in self.COLUMNS]
-        if settings.mode == PARALLEL:  # párhuzamos ütemezésnél mindenki ugyanakkor kezd
+        if settings.mode == PARALLEL and "start" in shown:  # párhuzamos ütemezésnél mindenki ugyanakkor kezd
             shown.remove("start")
         self.tree.configure(displaycolumns=shown)
         self._fit_columns(rows, headings, shown)
@@ -713,6 +760,10 @@ class CharacterListWindow(tk.Toplevel):
         if missing > 0:
             limit = self.winfo_screenwidth() - self.app.px(40)
             self.geometry(f"{min(self.winfo_width() + missing, limit)}x{self.winfo_height()}")
+
+    def _shown_plans(self, plans: list[CharacterPlan]) -> list[CharacterPlan]:
+        """A listában megjelenő sorok (itt mind)."""
+        return plans
 
     @classmethod
     def _row_values(cls, plan: CharacterPlan) -> tuple:
@@ -784,10 +835,10 @@ class CharacterListWindow(tk.Toplevel):
         self.order_hint_var.set("" if in_plan_order else "Az átrendezéshez rendezd a listát a # oszlop szerint.")
         if character is None:
             self.selected_var.set("– nincs kijelölve –")
-            self.level_var.set("")
+            self.value_var.set("")
         else:
             self.selected_var.set(describe_character(character))
-            self.level_var.set(format_level(character.level))
+            self._show_value(character)
 
     def sort_by(self, key: str) -> None:
         """Rendezés oszlop szerint; ugyanarra az oszlopra kattintva megfordul az irány."""
@@ -802,29 +853,41 @@ class CharacterListWindow(tk.Toplevel):
             self._sync_selection()
             self.edit_selected()
 
-    def apply_level(self) -> None:
+    def _show_value(self, character: Character) -> None:
+        value = getattr(character, self.EDITED_FIELD.attribute)
+        self.value_var.set("" if value is None else self.EDITED_FIELD.format(value))
+
+    def apply_value(self) -> None:
+        """A kijelölt karakter beírt szintjének (a Gear ablakban itemlevelének) beállítása."""
         character = self._selected_character()
         if character is None:
             return
+        field = self.EDITED_FIELD
         try:
-            level = parse_level(self.level_var.get())
+            value = field.parse(self.value_var.get())
         except ValueError as exc:
-            messagebox.showwarning("Hibás szint", str(exc), parent=self)
-            self.level_var.set(format_level(character.level))
+            messagebox.showwarning(field.error_title, str(exc), parent=self)
+            self._show_value(character)
             return
-        self._set_level(character, level)
+        self._set_value(character, value)
 
-    def change_level(self, delta: int) -> None:
-        """Egész szintnyi léptetés; a szint a kezdő- és célszinten kívül is lehet."""
+    def change_value(self, delta: int) -> None:
+        """Léptetés egy egésszel; a szint a kezdő- és célszinten kívül is lehet."""
         character = self._selected_character()
-        if character is not None:
-            self._set_level(character, min(max(character.level + delta, LEVEL_MIN), LEVEL_MAX))
-
-    def _set_level(self, character: Character, level: Decimal) -> None:
-        if level == character.level:
-            self.level_var.set(format_level(level))
+        if character is None:
             return
-        character.level = level
+        field = self.EDITED_FIELD
+        value = getattr(character, field.attribute)
+        if value is None:  # pl. még nincs megadva itemlevel
+            self.bell()
+            return
+        self._set_value(character, min(max(value + delta, field.minimum), field.maximum))
+
+    def _set_value(self, character: Character, value: Decimal | None) -> None:
+        if value == getattr(character, self.EDITED_FIELD.attribute):
+            self._show_value(character)
+            return
+        setattr(character, self.EDITED_FIELD.attribute, value)
         self.app.data_changed(select=character)
 
     def order_by_murlok(self) -> None:
@@ -924,6 +987,7 @@ GEAR_COLUMNS = (
     ("planned_item_level", "Tervezett itemlevel", "center", False),
     ("item_level_deviation", "Itemlevel-eltérés", "center", False),
 )
+GEAR_HIDDEN_COLUMNS = ("level", "deadline", "goal", "deviation")  # ezek a Gear ablakban nem látszanak
 
 
 def item_level_step_text(step: Decimal) -> str:
@@ -940,10 +1004,13 @@ class GearWindow(CharacterListWindow):
     TITLE = "Gear"
     WINDOW_ATTRIBUTE = "gear_window"
     SORT_ATTRIBUTE = "gear_sort"
-    # Az „Itemlevel” után a tervezett itemlevel és az eltérés.
+    EDITED_FIELD = ITEM_LEVEL_FIELD
+    # A karakterlista oszlopai a szinttel kapcsolatosak nélkül; az „Itemlevel” után a
+    # tervezett itemlevel és az eltérés.
     COLUMNS = tuple(
         column
         for base in CharacterListWindow.COLUMNS
+        if base[0] not in GEAR_HIDDEN_COLUMNS
         for column in ((base, *GEAR_COLUMNS) if base[0] == "item_level" else (base,))
     )
     HINT_TEXT = (
@@ -951,7 +1018,8 @@ class GearWindow(CharacterListWindow):
         "első karakterénél a célitemlevel − X, minden következőnél újabb X-szel kevesebb. Az "
         "„Itemlevel-eltérés” a valós és a tervezett itemlevel különbsége (+: a terv felett, −: alatta); a "
         "táblázat alapból eszerint van rendezve. X-et a program úgy állítja be, hogy a 2. sorban 0 legyen az "
-        "eltérés, így az 1. sorban negatív. A fejlécekre kattintva más oszlop szerint is rendezheted."
+        "eltérés, így az 1. sorban negatív. Aki elérte a célitemlevelt, lekerül a listáról, és a többiekkel "
+        "számol tovább. A fejlécekre kattintva más oszlop szerint is rendezheted."
     )
 
     def _build(self) -> None:
@@ -960,18 +1028,30 @@ class GearWindow(CharacterListWindow):
         self.gear_info_label = ttk.Label(self.table_frame.master, textvariable=self.gear_info_var)
         self.gear_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
 
+    def _shown_plans(self, plans: list[CharacterPlan]) -> list[CharacterPlan]:
+        """A célitemlevelt már elért karakterek lekerülnek a listáról."""
+        target = self.app.data.settings.target_item_level
+        return [plan for plan in plans if not reached_target_item_level(plan.character, target)]
+
+    def _summary(self, plans: list[CharacterPlan], goal_day: date, today: date) -> str:
+        if not plans and self.app.data.characters:
+            return "Minden karakter elérte a célitemlevelt, ezért egyik sem látszik a listán."
+        return super()._summary(plans, goal_day, today)
+
     def refresh(self, select: Character | None = None) -> None:
         super().refresh(select)
         data = self.app.data
         target = data.settings.target_item_level
         item_levels = plan_item_levels(data.characters, data.spec_scores, target)
+        reached = len(item_levels.reached)
+        reached_text = f"   ·   Célitemlevelen (nem látszik a listán): {reached} karakter" if reached else ""
         if item_levels.step is None:
-            self.gear_info_var.set(f"Tervezett itemlevel: {item_levels.problem}")
+            self.gear_info_var.set(f"Tervezett itemlevel: {item_levels.problem}{reached_text}")
             self.gear_info_label.configure(style="Late.TLabel")
         else:
             self.gear_info_var.set(
                 f"Célitemlevel: {format_item_level(target)}   ·   X = {item_level_step_text(item_levels.step)} "
-                "(ennyivel csökken a tervezett itemlevel karakterenként)"
+                f"(ennyivel csökken a tervezett itemlevel karakterenként){reached_text}"
             )
             self.gear_info_label.configure(style="Strong.TLabel")
 
@@ -1134,7 +1214,7 @@ class App:
             (("Kezdőszint:", self.start_level_var), ("Célszint:", self.target_level_var)), start=3
         ):
             field_label(settings, text, row)
-            LevelSpinbox(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
+            NumberSpinbox(settings, variable).grid(row=row, column=1, sticky="w", pady=3)
         field_label(settings, "Célitemlevel:", 5)
         item_level_cell = ttk.Frame(settings)
         item_level_cell.grid(row=5, column=1, columnspan=2, sticky="w", pady=3)
@@ -1174,7 +1254,7 @@ class App:
         self.spec_box = ttk.Combobox(new, textvariable=self.spec_var, width=24)
         link_spec_to_class(self.class_var, self.spec_var, self.spec_box)
         level_cell = ttk.Frame(new)
-        level_box = LevelSpinbox(
+        level_box = NumberSpinbox(
             level_cell, self.new_level_var, empty_value=lambda: self.data.settings.start_level
         )
         level_box.pack(side="left")
@@ -1222,7 +1302,7 @@ class App:
         footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
         ttk.Button(footer, text="Gear", command=self.open_gear).pack(side="right", anchor="n")
-        ttk.Button(footer, text="Karakterlista megnyitása…", command=self.open_list).pack(
+        ttk.Button(footer, text="Karakterlista", command=self.open_list).pack(
             side="right", anchor="n", padx=(0, 6)
         )
 

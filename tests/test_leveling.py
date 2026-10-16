@@ -685,13 +685,20 @@ class ItemLevelPlanTests(unittest.TestCase):
         deviations = sorted(plan.deviation(c) for c in characters)
         self.assertEqual(deviations, [D("-3.58"), D("0.00"), D("1.83"), D("2.83")])
 
-    def test_unusual_values(self):
-        # Ha szinte mindenki a célitemlevel felett van, X negatív: a tervezett érték lefelé haladva nő.
-        characters = [Character(name, item_level=D(ilvl)) for name, ilvl in (("A", "340"), ("B", "335"), ("C", "320"))]
-        plan = plan_item_levels(characters, SpecScores(), D("330"))
-        self.assertEqual(plan.step, D("-2.5"))
-        self.assertEqual(sorted(plan.deviation(c) for c in characters), [D("-17.50"), D("0.00"), D("7.50")])
-        # A tervezett itemlevel nem lehet negatív.
+    def test_characters_at_the_target_are_left_out(self):
+        characters = self.characters("321", "330", "310", None)  # B elérte a célitemlevelt
+        plan = plan_item_levels(characters, self.SCORES, D("330"))
+        self.assertEqual(plan.reached, (characters[1],))
+        self.assertNotIn(characters[1], plan.planned)
+        self.assertIsNone(plan.deviation(characters[1]))
+        # A maradék sorrendje: A (1.), C (2.), D (3.); (330 − 321)/1 = 9, (330 − 310)/2 = 10 → X = 9.
+        self.assertEqual(plan.step, D("9"))
+        self.assertEqual([plan.planned.get(c) for c in characters], [D("321.00"), None, D("312.00"), D("303.00")])
+        everyone = plan_item_levels(self.characters("331", "330", None, None)[:2], self.SCORES, D("330"))
+        self.assertEqual(everyone.problem, "minden karakter elérte a célitemlevelt.")
+        self.assertEqual(len(everyone.reached), 2)
+
+    def test_planned_item_level_is_not_negative(self):
         characters = [Character(name, item_level=D(ilvl)) for name, ilvl in (("A", "0"), ("B", "2"), ("C", "9"))]
         plan = plan_item_levels(characters, SpecScores(), D("10"))
         self.assertEqual([plan.planned[c] for c in characters], [D("6.00"), D("2.00"), D("0")])
@@ -701,7 +708,9 @@ class ItemLevelPlanTests(unittest.TestCase):
         self.assertIn("nincs megadva célitemlevel", plan_item_levels(characters, self.SCORES, None).problem)
         plan = plan_item_levels(characters, self.SCORES, D("330"))
         self.assertIsNone(plan.step)
-        self.assertEqual(plan.problem, "legalább két karakternél meg kell adni az itemlevelt.")
+        self.assertEqual(
+            plan.problem, "legalább két, a célitemlevel alatti karakternél meg kell adni az itemlevelt."
+        )
         self.assertIsNone(plan.deviation(characters[0]))
 
     def test_plans_carry_the_item_level_columns(self):

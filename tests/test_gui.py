@@ -62,6 +62,27 @@ class GuiTests(unittest.TestCase):
     def names(self, window=None):
         return [row["name"] for row in self.rows(window)]
 
+    def double_click(self, window, character):
+        """Dupla kattintás a karakter során; visszaadja, hány szerkesztőablak nyílt meg."""
+        window.update()
+        tree = window.tree
+        x, y, _width, height = tree.bbox(character.uid, "name")
+        opened = []
+
+        def close_dialogs():
+            dialogs = [child for child in window.winfo_children() if isinstance(child, self.gui.CharacterDialog)]
+            opened.append(len(dialogs))
+            for dialog in dialogs:
+                dialog.destroy()
+
+        job = self.root.after(200, close_dialogs)  # a megnyílt (modális) ablak közben fut le
+        for _ in range(2):
+            tree.event_generate("<ButtonPress-1>", x=x + 5, y=y + height // 2)
+            tree.event_generate("<ButtonRelease-1>", x=x + 5, y=y + height // 2)
+        if not opened:
+            self.root.after_cancel(job)
+        return sum(opened)
+
     def find_button(self, widget, text):
         """A widget alatt az adott feliratú gomb (vagy None)."""
         for child in widget.winfo_children():
@@ -73,7 +94,10 @@ class GuiTests(unittest.TestCase):
         return None
 
     def select(self, character):
-        window = self.app.list_window
+        self.select_in(self.app.list_window, character)
+
+    @staticmethod
+    def select_in(window, character):
         window.tree.selection_set(character.uid)
         window._sync_selection()
 
@@ -97,6 +121,22 @@ class GuiTests(unittest.TestCase):
         window.close()
         self.assertIsNone(self.app.list_window)
 
+    def test_main_window_buttons(self):
+        self.assertIsNotNone(self.find_button(self.root, "Karakterlista"))
+        self.assertIsNone(self.find_button(self.root, "Karakterlista megnyitása…"))
+        self.find_button(self.root, "Karakterlista").invoke()
+        self.assertIsNotNone(self.app.list_window)
+
+    def test_double_click_opens_the_editor_in_both_windows(self):
+        self.add("Thrall", "Jaina")
+        jaina = self.app.data.characters[1]
+        for open_window in (self.app.open_list, self.app.open_gear):
+            open_window()
+        for window in (self.app.list_window, self.app.gear_window):
+            with self.subTest(window=window.TITLE):
+                self.assertEqual(self.double_click(window, jaina), 1)
+                self.assertEqual(window.tree.selection(), (jaina.uid,))
+
     def test_gear_button_opens_a_separate_copy_of_the_list(self):
         self.add("Thrall", "Jaina")
         self.find_button(self.root, "Gear").invoke()
@@ -110,8 +150,14 @@ class GuiTests(unittest.TestCase):
 
         self.app.open_list()
         window = self.app.list_window
-        list_rows = self.rows(window)  # a karakterlista oszlopai a Gear ablakban is ugyanazt mutatják
-        self.assertEqual([{key: row[key] for key in list_rows[0]} for row in self.rows(gear)], list_rows)
+        # A közös oszlopok a Gear ablakban is ugyanazt mutatják; a szinttel kapcsolatosak ott nincsenek.
+        gear_rows, list_rows = self.rows(gear), self.rows(window)
+        common = [key for key in gear_rows[0] if key in list_rows[0]]
+        self.assertEqual(
+            [{key: row[key] for key in common} for row in gear_rows],
+            [{key: row[key] for key in common} for row in list_rows],
+        )
+        self.assertFalse({"level", "deadline", "goal", "deviation"} & set(gear_rows[0]))
         self.assertEqual((self.app.gear_sort, self.app.list_sort), (self.gui.GEAR_ORDER, self.gui.PLAN_ORDER))
         gear.sort_by("name")  # saját rendezése van
         self.assertEqual((self.names(gear), self.names(window)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
@@ -159,8 +205,48 @@ class GuiTests(unittest.TestCase):
             "Célitemlevel: 330,00   ·   X = 5,00 (ennyivel csökken a tervezett itemlevel karakterenként)",
         )
 
+        # Az ablak alján az itemlevel módosítható; aki eléri a célitemlevelt, lekerül a listáról.
+        self.assertEqual(gear.EDITED_FIELD.label, "Itemlevel:")
+        uther = self.app.data.characters[1]
+        self.select_in(gear, uther)
+        self.assertEqual(gear.value_var.get(), "325,00")
+        gear.change_value(1)  # „+1 itemlevel”
+        self.assertEqual(load_data(self.path).characters[1].item_level, D("326.00"))
+        gear.value_var.set("330")
+        gear.apply_value()
+        self.assertEqual(uther.item_level, D("330.00"))
+        self.assertEqual(self.names(gear), ["Varian", "Jaina", "Anduin"])
+        # A maradék sorrend: Jaina (1.), Varian (2.), Anduin; (330 − 321)/1 = 9, (330 − 310)/2 = 10 → X = 9.
+        self.assertEqual(
+            [(row["planned_item_level"], row["item_level_deviation"]) for row in self.rows(gear)],
+            [("312,00", "−2,00"), ("321,00", "0,00"), ("303,00", "–")],
+        )
+        self.assertIn("Célitemlevelen (nem látszik a listán): 1 karakter", gear.gear_info_var.get())
+        self.assertIn("X = 9,00", gear.gear_info_var.get())
+        anduin = self.app.data.characters[3]
+        self.select_in(gear, anduin)
+        self.assertEqual(gear.value_var.get(), "")  # még nincs itemlevele
+        gear.change_value(1)  # nincs mit léptetni
+        self.assertIsNone(anduin.item_level)
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            gear.value_var.set("sok")
+            gear.apply_value()
+        self.assertEqual(warning.call_args.args[0], "Hibás itemlevel")
+        gear.value_var.set("305,5")
+        gear.apply_value()
+        self.assertEqual(load_data(self.path).characters[3].item_level, D("305.50"))
+        self.assertEqual(anduin.level, D("1.00"))  # a szint nem változott
+
+        self.app.target_item_level_var.set("300")  # mindenki elérte
+        self.assertEqual(self.rows(gear), [])
+        self.assertEqual(
+            gear.summary_var.get(), "Minden karakter elérte a célitemlevelt, ezért egyik sem látszik a listán."
+        )
+        self.assertIn("minden karakter elérte a célitemlevelt", gear.gear_info_var.get())
+
         self.app.target_item_level_var.set("")  # célitemlevel nélkül nincs terv
         self.assertEqual({row["planned_item_level"] for row in self.rows(gear)}, {"–"})
+        self.assertEqual(len(self.rows(gear)), 4)  # célitemlevel nélkül senki sem kerül le
         self.assertEqual(
             gear.gear_info_var.get(), "Tervezett itemlevel: nincs megadva célitemlevel (a főablakban adhatod meg)."
         )
@@ -338,8 +424,8 @@ class GuiTests(unittest.TestCase):
         window.look_ahead_var.set(True)
         window._toggle_look_ahead()
         self.select(self.app.data.characters[0])
-        window.level_var.set("27,7")  # a mai, a holnapi és a holnaputáni cél is megvan
-        window.apply_level()
+        window.value_var.set("27,7")  # a mai, a holnapi és a holnaputáni cél is megvan
+        window.apply_value()
         goal_day = today + timedelta(days=3)
         self.assertEqual(view()[:2], (f"Cél ({goal_day:%m-%d})", "36,60"))
         self.assertEqual(
@@ -430,8 +516,8 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(str(window.day_label.cget("style")), "Late.TLabel")
 
         self.select(self.app.data.characters[0])
-        window.level_var.set("70")
-        window.apply_level()
+        window.value_var.set("70")
+        window.apply_value()
         self.assertTrue(window.day_var.get().endswith("A karakter a 7. nap szintjén áll – 2 nappal a terv előtt."))
         self.assertEqual(str(window.day_label.cget("style")), "Good.TLabel")
 
@@ -568,7 +654,7 @@ class GuiTests(unittest.TestCase):
 
     def test_level_fields_step_by_whole_levels(self):
         variable = tk.StringVar(value="83,45")
-        field = self.gui.LevelSpinbox(self.root, variable, empty_value=lambda: D("80"))
+        field = self.gui.NumberSpinbox(self.root, variable, empty_value=lambda: D("80"))
         field.event_generate("<<Increment>>")
         self.assertEqual(variable.get(), "84,45")
         field.event_generate("<<Decrement>>")
@@ -660,8 +746,8 @@ class GuiTests(unittest.TestCase):
         self.assertEqual([c.name for c in self.app.data.characters], ["Thrall", "Jaina", "Arthas", "Sylvanas"])
 
         # Szintmódosítás után újrarendeződik, a kijelölés megmarad.
-        window.level_var.set("1")
-        window.apply_level()  # Jaina: 1 − 6,23 = −5,23, a nézet végére kerül
+        window.value_var.set("1")
+        window.apply_value()  # Jaina: 1 − 6,23 = −5,23, a nézet végére kerül
         self.assertEqual(self.names(), ["Arthas", "Sylvanas", "Thrall", "Jaina"])
         self.assertEqual(tree.selection(), (jaina.uid,))
 
@@ -691,22 +777,22 @@ class GuiTests(unittest.TestCase):
         thrall = self.app.data.characters[0]
         self.select(thrall)
 
-        window.change_level(1)
+        window.change_value(1)
         self.assertEqual(thrall.level, D("2.00"))
-        window.level_var.set("35,5")
-        window.apply_level()
+        window.value_var.set("35,5")
+        window.apply_value()
         self.assertEqual(thrall.level, D("35.50"))
-        self.assertEqual(window.level_var.get(), "35,50")
+        self.assertEqual(window.value_var.get(), "35,50")
         self.assertEqual(load_data(self.path).characters[0].level, D("35.50"))
-        window.level_spin.event_generate("<<Increment>>")  # a nyíl azonnal menti is
+        window.value_spin.event_generate("<<Increment>>")  # a nyíl azonnal menti is
         self.assertEqual(load_data(self.path).characters[0].level, D("36.50"))
         with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
-            window.level_var.set("35,555")
-            window.apply_level()
+            window.value_var.set("35,555")
+            window.apply_value()
         warning.assert_called_once()
         self.assertEqual(thrall.level, D("36.50"))
-        window.level_var.set("95")  # a célszint felett is lehet
-        window.apply_level()
+        window.value_var.set("95")  # a célszint felett is lehet
+        window.apply_value()
         self.assertEqual(thrall.level, D("95.00"))
 
         window.move_selected(1)

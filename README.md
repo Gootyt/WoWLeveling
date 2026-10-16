@@ -19,10 +19,12 @@ megtervezéséhez és követéséhez.
   frakcióban (Alliance vagy Horde), amilyenből a legkevesebb (vagy egyáltalán
   nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
   páncéltípus, kaszt, spec és faj szerint.
-- A főablak **Gear** gombja a karakterlista egy másolatát nyitja meg külön
-  ablakban, saját rendezéssel. Ebben az „Itemlevel” oszlop után a **tervezett
-  itemlevel** és az **itemlevel-eltérés** is látszik, és alapból az eltérés szerint
-  rendez (lásd lent).
+- A főablak **Gear** gombja a karakterlista egy változatát nyitja meg külön
+  ablakban, saját rendezéssel. Ebben a szinttel kapcsolatos oszlopok (szint,
+  céldátum, mai cél, szinteltérés) helyett az „Itemlevel” után a **tervezett
+  itemlevel** és az **itemlevel-eltérés** látszik, alapból az eltérés szerint
+  rendezve (lásd lent). A kijelölt karakternek itt az itemlevele módosítható, és aki
+  elérte a célitemlevelt, lekerül a listáról.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -86,15 +88,17 @@ python wow_leveling.py masik_terv.json
    „Combó ajánlása…” gomb megkérdezi, hogy Alliance vagy Horde karaktert
    ajánljon, majd javasol egy combót (lásd lent), és kérésre kitölti vele a faj, a
    kaszt és a spec mezőt.
-3. **Karakterlista megnyitása…**: a lista külön ablakban nyílik meg, és minden
-   változásra azonnal frissül. A mellette lévő **Gear** gomb a lista másolatát
-   nyitja meg egy másik ablakban: ugyanazt tudja, a rendezése független a
-   karakterlistáétól, és a tervezett itemlevel oszlopai is benne vannak.
+3. **Karakterlista**: a lista külön ablakban nyílik meg, és minden változásra
+   azonnal frissül. A mellette lévő **Gear** gomb a lista Gear változatát nyitja meg
+   egy másik ablakban: a rendezése független a karakterlistáétól, a szinttel
+   kapcsolatos oszlopok helyett a tervezett itemlevel oszlopai vannak benne, és a
+   célitemlevelt elért karakterek nem látszanak.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
-   Dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden adata
-   módosítható.
+   A Gear ablakban ugyanígy az itemlevel állítható („+1 itemlevel”). Mindkét
+   ablakban dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden
+   adata módosítható.
 5. **Rendezés**: kattints egy oszlop fejlécére; újabb kattintásra megfordul az
    irány (a fejlécben ▲ = növekvő, ▼ = csökkenő). A rendezés csak a nézetet
    változtatja meg, a karakterek sorrendjét nem. A # oszlopra kattintva visszakapod
@@ -189,11 +193,12 @@ a 2. sorban 0 legyen az eltérés, így az 1. sorban negatív: a (célitemlevel 
 itemlevel) / sorszám hányadosok közül a második legnagyobb. X értéke a táblázat
 fölött látszik.
 
+- Aki elérte a célitemlevelt, lekerül a Gear listáról, és a program a maradék
+  karakterekkel számol: a sorrend, a sorszámok és X is csak belőlük adódik. Hogy
+  hány karakter került így le, a táblázat fölött látszik.
 - Csak a megadott itemlevelű karakterek számítanak bele X-be, de tervezett
-  itemlevelet minden karakter kap. Kell hozzá célitemlevel (a főablakban) és
-  legalább két karakternél itemlevel.
-- Ha szinte minden karakter a célitemlevel felett van, X negatív lehet; ilyenkor a
-  tervezett itemlevel a sorrendben lefelé haladva nő.
+  itemlevelet minden (listán maradt) karakter kap. Kell hozzá célitemlevel (a
+  főablakban) és legalább két, a célitemlevel alatti karakternél itemlevel.
 - Murlok.io-pontszámok nélkül a sorrend a lista sorrendje.
 
 **Combó ajánlása.** A választott frakcióban létrehozható class/spec/faj combók

@@ -900,13 +900,23 @@ def murlok_order(characters: list[Character], spec_scores: SpecScores) -> list[C
     return order + unranked
 
 
+def reached_target_item_level(character: Character, target_item_level: Decimal | None) -> bool:
+    """Elérte-e a karakter a célitemlevelt (ha mindkettő ismert)."""
+    return (
+        target_item_level is not None
+        and character.item_level is not None
+        and character.item_level >= target_item_level
+    )
+
+
 @dataclass(frozen=True)
 class ItemLevelPlan:
     """A karakterek tervezett itemlevele (lásd plan_item_levels)."""
 
     step: Decimal | None  # X: ennyivel kisebb a tervezett itemlevel karakterenként (None: nem számolható)
-    planned: dict  # karakter → tervezett itemlevel
+    planned: dict  # karakter → tervezett itemlevel (a célitemlevelt már elértek nincsenek benne)
     problem: str = ""  # ha nem számolható, miért nem
+    reached: tuple = ()  # a célitemlevelt már elért karakterek; ők kimaradnak a tervből
 
     def deviation(self, character: Character) -> Decimal | None:
         """Valós − tervezett itemlevel (None, ha valamelyik nem ismert)."""
@@ -921,16 +931,21 @@ def plan_item_levels(
 ) -> ItemLevelPlan:
     """Tervezett itemlevel a Murlok.io szerinti sorrend (lásd murlok_order) alapján.
 
-    Az első karakteré a célitemlevel − X, a másodiké az elsőénél is X-szel kevesebb,
-    és így tovább: a k-adiké célitemlevel − k·X (legalább 0). X-et úgy választja, hogy
-    az itemlevel-eltérés (valós − tervezett) szerint növekvő sorrendben a második
-    helyen pontosan 0 álljon, így az elsőn negatív érték. Mivel a k-adik karakter
-    eltérése k·(X − (célitemlevel − itemlevel) / k), ez a hányadosok közül a második
-    legnagyobb (csak a megadott itemlevelű karaktereket nézve).
+    A célitemlevelt már elért karakterek kimaradnak, a sorrend és X csak a többiekből
+    adódik. Az első karakteré a célitemlevel − X, a másodiké az elsőénél is X-szel
+    kevesebb, és így tovább: a k-adiké célitemlevel − k·X (legalább 0). X-et úgy
+    választja, hogy az itemlevel-eltérés (valós − tervezett) szerint növekvő
+    sorrendben a második helyen pontosan 0 álljon, így az elsőn negatív érték. Mivel
+    a k-adik karakter eltérése k·(X − (célitemlevel − itemlevel) / k), ez a hányadosok
+    közül a második legnagyobb (csak a megadott itemlevelű karaktereket nézve).
     """
     if target_item_level is None:
         return ItemLevelPlan(None, {}, "nincs megadva célitemlevel (a főablakban adhatod meg).")
-    order = murlok_order(characters, spec_scores)
+    reached = tuple(c for c in characters if reached_target_item_level(c, target_item_level))
+    remaining = [character for character in characters if character not in reached]
+    if not remaining:
+        return ItemLevelPlan(None, {}, "minden karakter elérte a célitemlevelt.", reached)
+    order = murlok_order(remaining, spec_scores)
     ratios = sorted(
         (
             (target_item_level - character.item_level) / position
@@ -940,7 +955,8 @@ def plan_item_levels(
         reverse=True,
     )
     if len(ratios) < 2:
-        return ItemLevelPlan(None, {}, "legalább két karakternél meg kell adni az itemlevelt.")
+        problem = "legalább két, a célitemlevel alatti karakternél meg kell adni az itemlevelt."
+        return ItemLevelPlan(None, {}, problem, reached)
     step = ratios[1]
     planned = {
         character: max(
@@ -948,7 +964,7 @@ def plan_item_levels(
         )
         for position, character in enumerate(order, start=1)
     }
-    return ItemLevelPlan(step, planned)
+    return ItemLevelPlan(step, planned, "", reached)
 
 
 @dataclass
