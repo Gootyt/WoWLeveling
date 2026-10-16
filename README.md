@@ -29,7 +29,9 @@ megtervezéséhez és követéséhez.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
-  a szükséges napi tempó és az állapot (színkódolva).
+  a szükséges napi tempó és az állapot (színkódolva). A spec mellett a **role** is
+  látszik (Tank, Healer, Melee DPS vagy Ranged DPS), a specből számolva; spec
+  nélkül csak akkor, ha a kaszt minden specje ugyanaz (pl. Mage: Ranged DPS).
 - A lista alján látszik, hányadik napja tart a szintezés, és hogy a karakterek
   együtt **melyik nap szintjén állnak** (pl. „a 8. nap szintjén állnak – 3 nappal a
   mai cél mögött”).

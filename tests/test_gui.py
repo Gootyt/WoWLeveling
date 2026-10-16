@@ -291,6 +291,36 @@ class GuiTests(unittest.TestCase):
         window.sort_by("spec")  # csökkenő sorrendben is a spec nélküli karakter marad a végén
         self.assertEqual(self.names(), ["Thrall", "Jaina"])
 
+    def test_role_column_follows_the_spec(self):
+        self.add("Thrall", char_class="Shaman", spec="Enhancement")
+        self.add("Jaina", char_class="Mage")  # spec nélkül is egyértelmű: minden Mage spec ranged
+        self.add("Rexxar", char_class="Hunter")  # spec nélkül nem tudható (a Survival melee)
+        self.add("Uther", char_class="Paladin", spec="Holy")
+        self.add("Malfurion", char_class="druid", spec="guardian")
+        self.add("Kel'Thuzad", char_class="Necromancer", spec="Bone")  # ismeretlen kaszt
+        self.app.open_list()
+        window = self.app.list_window
+        columns = [column[0] for column in window.COLUMNS]
+        self.assertEqual(columns[columns.index("spec") + 1], "role")
+        self.assertEqual(window.tree.heading("role", "text"), "Role")
+        self.assertEqual(
+            {row["name"]: row["role"] for row in self.rows()},
+            {
+                "Thrall": "Melee DPS",
+                "Jaina": "Ranged DPS",
+                "Rexxar": "–",
+                "Uther": "Healer",
+                "Malfurion": "Tank",
+                "Kel'Thuzad": "–",
+            },
+        )
+        window.sort_by("role")  # tank, healer, melee, ranged, végül az ismeretlenek
+        self.assertEqual(self.names(), ["Malfurion", "Uther", "Thrall", "Jaina", "Rexxar", "Kel'Thuzad"])
+        thrall = self.app.data.characters[0]
+        thrall.spec = "Elemental"  # a role a spec változásával együtt változik
+        self.app.data_changed(select=thrall)
+        self.assertEqual({row["name"]: row["role"] for row in self.rows()}["Thrall"], "Ranged DPS")
+
     def test_realm_and_race_are_saved_and_shown(self):
         self.add("Thrall", realm="Draenor", race="Orc", char_class="Shaman", spec="Enhancement")
         self.add("Jaina", realm="Ragnaros", race="Human")
@@ -700,6 +730,7 @@ class GuiTests(unittest.TestCase):
                 "race": "–",
                 "class": "–",
                 "spec": "–",
+                "role": "–",
                 "item_level": "–",
                 "raiderio": "–",
                 "murlok": "–",
@@ -720,9 +751,9 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn("start", tree["displaycolumns"])  # párhuzamosan mindenki ugyanakkor kezd
         self.app.mode_var.set(SEQUENTIAL)
         self.assertIn("start", tree["displaycolumns"])
-        # A szint a spec és az itemlevel között látszik.
+        # A spec mellett jobbra a role, utána a szint, majd az itemlevel látszik.
         shown = list(tree["displaycolumns"])
-        self.assertEqual(shown[shown.index("spec") : shown.index("spec") + 3], ["spec", "level", "item_level"])
+        self.assertEqual(shown[shown.index("spec") : shown.index("spec") + 4], ["spec", "role", "level", "item_level"])
 
     def test_list_can_be_sorted_by_deviation(self):
         today = date.today()

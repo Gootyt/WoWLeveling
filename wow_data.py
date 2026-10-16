@@ -245,6 +245,19 @@ def find_race(text: str) -> str | None:
     return _RACE_KEYS.get(_name_key(text))
 
 
+def role_of(class_text: str, spec_text: str) -> str | None:
+    """A beírt kaszt és spec szerepe (lásd character_role); None, ha nem tudható."""
+    char_class = find_class(class_text)
+    if char_class is None:
+        return None
+    return character_role(char_class, find_spec(char_class, spec_text))
+
+
+def role_label(role: str) -> str:
+    """A szerep kiírása nagy kezdőbetűvel: „Tank”, „Healer”, „Melee DPS”, „Ranged DPS”."""
+    return role[:1].upper() + role[1:]
+
+
 def character_role(char_class: str, spec: str | None) -> str | None:
     """A (már azonosított) kaszt és spec szerepe. Spec nélkül csak akkor ismert, ha a
     kaszt minden specje ugyanazt a szerepet tölti be (pl. Mage: ranged DPS, Rogue:

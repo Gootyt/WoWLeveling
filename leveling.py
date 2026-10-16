@@ -35,6 +35,8 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidO
 from enum import Enum
 from pathlib import Path
 
+from wow_data import ROLES, role_of
+
 LEVEL_STEP = Decimal("0.01")  # a szintek két tizedesjegy pontosságúak
 RAIDERIO_STEP = Decimal("0.1")  # a Raider.io pontszám egy tizedesjegyű (pl. 2543,7)
 RAIDERIO_MAX = Decimal("99999.9")
@@ -563,6 +565,12 @@ def _text_sort_key(text: str) -> tuple[str, str]:
     return "".join(char for char in base if not unicodedata.combining(char)), folded
 
 
+def _role_sort_key(character: Character) -> int | None:
+    """Szerep szerinti sorrend: tank, healer, melee DPS, ranged DPS (ismeretlen: None)."""
+    role = role_of(character.char_class, character.spec)
+    return None if role is None else ROLES.index(role)
+
+
 # A lista oszlopai szerinti rendezési kulcsok; None: nincs érték (a lista végére kerül).
 SORT_KEYS = {
     "position": lambda plan: plan.position,
@@ -573,6 +581,7 @@ SORT_KEYS = {
         else None
     ),
     "spec": lambda plan: _text_sort_key(plan.character.spec) if plan.character.spec else None,
+    "role": lambda plan: _role_sort_key(plan.character),
     "race": lambda plan: _text_sort_key(plan.character.race) if plan.character.race else None,
     "realm": lambda plan: _text_sort_key(plan.character.realm) if plan.character.realm else None,
     "item_level": lambda plan: plan.character.item_level,

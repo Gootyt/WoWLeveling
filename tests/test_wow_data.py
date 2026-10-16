@@ -19,6 +19,8 @@ from wow_data import (
     find_class,
     find_race,
     find_spec,
+    role_label,
+    role_of,
     specs_for_class,
 )
 
@@ -64,6 +66,15 @@ class GameDataTests(unittest.TestCase):
         self.assertIsNone(character_role("Hunter", None))  # a Survival melee, a többi ranged
         self.assertIsNone(character_role("Paladin", None))  # spec nélkül nem tudható
         self.assertEqual(character_role("Paladin", "Holy"), HEALER)
+
+    def test_role_of_typed_class_and_spec(self):
+        self.assertEqual(role_of("Shaman", "Enhancement"), MELEE)
+        self.assertEqual(role_of(" demon hunter ", "devourer"), RANGED)
+        self.assertEqual(role_of("Mage", ""), RANGED)  # spec nélkül is egyértelmű
+        self.assertIsNone(role_of("Hunter", ""))  # Beast Mastery és Marksmanship ranged, a Survival melee
+        self.assertIsNone(role_of("Necromancer", "Bone"))
+        labels = [role_label(role) for role in (TANK, HEALER, MELEE, RANGED)]
+        self.assertEqual(labels, ["Tank", "Healer", "Melee DPS", "Ranged DPS"])
 
     def test_names_are_matched_loosely(self):
         self.assertEqual(find_class(" death knight "), "Death Knight")

@@ -64,7 +64,7 @@ from leveling import (
 )
 import murlok
 from recommend import recommend_combo
-from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, specs_for_class
+from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, role_label, role_of, specs_for_class
 
 APP_TITLE = "WoW szintezés tervező"
 DATA_FILE_NAME = "szintezes_adatok.json"
@@ -538,6 +538,7 @@ class CharacterListWindow(tk.Toplevel):
         ("race", "Faj", "w", False),
         ("class", "Kaszt", "w", False),
         ("spec", "Spec", "w", False),
+        ("role", "Role", "w", False),
         ("level", "Szint", "center", False),
         ("item_level", "Itemlevel", "center", False),
         ("raiderio", "Raider.io", "center", False),
@@ -773,6 +774,7 @@ class CharacterListWindow(tk.Toplevel):
     def _row_values(cls, plan: CharacterPlan) -> tuple:
         """Egy sor cellái a COLUMNS sorrendjében."""
         character = plan.character
+        role = role_of(character.char_class, character.spec)  # a specből (spec nélkül a kasztból, ha egyértelmű)
         if plan.status is Status.DONE:
             days = "–"
         elif plan.status is Status.OVERDUE:
@@ -786,6 +788,7 @@ class CharacterListWindow(tk.Toplevel):
             "race": character.race or "–",
             "class": character.char_class or "–",
             "spec": character.spec or "–",
+            "role": "–" if role is None else role_label(role),
             "level": format_level(character.level),
             "item_level": "–" if character.item_level is None else format_item_level(character.item_level),
             "planned_item_level": (

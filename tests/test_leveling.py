@@ -381,6 +381,18 @@ class SortTests(unittest.TestCase):
         self.assertEqual(self.names(sort_plans(plans, "spec")), ["D", "E", "A", "B", "C"])
         self.assertEqual(self.names(sort_plans(plans, "class")), ["E", "B", "D", "A", "C"])
 
+    def test_sort_by_role(self):
+        characters = [
+            Character("A", "Mage", "Frost"),
+            Character("B", "Hunter"),  # spec nélkül nem tudható
+            Character("C", "Warrior", "Protection"),
+            Character("D", "Rogue", "Outlaw"),
+            Character("E", "Priest", "Holy"),
+        ]
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual(self.names(sort_plans(plans, "role")), ["C", "E", "D", "A", "B"])
+        self.assertEqual(self.names(sort_plans(plans, "role", descending=True)), ["A", "D", "E", "C", "B"])
+
     def test_sort_by_race_and_realm(self):
         characters = [
             Character("A", race="Orc", realm="Ragnaros"),
