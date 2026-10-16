@@ -157,7 +157,17 @@ class GuiTests(unittest.TestCase):
             [{key: row[key] for key in common} for row in gear_rows],
             [{key: row[key] for key in common} for row in list_rows],
         )
-        self.assertFalse({"level", "deadline", "goal", "deviation"} & set(gear_rows[0]))
+        hidden = {"level", "start", "deadline", "goal", "deviation", "days", "pace", "status"}
+        self.assertFalse(hidden & set(gear_rows[0]))
+        self.assertEqual(gear_rows[0]["item_level"], "–")
+        self.assertEqual([gear.tree.item(iid, "tags") for iid in gear.tree.get_children()], ["", ""])  # nincs szín
+        # A Murlok.io-állapot szövege már a megnyitáskor megvan, így a keskenyebb ablakban sem lóg ki.
+        self.assertEqual(self.app.score_status_var.get(), "Murlok.io-pontszámok: még nincsenek lekérve")
+        gear.update_idletasks()
+        self.assertGreaterEqual(gear.winfo_width(), gear.winfo_reqwidth())
+        self.app.mode_var.set(SEQUENTIAL)  # a „Kezdés” oszlop egymás utáni ütemezésnél sem jelenik meg
+        self.assertNotIn("start", gear.tree["displaycolumns"])
+        self.assertIn("start", window.tree["displaycolumns"])
         self.assertEqual((self.app.gear_sort, self.app.list_sort), (self.gui.GEAR_ORDER, self.gui.PLAN_ORDER))
         gear.sort_by("name")  # saját rendezése van
         self.assertEqual((self.names(gear), self.names(window)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))

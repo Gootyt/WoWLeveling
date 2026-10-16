@@ -701,7 +701,7 @@ class CharacterListWindow(tk.Toplevel):
         for plan in plans:
             values = self._row_values(plan)
             rows.append(values)
-            self.tree.insert("", "end", iid=plan.character.uid, values=values, tags=(plan.status.value,))
+            self.tree.insert("", "end", iid=plan.character.uid, values=values, tags=self._row_tags(plan))
         headings = {"goal": goal_heading(goal_day, today)}
         for key, heading, *_ in self.COLUMNS:
             text = headings.get(key, heading)
@@ -764,6 +764,10 @@ class CharacterListWindow(tk.Toplevel):
     def _shown_plans(self, plans: list[CharacterPlan]) -> list[CharacterPlan]:
         """A listában megjelenő sorok (itt mind)."""
         return plans
+
+    def _row_tags(self, plan: CharacterPlan) -> tuple[str, ...]:
+        """A sor címkéi: a színe a szintezési állapotot jelzi."""
+        return (plan.status.value,)
 
     @classmethod
     def _row_values(cls, plan: CharacterPlan) -> tuple:
@@ -987,7 +991,8 @@ GEAR_COLUMNS = (
     ("planned_item_level", "Tervezett itemlevel", "center", False),
     ("item_level_deviation", "Itemlevel-eltérés", "center", False),
 )
-GEAR_HIDDEN_COLUMNS = ("level", "deadline", "goal", "deviation")  # ezek a Gear ablakban nem látszanak
+# A szintezéssel kapcsolatos oszlopok a Gear ablakban nem látszanak.
+GEAR_HIDDEN_COLUMNS = ("level", "start", "deadline", "goal", "deviation", "days", "pace", "status")
 
 
 def item_level_step_text(step: Decimal) -> str:
@@ -1027,6 +1032,9 @@ class GearWindow(CharacterListWindow):
         self.gear_info_var = tk.StringVar()
         self.gear_info_label = ttk.Label(self.table_frame.master, textvariable=self.gear_info_var)
         self.gear_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
+
+    def _row_tags(self, plan: CharacterPlan) -> tuple[str, ...]:
+        return ()  # az „Állapot” oszlop nélkül a szintezési állapot színe sem kell
 
     def _shown_plans(self, plans: list[CharacterPlan]) -> list[CharacterPlan]:
         """A célitemlevelt már elért karakterek lekerülnek a listáról."""
@@ -1117,6 +1125,7 @@ class App:
         for variable in settings_vars:
             variable.trace_add("write", self._on_settings_edited)
         self._show_settings_problems(settings.errors())
+        self._update_score_status()  # a listaablakok már a szöveggel együtt méretezik magukat
         self.refresh()
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)

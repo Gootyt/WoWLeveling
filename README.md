@@ -20,11 +20,12 @@ megtervezéséhez és követéséhez.
   nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
   páncéltípus, kaszt, spec és faj szerint.
 - A főablak **Gear** gombja a karakterlista egy változatát nyitja meg külön
-  ablakban, saját rendezéssel. Ebben a szinttel kapcsolatos oszlopok (szint,
-  céldátum, mai cél, szinteltérés) helyett az „Itemlevel” után a **tervezett
-  itemlevel** és az **itemlevel-eltérés** látszik, alapból az eltérés szerint
-  rendezve (lásd lent). A kijelölt karakternek itt az itemlevele módosítható, és aki
-  elérte a célitemlevelt, lekerül a listáról.
+  ablakban, saját rendezéssel. Ebben a szintezéssel kapcsolatos oszlopok (szint,
+  kezdés, céldátum, mai cél, szinteltérés, hátra, napi tempó, állapot) helyett az
+  „Itemlevel” után a **tervezett itemlevel** és az **itemlevel-eltérés** látszik,
+  alapból az eltérés szerint rendezve (lásd lent), és a sorok nincsenek színezve. A
+  kijelölt karakternek itt az itemlevele módosítható, és aki elérte a
+  célitemlevelt, lekerül a listáról.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -90,7 +91,7 @@ python wow_leveling.py masik_terv.json
    kaszt és a spec mezőt.
 3. **Karakterlista**: a lista külön ablakban nyílik meg, és minden változásra
    azonnal frissül. A mellette lévő **Gear** gomb a lista Gear változatát nyitja meg
-   egy másik ablakban: a rendezése független a karakterlistáétól, a szinttel
+   egy másik ablakban: a rendezése független a karakterlistáétól, a szintezéssel
    kapcsolatos oszlopok helyett a tervezett itemlevel oszlopai vannak benne, és a
    célitemlevelt elért karakterek nem látszanak.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
