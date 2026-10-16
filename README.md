@@ -16,9 +16,10 @@ megtervezéséhez és követéséhez.
   realm mező pedig a már használt realmeket. A karakterek szintje lehet a
   kezdőszint alatt vagy a célszint felett is.
 - **Combó ajánlása:** a program javasol egy class/spec/faj combót a választott
-  frakcióban (Alliance vagy Horde), amilyenből a legkevesebb (vagy egyáltalán
-  nincs) karakter van a listán – szerep (a DPS-en belül melee és ranged),
-  páncéltípus, kaszt, spec és faj szerint.
+  frakcióban (Alliance vagy Horde), amilyen leginkább hiányzik a listáról. A szerep
+  (a DPS-en belül melee és ranged) és a páncéltípus annyi százalékra törekszik,
+  amennyi az összes combóban az aránya (pl. a combók kb. 12%-a tank); a kasztból, a
+  specből és a fajból a legkevésbé használtat ajánlja.
 - A főablak **Gear** gombja a karakterlista egy változatát nyitja meg külön
   ablakban, saját rendezéssel. Ebben a szintezéssel kapcsolatos oszlopok (szint,
   kezdés, céldátum, mai cél, szinteltérés, hátra, napi tempó, állapot) helyett az
@@ -205,8 +206,8 @@ fölött látszik.
 - Murlok.io-pontszámok nélkül a sorrend a lista sorrendje.
 
 **Combó ajánlása.** A választott frakcióban létrehozható class/spec/faj combók
-közül az a javaslat, amelyből a legkevesebb van a listán. A program a meglévő
-karaktereket öt szempont szerint számolja meg, ebben a sorrendben:
+közül az a javaslat, amelyik leginkább hiányzik a listáról. A program a meglévő
+karaktereket öt szempont szerint vizsgálja, ebben a sorrendben:
 
 1. szerep (tank, healer, melee DPS, ranged DPS),
 2. páncéltípus (cloth, leather, mail, plate),
@@ -214,12 +215,24 @@ karaktereket öt szempont szerint számolja meg, ebben a sorrendben:
 4. spec,
 5. faj.
 
-Az a combó nyer, amelynek a szerepéből van a legkevesebb; ha ebben több is
-egyforma, az, amelyiknek a páncéltípusából, és így tovább. Ha minden szempont
+A **szerepnél és a páncéltípusnál** nem az egyforma darabszám a cél, hanem az az
+arány, ahogy a frakció összes class/spec/faj combója között előfordulnak. A Horde
+419 combójából például 51 tank (12%), 65 healer (16%), 149 melee DPS (36%) és 154
+ranged DPS (37%); a páncéltípusok közül 32% cloth, 26% leather, 22% plate és 19%
+mail. Az a szerep (páncéltípus) jön előbb, amelyik ettől a legjobban elmarad: ahol
+a meglévő karakterek száma a legkisebb ahhoz képest, amennyi az arány szerint egy
+újabb karakterrel együtt járna neki. Így a karakterek eloszlása lépésről lépésre a
+lehető legközelebb marad ezekhez az arányokhoz (üres listánál ezért ranged DPS és
+cloth az első). A **kasztnál, a specnél és a fajnál** az jön előbb, amelyikből a
+legkevesebb van.
+
+Az a combó nyer, amelyik a szerep szerint hiányzik leginkább; ha ebben több is
+egyforma, az, amelyik a páncéltípus szerint, és így tovább. Ha minden szempont
 szerint egyformák, a magasabb Murlok.io-pontszámú class/spec az első (pontszámok
 nélkül a kasztok ábécérendje dönt), a fajok közül pedig az alapfajok a
 szövetséges (allied) fajok előtt. A javaslat mellett a program megmutatja a
-számokat és a következő három jelöltet is.
+számokat (a szerepnél és a páncéltípusnál a mostani és a combók közti arányt is) és
+a következő három jelöltet.
 
 - Csak a játékban létrehozható faj–kaszt kombinációkat ajánlja (Midnight, 12.1-es
   patch; pl. Evoker csak Dracthyr lehet). A 12.2-es patchben érkező Night Elf,

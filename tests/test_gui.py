@@ -891,39 +891,39 @@ class GuiTests(unittest.TestCase):
 
     def test_combo_recommendation_fills_the_new_character_form(self):
         self.add("Garrosh", char_class="Warrior", spec="Protection", race="Orc")
-        self.app.data.spec_scores = SpecScores({"druid/restoration": D("3720"), "monk/mistweaver": D("3590")})
+        self.app.data.spec_scores = SpecScores({"mage/fire": D("3700"), "warlock/destruction": D("3650")})
         with mock.patch.object(self.app, "_ask_faction", return_value=None), mock.patch.object(
             self.gui.messagebox, "askyesno"
         ) as ask:
             self.app.show_combo_recommendation()  # a frakciókérdést bezárták
         ask.assert_not_called()
 
-        # Tank (plate, Warrior, Orc) már van: healer, melee vagy ranged DPS, nem plate, más kaszt és faj kell;
-        # ezek közül a Restoration Druidnak a legmagasabb a Murlok.io-pontszáma.
+        # Egy tank (plate, Warrior, Orc) után a combók közti arányukhoz képest a ranged DPS és a cloth
+        # hiányzik leginkább; ezek közül a Fire Mage-nek a legmagasabb a Murlok.io-pontszáma.
         with mock.patch.object(self.app, "_ask_faction", return_value="Horde"), mock.patch.object(
             self.gui.messagebox, "askyesno", return_value=False
         ) as ask:
             self.app.show_combo_recommendation()
         self.assertEqual(
             ask.call_args.args[1],
-            "Ajánlott Horde karakter:\nTauren Restoration Druid\n\nKitöltsem vele az új karakter mezőit?",
+            "Ajánlott Horde karakter:\nUndead Fire Mage\n\nKitöltsem vele az új karakter mezőit?",
         )
-        self.assertIn("• szerep – healer: még egy sincs", ask.call_args.kwargs["detail"])
+        detail = ask.call_args.kwargs["detail"]
+        self.assertIn("• szerep – ranged DPS: még egy sincs (0%); az összes combó 37%-a", detail)
+        self.assertIn("• páncéltípus – cloth: még egy sincs (0%); az összes combó 32%-a", detail)
         self.assertEqual(self.app._last_faction, "Horde")  # legközelebb ez az alapértelmezett
         self.assertEqual((self.app.race_var.get(), self.app.class_var.get(), self.app.spec_var.get()), ("", "", ""))
 
-        self.app.name_var.set("Hamuul")
+        self.app.name_var.set("Sylvanas")
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
             self.app.show_combo_recommendation("Horde")
         filled = (self.app.race_var.get(), self.app.class_var.get(), self.app.spec_var.get())
-        self.assertEqual(filled, ("Tauren", "Druid", "Restoration"))
-        self.assertEqual(self.app.name_var.get(), "Hamuul")  # a beírt név megmarad
-        self.assertIn("Kitöltve: Tauren Restoration Druid", self.app.feedback_var.get())
+        self.assertEqual(filled, ("Undead", "Mage", "Fire"))
+        self.assertEqual(self.app.name_var.get(), "Sylvanas")  # a beírt név megmarad
+        self.assertIn("Kitöltve: Undead Fire Mage", self.app.feedback_var.get())
         self.app.add_character()
-        hamuul = self.app.data.characters[-1]
-        self.assertEqual(
-            (hamuul.name, hamuul.race, hamuul.char_class, hamuul.spec), ("Hamuul", "Tauren", "Druid", "Restoration")
-        )
+        added = self.app.data.characters[-1]
+        self.assertEqual((added.name, added.race, added.char_class, added.spec), ("Sylvanas", "Undead", "Mage", "Fire"))
 
     def test_faction_dialog(self):
         def pick():
