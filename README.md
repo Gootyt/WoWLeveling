@@ -28,7 +28,8 @@ megtervezéséhez és követéséhez.
   kijelölt karakternek itt az itemlevele módosítható, és aki elérte a
   célitemlevelt, lekerül a listáról.
 - A főablak **Mythic+** gombja a Gear ablak másolatát nyitja meg külön ablakban,
-  saját rendezéssel; egyelőre ugyanazt mutatja, mint a Gear ablak.
+  saját rendezéssel. Ugyanazt mutatja, mint a Gear ablak, de alul a kijelölt
+  karakter **Raider.io pontszáma** állítható.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -99,11 +100,13 @@ python wow_leveling.py masik_terv.json
    egy másik ablakban: a rendezése független a karakterlistáétól, a szintezéssel
    kapcsolatos oszlopok helyett a tervezett itemlevel oszlopai vannak benne, és a
    célitemlevelt elért karakterek nem látszanak. A **Mythic+** gomb a Gear ablak
-   másolatát nyitja meg (egyelőre ugyanazt tudja, saját rendezéssel).
+   másolatát nyitja meg (saját rendezéssel), amelyben alul a Raider.io pontszám
+   állítható.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
-   A Gear ablakban ugyanígy az itemlevel állítható („+1 itemlevel”). Mindkét
+   A Gear ablakban ugyanígy az itemlevel („+1 itemlevel”), a Mythic+ ablakban a
+   Raider.io pontszám („+1 pont”) állítható; ezek üresre is törölhetők. Minden
    ablakban dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden
    adata módosítható.
 5. **Rendezés**: kattints egy oszlop fejlécére; újabb kattintásra megfordul az

@@ -33,6 +33,7 @@ from leveling import (
     LEVEL_MAX,
     LEVEL_MIN,
     PARALLEL,
+    RAIDERIO_MAX,
     SEQUENTIAL,
     Character,
     CharacterPlan,
@@ -228,7 +229,7 @@ class DateField(ttk.Frame):
 
 @dataclass(frozen=True)
 class NumberField:
-    """Két tizedesjegyű szám a karakteren (szint vagy itemlevel), a beolvasásához és kiírásához."""
+    """Szám a karakteren (szint, itemlevel vagy Raider.io pontszám), a beolvasásához és kiírásához."""
 
     attribute: str  # a Character mezője
     label: str  # a listaablak alján, a kijelölt karakternél
@@ -254,10 +255,21 @@ ITEM_LEVEL_FIELD = NumberField(
     Decimal(0),
     ITEM_LEVEL_MAX,
 )
+# A Raider.io pontszám egy tizedesjegyű, és szintén üresen hagyható.
+RAIDERIO_FIELD = NumberField(
+    "raiderio_score",
+    "Raider.io pontszám:",
+    "pont",
+    "Hibás Raider.io pontszám",
+    parse_raiderio_score,
+    format_raiderio_score,
+    Decimal(0),
+    RAIDERIO_MAX,
+)
 
 
 class NumberSpinbox(ttk.Spinbox):
-    """Szám két tizedesjegy pontossággal (pl. 83,45), alapból szint.
+    """Szám tizedesjegyekkel (alapból szint két tizedesjeggyel, pl. 83,45).
 
     A nyilak, a fel/le billentyűk és az egérgörgő egy egésszel léptetnek.
     """
@@ -1069,11 +1081,12 @@ class GearWindow(CharacterListWindow):
 
 class MythicPlusWindow(GearWindow):
     """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel.
-    Egyelőre ugyanazt mutatja, mint a Gear ablak."""
+    Ugyanazt mutatja, mint a Gear ablak, de alul a kijelölt karakter Raider.io pontszáma állítható."""
 
     TITLE = "Mythic+"
     WINDOW_ATTRIBUTE = "mythic_window"
     SORT_ATTRIBUTE = "mythic_sort"
+    EDITED_FIELD = RAIDERIO_FIELD
 
 
 class App:

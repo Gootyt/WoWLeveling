@@ -163,10 +163,33 @@ class GuiTests(unittest.TestCase):
         self.assertEqual((self.names(mythic), self.names(gear)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
         self.assertEqual((self.app.mythic_sort, self.app.gear_sort), (("name", False), self.gui.GEAR_ORDER))
 
+        # Alul a Raider.io pontszám állítható; a változás minden ablakban látszik.
         jaina = self.app.data.characters[1]
-        self.select_in(mythic, jaina)  # az itemlevel itt is módosítható, és minden ablakban látszik
-        mythic.value_var.set("330")
+        self.assertEqual(mythic.EDITED_FIELD.label, "Raider.io pontszám:")
+        self.select_in(mythic, jaina)
+        self.assertEqual(mythic.value_var.get(), "")  # még nincs megadva
+        mythic.change_value(1)  # nincs mit léptetni
+        self.assertIsNone(jaina.raiderio_score)
+        mythic.value_var.set("2543,7")
         mythic.apply_value()
+        self.assertEqual(load_data(self.path).characters[1].raiderio_score, D("2543.7"))
+        self.assertEqual(jaina.item_level, D("325.00"))  # az itemlevel nem változott
+        self.assertEqual({row["name"]: row["raiderio"] for row in self.rows(gear)}["Jaina"], "2543,7")
+        mythic.change_value(1)  # „+1 pont”
+        self.assertEqual(jaina.raiderio_score, D("2544.7"))
+        self.assertEqual(mythic.value_var.get(), "2544,7")
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            mythic.value_var.set("2544,75")
+            mythic.apply_value()
+        self.assertEqual(warning.call_args.args[0], "Hibás Raider.io pontszám")
+        self.assertEqual(jaina.raiderio_score, D("2544.7"))
+        mythic.value_var.set("")  # törölhető is
+        mythic.apply_value()
+        self.assertIsNone(load_data(self.path).characters[1].raiderio_score)
+
+        self.select_in(gear, jaina)  # a Gear ablakban továbbra is az itemlevel állítható
+        gear.value_var.set("330")
+        gear.apply_value()
         self.assertEqual((self.names(mythic), self.names(gear)), (["Thrall"], ["Thrall"]))
         mythic.close()
         self.assertIsNone(self.app.mythic_window)
