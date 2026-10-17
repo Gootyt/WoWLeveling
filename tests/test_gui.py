@@ -155,8 +155,11 @@ class GuiTests(unittest.TestCase):
 
         self.app.open_gear()
         gear = self.app.gear_window
-        self.assertEqual(mythic.COLUMNS, gear.COLUMNS)
-        self.assertEqual(self.rows(mythic), self.rows(gear))  # ugyanazt mutatja
+        # A Gear ablak oszlopai ugyanabban a sorrendben, ugyanazzal a tartalommal (plusz a Raider.io-terv).
+        gear_columns = [column[0] for column in gear.COLUMNS]
+        mythic_columns = [column[0] for column in mythic.COLUMNS]
+        self.assertEqual([key for key in mythic_columns if key in gear_columns], gear_columns)
+        self.assertEqual([{key: row[key] for key in gear_columns} for row in self.rows(mythic)], self.rows(gear))
         self.assertEqual(self.names(mythic), ["Thrall", "Jaina"])  # eltérés szerint; Arthas lekerült
         self.assertEqual(mythic.gear_info_var.get(), gear.gear_info_var.get())
         mythic.sort_by("name")  # saját rendezése van
@@ -194,6 +197,56 @@ class GuiTests(unittest.TestCase):
         mythic.close()
         self.assertIsNone(self.app.mythic_window)
         self.assertIs(self.app.gear_window, gear)
+
+    def test_mythic_plus_window_plans_raiderio_scores(self):
+        self.app.data.spec_scores = SpecScores(
+            {"paladin/holy": D("4000"), "mage/frost": D("3600"), "warrior/arms": D("3500")}
+        )
+        self.add("Jaina", char_class="Mage", spec="Frost", score="3000")
+        self.add("Uther", char_class="Paladin", spec="Holy", score="3500")
+        self.add("Varian", char_class="Warrior", spec="Arms", score="2800")
+        self.add("Anduin")  # nincs kasztja, így Murlok.io-pontszáma sem
+        self.app.open_mythic()
+        mythic = self.app.mythic_window
+        columns = [column[0] for column in mythic.COLUMNS]
+        start = columns.index("raiderio")  # a Raider.io után következnek
+        self.assertEqual(columns[start : start + 4], ["raiderio", "planned_raiderio", "raiderio_deviation", "murlok"])
+        self.assertEqual(
+            (mythic.tree.heading("planned_raiderio", "text"), mythic.tree.heading("raiderio_deviation", "text")),
+            ("Tervezett Raider.io", "Raider.io-különbözet"),
+        )
+        # Murlok.io-sorrend: Uther, Jaina, Varian; Jaina a 2.: 3600 · (1 − 2x) = 3000, x = 8,33%.
+        rows = {row["name"]: (row["planned_raiderio"], row["raiderio_deviation"]) for row in self.rows(mythic)}
+        self.assertEqual(
+            rows,
+            {
+                "Uther": ("3666,7", "−166,7"),
+                "Jaina": ("3000,0", "0,0"),
+                "Varian": ("2625,0", "+175,0"),
+                "Anduin": ("–", "–"),
+            },
+        )
+        self.assertEqual(
+            mythic.raiderio_info_var.get(),
+            "Tervezett Raider.io: x = kb. 8,33% (ennyivel kisebb a Murlok.io-pontszámhoz mért arány "
+            "karakterenként; a 2. karakternél 0 a különbözet)",
+        )
+        mythic.sort_by("raiderio_deviation")
+        self.assertEqual(self.names(mythic), ["Uther", "Jaina", "Varian", "Anduin"])
+
+        # A Raider.io pontszám módosítása után újraszámol (Jaina továbbra is 0-n áll).
+        uther = self.app.data.characters[1]
+        self.select_in(mythic, uther)
+        mythic.value_var.set("3700")
+        mythic.apply_value()
+        rows = {row["name"]: row["raiderio_deviation"] for row in self.rows(mythic)}
+        self.assertEqual((rows["Uther"], rows["Jaina"]), ("+33,3", "0,0"))
+
+        self.app.data.spec_scores = SpecScores()  # pontszámok nélkül nincs terv
+        self.app.data_changed()
+        self.assertIn("még nincsenek Murlok.io-pontszámok", mythic.raiderio_info_var.get())
+        self.app.open_gear()  # a Gear ablakban nincsenek ilyen oszlopok
+        self.assertNotIn("planned_raiderio", [column[0] for column in self.app.gear_window.COLUMNS])
 
     def test_gear_button_opens_a_separate_copy_of_the_list(self):
         self.add("Thrall", "Jaina")

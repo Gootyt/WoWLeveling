@@ -56,6 +56,7 @@ from leveling import (
     murlok_order,
     parse_date,
     plan_item_levels,
+    plan_raiderio_scores,
     parse_item_level,
     reached_target_item_level,
     parse_level,
@@ -810,6 +811,14 @@ class CharacterListWindow(tk.Toplevel):
                 "–" if plan.item_level_deviation is None else format_deviation(plan.item_level_deviation)
             ),
             "raiderio": "–" if character.raiderio_score is None else format_raiderio_score(character.raiderio_score),
+            "planned_raiderio": (
+                "–" if plan.planned_raiderio is None else format_raiderio_score(plan.planned_raiderio)
+            ),
+            "raiderio_deviation": (
+                "–"
+                if plan.raiderio_deviation is None
+                else format_deviation(plan.raiderio_deviation, format_raiderio_score)
+            ),
             "murlok": "–" if plan.spec_score is None else format_compact(plan.spec_score),
             "start": format_date(plan.start),
             "deadline": format_date(plan.deadline),
@@ -1017,6 +1026,31 @@ def item_level_step_text(step: Decimal) -> str:
     return text if rounded == step else f"kb. {text}"
 
 
+def percent_step_text(step: Decimal) -> str:
+    """Arányként megadott x kiírása százalékban, két tizedesjeggyel (pl. „5%”, „kb. 8,33%”)."""
+    return item_level_step_text(step * 100).replace(",00", "") + "%"
+
+
+GEAR_HINT = (
+    "A „Tervezett itemlevel” a Murlok.io szerinti sorrend (mint a „Murlok.io szerinti sorrend” gombnál) "
+    "első karakterénél a célitemlevel − X, minden következőnél újabb X-szel kevesebb. Az "
+    "„Itemlevel-eltérés” a valós és a tervezett itemlevel különbsége (+: a terv felett, −: alatta); a "
+    "táblázat alapból eszerint van rendezve. X-et a program úgy állítja be, hogy a 2. sorban 0 legyen az "
+    "eltérés, így az 1. sorban negatív. Aki elérte a célitemlevelt, lekerül a listáról, és a többiekkel "
+    "számol tovább."
+)
+RAIDERIO_HINT = (
+    "A „Tervezett Raider.io” ugyanebben a sorrendben a karakter specjének Murlok.io-pontszáma × "
+    "(100% − k·x), ahol k a karakter helye; a „Raider.io-különbözet” a valós és a tervezett pontszám "
+    "különbsége. x-et a program úgy állítja be, hogy a 2. karakternél 0 legyen a különbözet."
+)
+SORT_HINT = "A fejlécekre kattintva más oszlop szerint is rendezheted."
+RAIDERIO_COLUMNS = (
+    ("planned_raiderio", "Tervezett Raider.io", "center", False),
+    ("raiderio_deviation", "Raider.io-különbözet", "center", False),
+)
+
+
 class GearWindow(CharacterListWindow):
     """A karakterlista másolata a felszerelés (gear) követéséhez, saját ablakban és saját
     rendezéssel; a tervezett itemlevelt és az attól való eltérést is mutatja."""
@@ -1033,14 +1067,7 @@ class GearWindow(CharacterListWindow):
         if base[0] not in GEAR_HIDDEN_COLUMNS
         for column in ((base, *GEAR_COLUMNS) if base[0] == "item_level" else (base,))
     )
-    HINT_TEXT = (
-        "A „Tervezett itemlevel” a Murlok.io szerinti sorrend (mint a „Murlok.io szerinti sorrend” gombnál) "
-        "első karakterénél a célitemlevel − X, minden következőnél újabb X-szel kevesebb. Az "
-        "„Itemlevel-eltérés” a valós és a tervezett itemlevel különbsége (+: a terv felett, −: alatta); a "
-        "táblázat alapból eszerint van rendezve. X-et a program úgy állítja be, hogy a 2. sorban 0 legyen az "
-        "eltérés, így az 1. sorban negatív. Aki elérte a célitemlevelt, lekerül a listáról, és a többiekkel "
-        "számol tovább. A fejlécekre kattintva más oszlop szerint is rendezheted."
-    )
+    HINT_TEXT = f"{GEAR_HINT} {SORT_HINT}"
 
     def _build(self) -> None:
         super()._build()
@@ -1080,13 +1107,40 @@ class GearWindow(CharacterListWindow):
 
 
 class MythicPlusWindow(GearWindow):
-    """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel.
-    Ugyanazt mutatja, mint a Gear ablak, de alul a kijelölt karakter Raider.io pontszáma állítható."""
+    """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel. A Raider.io
+    után a tervezett Raider.io pontszámot és a különbözetet is mutatja, alul pedig a kijelölt
+    karakter Raider.io pontszáma állítható."""
 
     TITLE = "Mythic+"
     WINDOW_ATTRIBUTE = "mythic_window"
     SORT_ATTRIBUTE = "mythic_sort"
     EDITED_FIELD = RAIDERIO_FIELD
+    COLUMNS = tuple(
+        column
+        for base in GearWindow.COLUMNS
+        for column in ((base, *RAIDERIO_COLUMNS) if base[0] == "raiderio" else (base,))
+    )
+    HINT_TEXT = f"{GEAR_HINT} {RAIDERIO_HINT} {SORT_HINT}"
+
+    def _build(self) -> None:
+        super()._build()
+        self.raiderio_info_var = tk.StringVar()
+        self.raiderio_info_label = ttk.Label(self.table_frame.master, textvariable=self.raiderio_info_var)
+        self.raiderio_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
+
+    def refresh(self, select: Character | None = None) -> None:
+        super().refresh(select)
+        data = self.app.data
+        raiderio = plan_raiderio_scores(data.characters, data.spec_scores, data.settings.target_item_level)
+        if raiderio.step is None:
+            self.raiderio_info_var.set(f"Tervezett Raider.io: {raiderio.problem}")
+            self.raiderio_info_label.configure(style="Late.TLabel")
+        else:
+            self.raiderio_info_var.set(
+                f"Tervezett Raider.io: x = {percent_step_text(raiderio.step)} (ennyivel kisebb a Murlok.io-"
+                "pontszámhoz mért arány karakterenként; a 2. karakternél 0 a különbözet)"
+            )
+            self.raiderio_info_label.configure(style="Strong.TLabel")
 
 
 class App:

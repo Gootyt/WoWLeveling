@@ -35,6 +35,7 @@ from leveling import (
     parse_level,
     parse_raiderio_score,
     plan_item_levels,
+    plan_raiderio_scores,
     planned_level,
     save_data,
     sort_plans,
@@ -733,6 +734,63 @@ class ItemLevelPlanTests(unittest.TestCase):
         by_deviation = sort_plans(plans, "item_level_deviation")
         self.assertEqual([plan.character.name for plan in by_deviation], ["C", "B", "A", "D"])
         self.assertIsNone(build_plan(make_settings(), characters, START, self.SCORES)[0].planned_item_level)
+
+
+class RaiderioPlanTests(unittest.TestCase):
+    SCORES = SpecScores({"paladin/holy": D("4000"), "mage/frost": D("3600"), "warrior/arms": D("3500")})
+
+    @staticmethod
+    def characters(*raiderio_scores):
+        """A: Frost Mage, B: Holy Paladin, C: Arms Warrior, D: nincs kasztja (nincs Murlok.io-pontszáma)."""
+        specs = (("Mage", "Frost"), ("Paladin", "Holy"), ("Warrior", "Arms"), ("", ""))
+        return [
+            Character(name, char_class, spec, raiderio_score=None if score is None else D(score))
+            for name, (char_class, spec), score in zip("ABCD", specs, raiderio_scores)
+        ]
+
+    def test_planned_scores_follow_the_murlok_order(self):
+        characters = self.characters("3000", "3500", "2800", "2000")
+        plan = plan_raiderio_scores(characters, self.SCORES)
+        # Murlok.io-sorrend: B (4000), A (3600), C (3500), D. A 2. karakter (A) különbözete 0:
+        # 3600 · (1 − 2x) = 3000, azaz x = 1/12 (8,33%).
+        self.assertEqual(plan.step.quantize(D("0.0001")), D("0.0833"))
+        self.assertEqual(
+            [plan.planned.get(c) for c in characters], [D("3000.0"), D("3666.7"), D("2625.0"), None]
+        )  # B: 4000 · 11/12, C: 3500 · 9/12; D-nek nincs Murlok.io-pontszáma
+        self.assertEqual([plan.deviation(c) for c in characters], [D("0.0"), D("-166.7"), D("175.0"), None])
+
+    def test_second_character_without_score_is_skipped(self):
+        characters = self.characters(None, "3500", "2800", "2000")  # A-nak nincs Raider.io pontszáma
+        plan = plan_raiderio_scores(characters, self.SCORES)
+        # Így a 3. helyen álló C különbözete lesz 0: 3500 · (1 − 3x) = 2800, x = 1/15.
+        self.assertEqual(plan.step.quantize(D("0.0001")), D("0.0667"))
+        self.assertEqual([plan.planned.get(c) for c in characters][:3], [D("3120.0"), D("3733.3"), D("2800.0")])
+        self.assertEqual(plan.deviation(characters[2]), D("0.0"))
+        self.assertIsNone(plan.deviation(characters[0]))
+
+    def test_characters_at_the_target_item_level_are_left_out(self):
+        characters = self.characters("3000", "3500", "2800", None)
+        characters[1].item_level = D("331")  # B elérte a 330-as célitemlevelt
+        plan = plan_raiderio_scores(characters, self.SCORES, D("330"))
+        self.assertNotIn(characters[1], plan.planned)
+        # A maradék sorrendje: A (1.), C (2.); 3500 · (1 − 2x) = 2800, x = 0,1.
+        self.assertEqual(plan.step, D("0.1"))
+        self.assertEqual(plan.planned[characters[0]], D("3240.0"))
+
+    def test_needs_scores_for_two_characters(self):
+        characters = self.characters("3000", None, None, None)
+        self.assertIn("még nincsenek Murlok.io-pontszámok", plan_raiderio_scores(characters, SpecScores()).problem)
+        plan = plan_raiderio_scores(characters, self.SCORES)
+        self.assertIsNone(plan.step)
+        self.assertEqual(plan.problem, "legalább két karakternél kell Raider.io és Murlok.io pontszám.")
+
+    def test_plans_carry_the_raiderio_columns(self):
+        characters = self.characters("3000", "3500", "2800", "2000")
+        plans = build_plan(make_settings(), characters, START, self.SCORES)
+        self.assertEqual([plan.planned_raiderio for plan in plans], [D("3000.0"), D("3666.7"), D("2625.0"), None])
+        by_deviation = sort_plans(plans, "raiderio_deviation")
+        self.assertEqual([plan.character.name for plan in by_deviation], ["B", "A", "C", "D"])
+        self.assertEqual(format_deviation(D("-166.7"), format_raiderio_score), "−166,7")
 
 
 class PersistenceTests(unittest.TestCase):

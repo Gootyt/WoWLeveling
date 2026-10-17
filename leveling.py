@@ -125,13 +125,15 @@ def format_level(value: Decimal) -> str:
     return f"{value:.2f}".replace(".", ",")
 
 
-def format_deviation(value: Decimal) -> str:
-    """Előjeles szinteltérés: +2,87, −2,13 vagy 0,00."""
+def format_deviation(value: Decimal, formatter=None) -> str:
+    """Előjeles eltérés: +2,87, −2,13 vagy 0,00 (a számot a `formatter` írja ki, alapból két
+    tizedesjeggyel, mint a szinteket)."""
+    formatter = formatter or format_level
     if value > 0:
-        return "+" + format_level(value)
+        return "+" + formatter(value)
     if value < 0:
-        return "−" + format_level(-value)
-    return format_level(abs(value))
+        return "−" + formatter(-value)
+    return formatter(abs(value))
 
 
 _DECIMAL_COUNT_WORDS = {1: "egy", 2: "két"}
@@ -368,6 +370,8 @@ class CharacterPlan:
     spec_score: Decimal | None = None  # a karakter specjének pontszáma a Murlok.io rangsorában
     planned_item_level: Decimal | None = None  # a tervezett itemlevel (lásd plan_item_levels)
     item_level_deviation: Decimal | None = None  # valós − tervezett itemlevel (+: a terv felett)
+    planned_raiderio: Decimal | None = None  # a tervezett Raider.io pontszám (lásd plan_raiderio_scores)
+    raiderio_deviation: Decimal | None = None  # valós − tervezett Raider.io pontszám (+: a terv felett)
 
     @property
     def levels_due(self) -> Decimal:
@@ -440,6 +444,7 @@ def build_plan(
     goal_day = goal_day or today
     windows = leveling_windows(settings, len(characters))
     item_levels = plan_item_levels(characters, spec_scores or SpecScores(), settings.target_item_level)
+    raiderio = plan_raiderio_scores(characters, spec_scores or SpecScores(), settings.target_item_level)
     return [
         replace(
             _plan_character(
@@ -454,6 +459,8 @@ def build_plan(
             ),
             planned_item_level=item_levels.planned.get(character),
             item_level_deviation=item_levels.deviation(character),
+            planned_raiderio=raiderio.planned.get(character),
+            raiderio_deviation=raiderio.deviation(character),
         )
         for position, (character, (start, deadline)) in enumerate(zip(characters, windows), start=1)
     ]
@@ -587,6 +594,8 @@ SORT_KEYS = {
     "item_level": lambda plan: plan.character.item_level,
     "planned_item_level": lambda plan: plan.planned_item_level,
     "item_level_deviation": lambda plan: plan.item_level_deviation,
+    "planned_raiderio": lambda plan: plan.planned_raiderio,
+    "raiderio_deviation": lambda plan: plan.raiderio_deviation,
     "raiderio": lambda plan: plan.character.raiderio_score,
     "murlok": lambda plan: plan.spec_score,
     "level": lambda plan: plan.character.level,
@@ -974,6 +983,57 @@ def plan_item_levels(
         for position, character in enumerate(order, start=1)
     }
     return ItemLevelPlan(step, planned, "", reached)
+
+
+@dataclass(frozen=True)
+class RaiderioPlan:
+    """A karakterek tervezett Raider.io pontszáma (lásd plan_raiderio_scores)."""
+
+    step: Decimal | None  # x arányként (pl. 0,05 = 5%): ennyivel kisebb a szorzó karakterenként
+    planned: dict  # karakter → tervezett Raider.io pontszám
+    problem: str = ""  # ha nem számolható, miért nem
+
+    def deviation(self, character: Character) -> Decimal | None:
+        """Valós − tervezett Raider.io pontszám (None, ha valamelyik nem ismert)."""
+        planned = self.planned.get(character)
+        if planned is None or character.raiderio_score is None:
+            return None
+        return character.raiderio_score - planned
+
+
+def plan_raiderio_scores(
+    characters: list[Character], spec_scores: SpecScores, target_item_level: Decimal | None = None
+) -> RaiderioPlan:
+    """Tervezett Raider.io pontszám a Murlok.io szerinti sorrend (lásd murlok_order) alapján.
+
+    A k-adik karakteré a specje Murlok.io-pontszámának (100% − k·x)-szerese: az elsőé
+    100% − x, a másodiké 100% − 2x, és így tovább (0-nál nem kevesebb). x-et úgy
+    választja, hogy a második karakternél a különbözet (valós − tervezett) pontosan 0
+    legyen; ha ott nincs Raider.io vagy Murlok.io pontszám, akkor a következőnél, ahol
+    mindkettő megvan. A célitemlevelt már elért karakterek kimaradnak, ahogy a tervezett
+    itemlevelnél (lásd plan_item_levels).
+    """
+    remaining = [c for c in characters if not reached_target_item_level(c, target_item_level)]
+    if not spec_scores.scores:
+        problem = "még nincsenek Murlok.io-pontszámok (a „Frissítés a Murlok.io-ról” gombbal kérheted le "
+        return RaiderioPlan(None, {}, problem + "őket).")
+    order = murlok_order(remaining, spec_scores)
+    anchors = [
+        (position, character, spec_scores.score_for(character))
+        for position, character in enumerate(order, start=1)
+        if spec_scores.score_for(character) and character.raiderio_score is not None
+    ]
+    if len(anchors) < 2:
+        return RaiderioPlan(None, {}, "legalább két karakternél kell Raider.io és Murlok.io pontszám.")
+    position, character, score = anchors[1]
+    step = (1 - character.raiderio_score / score) / position
+    planned = {}
+    for position, character in enumerate(order, start=1):
+        score = spec_scores.score_for(character)
+        if score is not None:
+            value = (score * (1 - position * step)).quantize(RAIDERIO_STEP, rounding=ROUND_HALF_UP)
+            planned[character] = max(Decimal(0), value)
+    return RaiderioPlan(step, planned)
 
 
 @dataclass

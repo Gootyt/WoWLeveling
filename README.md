@@ -28,8 +28,9 @@ megtervezéséhez és követéséhez.
   kijelölt karakternek itt az itemlevele módosítható, és aki elérte a
   célitemlevelt, lekerül a listáról.
 - A főablak **Mythic+** gombja a Gear ablak másolatát nyitja meg külön ablakban,
-  saját rendezéssel. Ugyanazt mutatja, mint a Gear ablak, de alul a kijelölt
-  karakter **Raider.io pontszáma** állítható.
+  saját rendezéssel. Ebben a Raider.io oszlop után a **tervezett Raider.io** és a
+  **Raider.io-különbözet** is látszik (lásd lent), alul pedig a kijelölt karakter
+  Raider.io pontszáma állítható.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -210,6 +211,22 @@ fölött látszik.
   itemlevelet minden (listán maradt) karakter kap. Kell hozzá célitemlevel (a
   főablakban) és legalább két, a célitemlevel alatti karakternél itemlevel.
 - Murlok.io-pontszámok nélkül a sorrend a lista sorrendje.
+
+**Tervezett Raider.io (Mythic+ ablak).** Ugyanabban a Murlok.io szerinti
+sorrendben, mint a tervezett itemlevelnél, a k-adik karakter tervezett Raider.io
+pontszáma a specje Murlok.io-pontszámának (100% − k·x)-szerese: az elsőé
+(100% − x)-szerese, a másodiké (100% − 2x)-szerese, és így tovább (0-nál nem
+kevesebb). A **Raider.io-különbözet** a valós és a tervezett pontszám különbsége
+(+: a terv felett). x-et a program magától állítja be úgy, hogy a második
+karakternél 0 legyen a különbözet: ha a második karakter Raider.io pontszáma R, a
+specjéé a Murlok.io-n M, akkor x = (1 − R/M) / 2. Az x értéke a táblázat fölött
+látszik.
+
+- Ha a második karakternek nincs Raider.io vagy Murlok.io pontszáma, a sorrendben
+  következő olyan karakter különbözete lesz 0, akinek mindkettő megvan.
+- A célitemlevelt elért karakterek itt is kimaradnak. Murlok.io-pontszám nélküli
+  karakter (nincs megadva vagy ismeretlen a class/spec) nem kap tervezett Raider.io
+  pontszámot.
 
 **Combó ajánlása.** A választott frakcióban létrehozható class/spec/faj combók
 közül az a javaslat, amelyik leginkább hiányzik a listáról. A program a meglévő
