@@ -1057,6 +1057,8 @@ class LevelingData:
     look_ahead: bool = True
     # A legutóbbi olyan Raider.io-lekérés ideje (helyi idő), amely minden karakterre kiterjedt.
     raiderio_fetched_at: datetime | None = None
+    # A statisztikai ablakok (M+ és raid ilvl statisztika) mezőinek utolsó értékei, ablakonként.
+    stats_options: dict = field(default_factory=dict)
 
     def raiderio_is_stale(self, now: datetime | None = None) -> bool:
         """Igaz, ha még nem volt Raider.io-lekérés, vagy a legutóbbi régebbi fél óránál."""
@@ -1073,6 +1075,7 @@ class LevelingData:
             "spec_scores": self.spec_scores.to_dict(),
             "view": {"look_ahead": self.look_ahead},
             "raiderio": {"fetched_at": None if fetched_at is None else fetched_at.isoformat(timespec="seconds")},
+            "stats_options": self.stats_options,
         }
 
     @classmethod
@@ -1088,12 +1091,14 @@ class LevelingData:
             raiderio_fetched_at = datetime.fromisoformat(data["raiderio"]["fetched_at"])
         except (KeyError, TypeError, ValueError):
             raiderio_fetched_at = None  # még nem volt lekérés (vagy sérült az adat)
+        stats_options = data.get("stats_options")
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
             spec_scores=spec_scores,
             look_ahead=look_ahead if isinstance(look_ahead, bool) else True,
             raiderio_fetched_at=raiderio_fetched_at,
+            stats_options=stats_options if isinstance(stats_options, dict) else {},
         )
 
 

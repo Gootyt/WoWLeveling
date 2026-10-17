@@ -800,6 +800,216 @@ class GuiTests(unittest.TestCase):
         self.assertIsNone(app.data.raiderio_fetched_at)
         self.assertNotIn("disabled", window.raiderio_button.state())  # újra lehet próbálni
 
+    def wait_until_finished(self, window):
+        for _ in range(500):
+            self.root.update()
+            if not window.running:
+                return
+            time.sleep(0.01)
+        self.fail("a statisztikai lekérdezés nem fejeződött be")
+
+    def test_stats_windows_open_from_the_main_window(self):
+        stats = self.gui.stats_windows
+        for text, attribute, window_class in (
+            ("M+ ilvl statisztika", "mplus_stats_window", stats.MythicStatsWindow),
+            ("Raid ilvl statisztika", "raid_stats_window", stats.RaidStatsWindow),
+        ):
+            button = self.find_button(self.root, text)
+            button.invoke()
+            window = getattr(self.app, attribute)
+            self.assertIsInstance(window, window_class)
+            self.assertEqual(window.title(), f"{window_class.TITLE} – {self.gui.APP_TITLE}")
+            button.invoke()  # a már nyitott ablakot csak előtérbe hozza
+            self.assertIs(getattr(self.app, attribute), window)
+            window.close()
+            self.assertIsNone(getattr(self.app, attribute))
+
+        # Ha a statisztikai modulok nem tölthetők be (pl. hiányzik az sqlite3), a program többi része működik.
+        with mock.patch.object(self.gui, "stats_windows", None), mock.patch.object(
+            self.gui, "STATS_IMPORT_ERROR", "No module named '_sqlite3'", create=True
+        ), mock.patch.object(self.gui.messagebox, "showerror") as error:
+            self.app.open_raid_stats()
+        self.assertIn("No module named '_sqlite3'", error.call_args.args[1])
+        self.assertIsNone(self.app.raid_stats_window)
+
+    def test_mplus_stats_run_in_the_background(self):
+        stats = self.gui.stats_windows
+        mplus = stats.mplus
+        seen = {}
+
+        def fake_run(args, seeds, make_view, info):
+            seen.update(args=args, seeds=seeds)
+            info("season=season-mn-2  guild(s)=Solutions@Ragnaros\n")
+            state, guild_queue = mplus.new_state(), mplus.GuildQueue()
+            view = make_view(state, guild_queue, "Raider.IO ilvl")
+            view.start()
+            for level, item_levels in ((2, [300.0, 310.0]), (4, [315.0])):
+                state["runs"][level] += 1
+                for value in item_levels:
+                    mplus.add_ilvl(state, level, value)
+                view.changed()
+            state["c"]["guilds_done"] = 1
+            view.event("guild Solutions@ragnaros@eu: 40 member(s), 38 to check")
+            view.stop("finished")
+            return None, state, guild_queue, "250-350"
+
+        self.app.open_mplus_stats()
+        window = self.app.mplus_stats_window
+        self.assertEqual(window.region_var.get(), "eu")  # a főablakban beállított régió
+        self.assertFalse(window.follow_var.get())  # a ranglistánál alapból nem követi a guildeket
+        window.source_var.set("guild")
+        window._source_changed()
+        self.assertTrue(window.follow_var.get())  # guildeknél igen (mint a parancssorban)
+        window.guilds_var.set("Solutions@Ragnaros")
+        window.levels_var.set("2-4")
+        window.per_level_var.set("5")
+        with mock.patch.object(mplus, "run", fake_run):
+            window.start_button.invoke()
+            self.assertTrue(window.running)
+            self.assertIn("disabled", window.start_button.state())
+            self.wait_until_finished(window)
+        args = seen["args"]
+        self.assertEqual((args.guild, args.levels, args.per_level, args.follow_guilds), (["Solutions@Ragnaros"], "2,3,4", 5, True))
+        self.assertEqual(seen["seeds"], [("eu", "Ragnaros", "Solutions")])
+        self.assertEqual(Path(args.cache), self.path.parent.resolve() / stats.MPLUS_CACHE_NAME)
+        self.assertEqual(
+            window.table.rows(),
+            [("2", "1", "2", "305,0", "305,0", "302,5", "300,0", "310,0"), ("4", "1", "1", "315,0", "315,0", "315,0", "315,0", "315,0")],
+        )
+        self.assertEqual(window.status_var.get(), "Kész.")
+        self.assertIn("beolvasott guildek: 1", window.progress_var.get())
+        log = window.log.content()
+        self.assertIn("season=season-mn-2", log)
+        self.assertIn("guild Solutions@ragnaros@eu: 40 member(s)", log)
+        self.assertIn("(P25 = 25th percentile", log)  # az összefoglaló is a naplóba kerül
+        self.assertEqual(load_data(self.path).stats_options["mplus"]["guilds"], "Solutions@Ragnaros")
+
+        csv_path = self.path.parent / "mplus.csv"
+        with mock.patch.object(stats.filedialog, "asksaveasfilename", return_value=str(csv_path)):
+            window.csv_button.invoke()
+        self.assertEqual(
+            csv_path.read_text(encoding="utf-8").splitlines()[:2],
+            ["mythic_level,runs,players,avg_item_level,median_item_level,p25_item_level,min_item_level,max_item_level",
+             "2,1,2,305.0,305.0,302.5,300.0,310.0"],
+        )
+
+        # Újranyitva a mezők az előző értékeket mutatják.
+        window.close()
+        self.app.open_mplus_stats()
+        window = self.app.mplus_stats_window
+        self.assertEqual((window.source_var.get(), window.levels_var.get()), ("guild", "2-4"))
+
+    def test_mplus_stats_stop_and_input_checks(self):
+        stats = self.gui.stats_windows
+        mplus = stats.mplus
+        self.app.open_mplus_stats()
+        window = self.app.mplus_stats_window
+        window.source_var.set("guild")
+        window._source_changed()
+        for guilds, levels, message in (("", "", "legalább egy guildet"), ("Solutions@Ragnaros", "x", "2-10 vagy 18,19,20")):
+            window.guilds_var.set(guilds)
+            window.levels_var.set(levels)
+            with mock.patch.object(stats.messagebox, "showwarning") as warning:
+                window.start()
+            self.assertIn(message, warning.call_args.args[1])
+            self.assertFalse(window.running)
+        window.levels_var.set("")
+
+        def endless_run(args, seeds, make_view, info):
+            state, guild_queue = mplus.new_state(), mplus.GuildQueue()
+            view = make_view(state, guild_queue, "Raider.IO ilvl")
+            view.start()
+            state["runs"][7] += 1
+            mplus.add_ilvl(state, 7, 290.0)
+            view.changed()
+            while not mplus.STOP.wait(0.01):  # a guildek bejárása sokáig tart
+                pass
+            reason = "stopped - summarizing what was collected so far"
+            view.stop(f"finished - {reason}")
+            return reason, state, guild_queue, None
+
+        with mock.patch.object(mplus, "run", endless_run):
+            window.start()
+            for _ in range(20):
+                self.root.update()
+                time.sleep(0.01)
+            self.assertTrue(window.running)
+            window.stop_button.invoke()
+            self.wait_until_finished(window)
+        self.assertEqual(window.status_var.get(), "Leállítva – a táblázat az addig összegyűjtött adatokat mutatja.")
+        self.assertEqual(window.table.rows(), [("7", "1", "1", "290,0", "290,0", "290,0", "290,0", "290,0")])
+        self.assertNotIn("disabled", window.csv_button.state())
+
+    def test_raid_stats_window(self):
+        stats = self.gui.stats_windows
+        wcl = stats.wcl
+        self.app.open_raid_stats()
+        window = self.app.raid_stats_window
+        window.client_id_var.set("")
+        window.client_secret_var.set("")
+        with mock.patch.object(stats.messagebox, "showwarning") as warning:
+            window.start()
+        self.assertIn("Add meg a Warcraft Logs API-kulcsot", warning.call_args.args[1])
+
+        def stats_row(name, kills, values, players=None):
+            counts = (kills,) if players is None else (kills, players)
+            summary = None if not values else {"mean": sum(values) / len(values), "median": values[0],
+                                               "p25": values[0], "min": min(values), "max": max(values)}
+            return name, counts, summary
+
+        raid_tables = {3: [stats_row("Első Boss", 0, []), stats_row("Összes boss", 0, [])],
+                       4: [stats_row("Első Boss", 2, [330.0, 332.0]), stats_row("Összes boss", 2, [330.0, 332.0])],
+                       5: [stats_row("Első Boss", 1, [340.0]), stats_row("Összes boss", 1, [340.0])]}
+        player_tables = {d: [stats_row(name, counts[0], [v + 1 for v in ([summary["min"]] if summary else [])], 20)
+                             for name, counts, summary in rows] for d, rows in raid_tables.items()}
+        seen = {}
+
+        def fake_run(args, cache):
+            seen["args"] = args
+            wcl.out("Zóna: Teszt Raid (id 50), 1 boss: Első Boss")
+            return {"zone": {"name": "Teszt Raid"}, "kills": 3, "per_difficulty": {4: 2, 5: 1},
+                    "sections": [("raid átlag / kill", raid_tables), ("játékos egyéni", player_tables)]}
+
+        window.client_id_var.set("azonosito")
+        window.client_secret_var.set("titok")
+        window.zone_var.set("1500")
+        window.region_var.set("eu")
+        window.players_var.set("3")
+        with mock.patch.object(wcl, "run", fake_run), mock.patch.object(wcl, "Cache") as cache:
+            window.start()
+            self.wait_until_finished(window)
+        args = seen["args"]
+        self.assertEqual((args.client_id, args.zone_id, args.zone, args.region, args.players), ("azonosito", 1500, None, "eu", 3))
+        self.assertEqual(Path(cache.call_args.args[0]), self.path.parent.resolve() / stats.WCL_CACHE_NAME)
+        cache.return_value.close.assert_called_once()
+        self.assertEqual(window.status_var.get(), "Kész.")
+        self.assertIsNone(wcl.OUTPUT)
+        self.assertIn("Zóna: Teszt Raid", window.log.content())
+        self.assertEqual(window.info_var.get(), "Teszt Raid · kill-ek (a duplikált logok nélkül): 3 · Normal: 0, Heroic: 2, Mythic: 1")
+        heroic = window.tables[4]
+        self.assertEqual(heroic.rows()[0], ("Első Boss", "2", "", "331,0", "330,0", "330,0", "330,0", "332,0"))
+        self.assertEqual(heroic.tree.item(heroic.tree.get_children()[-1], "tags"), ("total",))
+        self.assertEqual(window.tables[3].rows()[0], ("Első Boss", "0", "", "–", "–", "–", "–", "–"))
+        self.assertNotIn("players", heroic.tree["displaycolumns"])
+        window.metric_var.set("players")  # a játékosok egyéni itemlevele
+        window._show_result()
+        self.assertIn("players", heroic.tree["displaycolumns"])
+        self.assertEqual(heroic.rows()[0][:4], ("Első Boss", "2", "20", "331,0"))
+        keys = stats.load_api_keys(self.path.parent)
+        self.assertEqual((keys["wcl_client_id"], keys["wcl_client_secret"]), ("azonosito", "titok"))
+
+        csv_path = self.path.parent / "raid.csv"
+        with mock.patch.object(stats.filedialog, "asksaveasfilename", return_value=str(csv_path)):
+            window.save_csv()
+        self.assertIn("Heroic;raid átlag / kill;Első Boss;2;;331,0", csv_path.read_text(encoding="utf-8-sig"))
+
+        # Megjegyzés nélkül a kulcs a következő indításkor kikerül a fájlból.
+        window.remember_var.set(False)
+        with mock.patch.object(wcl, "run", fake_run), mock.patch.object(wcl, "Cache"):
+            window.start()
+            self.wait_until_finished(window)
+        self.assertEqual(stats.load_api_keys(self.path.parent), {})
+
     def test_region_setting_is_saved(self):
         self.assertEqual(self.app.region_var.get(), "EU")
         self.app.region_var.set("KR")

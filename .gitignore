@@ -4,3 +4,13 @@ __pycache__/
 # A program saját adatfájljai (beállítások, karakterek)
 szintezes_adatok*.json
 *.tmp
+
+# A statisztikai programok gyorsítótárai, API-kulcsai és hibakereső kimenetei
+raiderio_ilvl_cache.json
+raiderio_ilvl_cache.json.tmp
+wcl_cache.sqlite
+api_kulcsok.json
+probe_output.json
+debug_raw_run.json
+debug_guild_run.json
+wcl_probe_output.json

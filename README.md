@@ -56,6 +56,11 @@ megtervezéséhez és követéséhez.
   faj-, kaszt- és specmezőket pedig kitölti. Ez magától történik a listaablakok
   megnyitásakor és új karakter hozzáadásakor, vagy bármikor a **„Frissítés a
   Raider.io-ról”** gombbal (lásd lent).
+- **Statisztikák:** a főablak „M+ ilvl statisztika” gombja a Raider.io adataiból
+  megmutatja, milyen itemlevelű játékosok viszik időben a Mythic+ kulcsokat,
+  kulcsszintenként; a „Raid ilvl statisztika” a Warcraft Logs adataiból azt, hogy
+  milyen itemlevellel ölik meg az aktuális raid bossait Normal, Heroic és Mythic
+  nehézségen (lásd lent, „Statisztikák”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -66,6 +71,10 @@ megtervezéséhez és követéséhez.
   - Windows és macOS: a python.org telepítője tartalmazza a tkintert.
   - Linux: Debian/Ubuntu alatt `sudo apt install python3-tk`, Fedorán
     `sudo dnf install python3-tkinter`.
+- A Murlok.io- és Raider.io-adatokhoz és a statisztikákhoz internetkapcsolat kell;
+  a raid statisztikához saját (ingyenes) Warcraft Logs API-kulcs is.
+- A `requests` csomag nem kell: ha telepítve van, a statisztikai programok azt
+  használják, különben a beépített `httpcompat.py`-t (a szabványos urllib-bel).
 
 ## Indítás
 
@@ -151,6 +160,11 @@ python wow_leveling.py masik_terv.json
    neve vagy a realmje. A listaablakok tetején lévő „Frissítés a Raider.io-ról”
    gombbal bármikor újra lekérheted (lásd lent). A lekérés a háttérben fut, az
    állapota és az eredménye a gomb mellett látszik.
+9. **Statisztikák**: a főablak „M+ ilvl statisztika” és „Raid ilvl statisztika”
+   gombja egy-egy külön ablakot nyit. Állítsd be a lekérdezést, majd „Indítás”: a
+   lekérdezés a háttérben fut, a táblázat menet közben frissül, a „Leállítás” az
+   addigi adatokkal zárja le, a „CSV mentése…” pedig fájlba írja az eredményt
+   (lásd lent).
 
 ## Hogyan számol a program?
 
@@ -364,6 +378,77 @@ Megjegyzés: a játékban a magasabb szintekhez több tapasztalati pont kell, a
 program viszont minden szintet egyformán számol. Ezért érdemes az elején kicsit
 előrébb járni.
 
+## Statisztikák
+
+A két statisztika a program mappájában lévő két önálló program
+(`raiderio_ilvl_stats.py` és `wcl_raid_ilvl_stats.py`) ablakos változata: ugyanazt
+számolják, csak a beállítások mezőkben vannak, az eredmény táblázatban látszik, és a
+parancssori Ctrl+C helyett a „Leállítás” gomb állítja meg őket. Mindkettő
+gyorsítótárat használ (a program mappájában, lásd „Adatok”), így egy újabb
+lekérdezés csak azt tölti le, ami még nincs meg. Az ablakok mezői megmaradnak a
+következő megnyitásra; az API-kulcsokat a „Megjegyzés ezen a gépen” bejelölésével
+az `api_kulcsok.json` fájlba menti a program (titkosítás nélkül).
+
+**M+ ilvl statisztika (Raider.io).** Kulcsszintenként: hány futás és hány
+játékos adata került bele, valamint a játékosok itemlevelének átlaga, mediánja,
+25. percentilise (P25: a játékosok negyedének ennél kisebb az itemlevele),
+minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből valók
+(`mythic-plus/run-details`).
+
+- **Forrás:** a *ranglista* a régió legjobb pontszámú futásait olvassa (oldalanként
+  20 futás) – gyors, de csak a magas kulcsokat éri el, mert a ranglista mindig a
+  legmagasabb pontszámmal kezd. A *guildek* a megadott guildek (`Név@realm`, több
+  vesszővel; más régióból `Név@realm@us`) tagjainak legutóbbi futásait olvassák –
+  így minden kulcsszint előjön.
+- **A csapattagok guildjeit is bejárja:** a talált csapatok tagjainak guildjeit
+  is beolvassa, majd azok csapataiét, és így tovább; ez nagyon sokáig futhat (a
+  „legfeljebb N guild” korlátozza, vagy a „Leállítás”). Guildeknél alapból be van
+  kapcsolva, a ranglistánál nincs (ott a ranglista oldalai után kezdi).
+- **Kulcsszintek:** csak ezeket gyűjti (pl. `2-10` vagy `18,19,20`; üresen mind);
+  **legfeljebb N futás szintenként:** egy szintből ennyi után nem gyűjt többet, és
+  ha minden kért szint megvan, leáll.
+- **Itemlevel:** a tartományon kívüli itemlevelű játékos kimarad (a csapat többi
+  tagja számít); **csak az utolsó N nap** futásai; **csak az időben teljesített
+  futások** (alapból igen).
+- **Ranglista:** hány oldalt olvasson (API-kulcs nélkül legfeljebb 100),
+  **minden dungeon külön** (alacsonyabb kulcsokat is elér), **affix** (pl. a csak
+  a +2…+5 kulcsokon élő `lindormis-guidance`-szel a ranglista is eléri a kis
+  kulcsokat).
+- **Raider.io API-kulcs** (nem kötelező, https://raider.io/settings/apps):
+  nagyobb lekérési keretet ad.
+
+**Raid ilvl statisztika (Warcraft Logs).** Az aktuális raid bossaira
+nehézségenként (Normal, Heroic, Mythic) és bossonként: a kill-ek száma, valamint
+az itemlevel átlaga, mediánja, 25. percentilise, minimuma és maximuma, a végén
+az összes bossra együtt. Egy adatpont egy kill: a harcban részt vevő játékosok
+átlagos itemlevele („Raid átlag / kill”); kérésre a játékosok egyéni itemlevele
+is („Játékosok egyéni itemlevele”, bossonként és nehézségenként N kill
+játékosaiból – ez drága: kb. 11 API-pont / kill, az óránkénti keret 3600 pont,
+elfogyásakor a program kivár).
+
+- **API-kulcs** (egyszer kell): https://www.warcraftlogs.com/api/clients →
+  „Create Client”; név bármi, Redirect URL pl. `http://localhost`, a „Public
+  Client” ne legyen bepipálva. A kapott Client ID-t és Client Secretet írd be az
+  ablak tetején.
+- **Raid:** üresen a legújabb aktív raid; különben a neve (részlet) vagy a
+  Warcraft Logs-os zóna száma.
+- **Minta:** az utolsó N nap reportjaiból ennyi oldalnyit olvas, oldalanként
+  ennyi reporttal (az időszakot egyenletesen lefedve); **régió:** csak ennek a
+  régiónak a guildjei. A több logger által feltöltött ugyanazon kill-t egyszer
+  számolja.
+- **Kihagyott bossok:** a Warcraft Logs a raid zónájába sorolja a Lair / world
+  bossokat is; ezeket alapból kihagyja.
+- **Minden újra letöltése:** a gyorsítótárban lévő adatok helyett mindent újra
+  lekér.
+
+**Parancssorból** a két program ugyanúgy futtatható, mint eddig (minden
+beállításuk leírása a fájlok elején olvasható), pl.:
+
+```
+python raiderio_ilvl_stats.py --guild "Solutions@ragnaros" --levels 2,3,4,5,6,7,8,9,10 --csv live.csv
+python wcl_raid_ilvl_stats.py --days 14 --pages 150 --csv stat.csv
+```
+
 ## Adatok
 
 A beállítások és a karakterek a program mappájában lévő `szintezes_adatok.json`
@@ -373,6 +458,11 @@ beolvassa: ilyenkor a kezdőszint 1,00, a célszint a korábbi maximum szint les
 a fájl megsérül, a program átnevezi (`szintezes_adatok.hibas-<időpont>.json`, így
 nem vész el), és alapbeállításokkal indul.
 
+A statisztikák a fájljaikat az adatfájl mellé teszik: `raiderio_ilvl_cache.json`
+és `wcl_cache.sqlite` (a letöltött adatok gyorsítótára – bármikor törölhető, csak
+újra le kell tölteni őket), valamint – ha kéred – `api_kulcsok.json` (az
+API-kulcsok).
+
 ## Fájlok
 
 - `wow_leveling.py` – a grafikus felület, ezt kell elindítani
@@ -380,6 +470,12 @@ nem vész el), és alapbeállításokkal indul.
 - `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
 - `raiderio.py` – az itemlevelek és a Raider.io pontszámok lekérése a Raider.io-ról
 - `recommend.py` – a combóajánlás
+- `stats_windows.py` – a két statisztikai ablak
+- `raiderio_ilvl_stats.py` – Mythic+ itemlevel-statisztika a Raider.io-ról (önállóan
+  is futtatható)
+- `wcl_raid_ilvl_stats.py` – raid itemlevel-statisztika a Warcraft Logs-ról
+  (önállóan is futtatható)
+- `httpcompat.py` – a `requests` csomag pótlása a szabványos urllib-bel
 - `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
   a választható faj–kaszt kombinációk
 - `tests/` – automatikus tesztek

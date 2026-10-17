@@ -70,6 +70,12 @@ import raiderio
 from recommend import recommend_combo
 from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, role_label, role_of, specs_for_class
 
+try:
+    import stats_windows
+except ImportError as exc:  # pl. ha a Pythonból hiányzik az sqlite3: a statisztikák nélkül is működik
+    stats_windows = None
+    STATS_IMPORT_ERROR = str(exc)
+
 APP_TITLE = "WoW szintezés tervező"
 RAIDERIO_TITLE = "Frissítés a Raider.io-ról"
 DATA_FILE_NAME = "szintezes_adatok.json"
@@ -1227,6 +1233,9 @@ class App:
         self.list_window: CharacterListWindow | None = None
         self.gear_window: GearWindow | None = None
         self.mythic_window: MythicPlusWindow | None = None
+        # A statisztikai ablakok (lásd stats_windows.py).
+        self.mplus_stats_window: stats_windows.MythicStatsWindow | None = None
+        self.raid_stats_window: stats_windows.RaidStatsWindow | None = None
         self.list_sort = LIST_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
         self.mythic_sort = MYTHIC_ORDER  # a Mythic+ ablak rendezése
@@ -1487,6 +1496,13 @@ class App:
             ("Mythic+", self.open_mythic),
         ):
             ttk.Button(window_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
+        stats_buttons = ttk.Frame(footer)  # a beépített statisztikai programok
+        stats_buttons.pack(side="right", anchor="n", padx=(0, 12))
+        for text, command in (
+            ("M+ ilvl statisztika", self.open_mplus_stats),
+            ("Raid ilvl statisztika", self.open_raid_stats),
+        ):
+            ttk.Button(stats_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
 
     def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
         """A beállítások mezőiből beolvasott értékek és a hibák, a Settings mezőnevei szerint."""
@@ -1700,6 +1716,28 @@ class App:
         self.refresh_spec_scores()  # ha a tárolt adat már régebbi 8 óránál
         if self.data.raiderio_is_stale():  # ha a legutóbbi lekérés régebbi fél óránál
             self.refresh_raiderio(automatic=True)
+
+    def open_mplus_stats(self) -> None:
+        self._open_stats_window("MythicStatsWindow")
+
+    def open_raid_stats(self) -> None:
+        self._open_stats_window("RaidStatsWindow")
+
+    def _open_stats_window(self, class_name: str) -> None:
+        """Megnyitja a statisztikai ablakot (lásd stats_windows.py); ha már nyitva van, csak
+        előtérbe hozza."""
+        if stats_windows is None:
+            message = f"A statisztikai ablakok ezzel a Pythonnal nem használhatók:\n{STATS_IMPORT_ERROR}"
+            messagebox.showerror(APP_TITLE, message, parent=self.root)
+            return
+        window_class = getattr(stats_windows, class_name)
+        window = getattr(self, window_class.WINDOW_ATTRIBUTE)
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            window.focus_set()
+            return
+        setattr(self, window_class.WINDOW_ATTRIBUTE, window_class(self))
 
     def open_windows(self) -> list[CharacterListWindow]:
         """A nyitott listaablakok (karakterlista, Gear, Mythic+)."""
