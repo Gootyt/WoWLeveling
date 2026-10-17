@@ -51,6 +51,9 @@ megtervezéséhez és követéséhez.
   karakterek. A fejlécre kattintva bármelyik oszlop szerint átrendezhető.
 - A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a
   [Murlok.io](https://murlok.io) Mythic+ rangsorából (a program magától lekéri).
+- A listaablakok **„Frissítés a Raider.io-ról”** gombja a
+  [Raider.io](https://raider.io)-ról lekéri a karakterek itemlevelét és Mythic+
+  pontszámát a nevük, a realmjük és a beállított régió alapján (lásd lent).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -82,7 +85,8 @@ python wow_leveling.py masik_terv.json
    (pl. `2026-10-15`; a `2026.10.15.` alakot is elfogadja), vagy a ▼ gombbal
    naptárból választhatsz. A kezdő- és a célszint két tizedesjegyig adható meg; a
    mezők nyilai egy egész szinttel léptetnek. A célitemlevel nem kötelező, két
-   tizedesjegyig adható meg (pl. `326,55`). Hibás érték esetén piros üzenet
+   tizedesjegyig adható meg (pl. `326,55`). A régió (EU, US, KR vagy TW) a
+   Raider.io-lekéréshez kell, alapból EU. Hibás érték esetén piros üzenet
    jelzi, mi a gond. A helyes beállításokat a program azonnal menti. A két
    céldátum melletti „Kiszámolás a mostani szintekből” gomb a karakterek eddigi
    tempójából számolja ki az első és az utolsó céldátumot (lásd lent); beállítás
@@ -135,6 +139,10 @@ python wow_leveling.py masik_terv.json
    ismeretlen a class/spec), a lista végére kerül. A program átrendezés előtt
    rákérdez. A nézet rendezése utána sem változik (a karakterlistában marad az
    állapot szerinti); az új sorrend a # oszlopban látszik.
+8. **Frissítés a Raider.io-ról**: a listaablakok tetején lévő gomb minden olyan
+   karakter itemlevelét és Raider.io pontszámát lekéri, amelynél meg van adva a
+   realm (lásd lent). A lekérés a háttérben fut, az állapota a gomb mellett
+   látszik.
 
 ## Hogyan számol a program?
 
@@ -295,6 +303,29 @@ pontszámhoz, de nem pontosan ugyanaz.
 - Csak akkor van érték, ha a karakternél a kaszt és a spec is meg van adva (a
   listában szereplő angol nevekkel, pl. „Death Knight” és „Unholy”).
 
+**Raider.io-lekérés.** A program karakterenként egy kérést küld a Raider.io
+nyilvános API-jának (`https://raider.io/api/v1/characters/profile`) a karakter
+nevével, realmjével és a beállított régióval, és két adatot ír be a válaszból:
+
+- **Itemlevel**: a felvett tárgyak átlagos itemlevele. A Raider.io ezt sokszor
+  lefelé kerekítve, egész számként adja meg, ezért a program a tárgyak
+  itemleveléből két tizedesre számolja ki, ahogy a játék is (16 hely, a kétkezes
+  fegyver kétszer számít). Ha ez nem egyezik a Raider.io értékével (pl. mert
+  hiányzik egy tárgy), a Raider.io egész értékét veszi; ilyenkor a kézzel beírt,
+  ugyanilyen egész részű pontosabb érték (pl. 333,56 a 333 helyett) megmarad.
+- **Raider.io pontszám**: az aktuális szezon összesített Mythic+ pontszáma.
+
+- A nagyobb értékeket (és az eddig üreseket) a program magától beírja. Ha a
+  Raider.io kisebb értéket mutat, mint ami be van írva, előbb rákérdez: a
+  Raider.io a karaktereket időnként frissíti a játékból, így az adata néhány
+  órával régebbi is lehet a kézzel beírtnál.
+- A realm nélküli karaktereket kihagyja. Akit a Raider.io nem ismer (elírt név
+  vagy realm), azt a lekérés végén felsorolja; a többi karakter adata ettől még
+  frissül. Ha a Raider.io nem érhető el, a lekérés leáll, és a hiba a gomb
+  mellett is látszik.
+- Internetkapcsolat kell hozzá. A karakterek nevén, realmjén és a régión kívül a
+  program nem küld semmit. A legutóbbi lekérés ideje az adatfájlba is bekerül.
+
 **Állapotok:**
 
 | Állapot | Jelentés |
@@ -329,6 +360,7 @@ nem vész el), és alapbeállításokkal indul.
 - `wow_leveling.py` – a grafikus felület, ezt kell elindítani
 - `leveling.py` – az ütemezés számítása, mentés és betöltés
 - `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
+- `raiderio.py` – az itemlevelek és a Raider.io pontszámok lekérése a Raider.io-ról
 - `recommend.py` – a combóajánlás
 - `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
   a választható faj–kaszt kombinációk

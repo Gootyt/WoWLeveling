@@ -50,6 +50,8 @@ DEFAULT_TARGET_LEVEL = Decimal("90.00")
 PARALLEL = "parallel"  # minden karakter a közös kezdő naptól szintez
 SEQUENTIAL = "sequential"  # a karakterek egymás után következnek
 MODES = (PARALLEL, SEQUENTIAL)
+REGIONS = ("eu", "us", "kr", "tw")  # a Raider.io régiói
+DEFAULT_REGION = "eu"
 
 DATA_VERSION = 2
 
@@ -244,6 +246,7 @@ class Settings:
     target_level: Decimal = DEFAULT_TARGET_LEVEL  # ezt kell elérniük a céldátumig
     mode: str = PARALLEL
     target_item_level: Decimal | None = None  # a karakterek célitemlevele, ha meg van adva
+    region: str = DEFAULT_REGION  # a karakterek régiója (a Raider.io-lekéréshez)
 
     @classmethod
     def default(cls, today: date | None = None) -> Settings:
@@ -270,6 +273,8 @@ class Settings:
             problems.append("A célszintnek nagyobbnak kell lennie a kezdőszintnél.")
         if self.mode not in MODES:
             problems.append(f"Ismeretlen ütemezési mód: {self.mode}.")
+        if self.region not in REGIONS:
+            problems.append(f"Ismeretlen régió: {self.region}.")
         return problems
 
     def to_dict(self) -> dict:
@@ -281,6 +286,7 @@ class Settings:
             "target_level": float(self.target_level),
             "mode": self.mode,
             "target_item_level": None if self.target_item_level is None else float(self.target_item_level),
+            "region": self.region,
         }
 
     @classmethod
@@ -290,6 +296,7 @@ class Settings:
         last = data["last_target_date"] if "last_target_date" in data else data["last_max_date"]
         target = data.get("target_level", data.get("max_level", DEFAULT_TARGET_LEVEL))
         mode = data.get("mode", PARALLEL)
+        region = data.get("region", DEFAULT_REGION)
         return cls(
             start_date=date.fromisoformat(data["start_date"]),
             first_target_date=date.fromisoformat(first),
@@ -298,6 +305,7 @@ class Settings:
             target_level=_level_from_json(target),
             mode=mode if mode in MODES else PARALLEL,
             target_item_level=_decimal_from_json(data.get("target_item_level"), ITEM_LEVEL_MAX, ITEM_LEVEL_STEP),
+            region=region if region in REGIONS else DEFAULT_REGION,
         )
 
 
@@ -1045,14 +1053,17 @@ class LevelingData:
     spec_scores: SpecScores = field(default_factory=SpecScores)  # a Murlok.io-ról lekért adatok
     # A lista a következő nap céljait mutassa, ha a mai célt minden karakter teljesítette.
     look_ahead: bool = True
+    raiderio_fetched_at: datetime | None = None  # a legutóbbi Raider.io-lekérés ideje (helyi idő)
 
     def to_dict(self) -> dict:
+        fetched_at = self.raiderio_fetched_at
         return {
             "version": DATA_VERSION,
             "settings": self.settings.to_dict(),
             "characters": [character.to_dict() for character in self.characters],
             "spec_scores": self.spec_scores.to_dict(),
             "view": {"look_ahead": self.look_ahead},
+            "raiderio": {"fetched_at": None if fetched_at is None else fetched_at.isoformat(timespec="seconds")},
         }
 
     @classmethod
@@ -1064,11 +1075,16 @@ class LevelingData:
             spec_scores = SpecScores()  # a sérült gyorsítótár miatt ne vesszenek el az adatok
         view = data.get("view")
         look_ahead = view.get("look_ahead", True) if isinstance(view, dict) else True
+        try:
+            raiderio_fetched_at = datetime.fromisoformat(data["raiderio"]["fetched_at"])
+        except (KeyError, TypeError, ValueError):
+            raiderio_fetched_at = None  # még nem volt lekérés (vagy sérült az adat)
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
             spec_scores=spec_scores,
             look_ahead=look_ahead if isinstance(look_ahead, bool) else True,
+            raiderio_fetched_at=raiderio_fetched_at,
         )
 
 

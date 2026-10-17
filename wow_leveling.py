@@ -34,6 +34,7 @@ from leveling import (
     LEVEL_MIN,
     PARALLEL,
     RAIDERIO_MAX,
+    REGIONS,
     SEQUENTIAL,
     Character,
     CharacterPlan,
@@ -65,10 +66,12 @@ from leveling import (
     sort_plans,
 )
 import murlok
+import raiderio
 from recommend import recommend_combo
 from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, role_label, role_of, specs_for_class
 
 APP_TITLE = "WoW szintezés tervező"
+RAIDERIO_TITLE = "Frissítés a Raider.io-ról"
 DATA_FILE_NAME = "szintezes_adatok.json"
 
 INTRO_TEXT = (
@@ -587,7 +590,7 @@ class CharacterListWindow(tk.Toplevel):
         self._sized = False  # megkapta-e már az ablak a kezdeti méretét
         self._content_width = 0  # a tartalom legutóbb mért szélessége
         self._build()
-        self.update_score_controls()
+        self.update_fetch_controls()
         self.bind("<Escape>", lambda _event: self.close())
         self.refresh()
         self.minsize(app.px(640), app.px(360))
@@ -604,14 +607,21 @@ class CharacterListWindow(tk.Toplevel):
         body.pack(fill="both", expand=True)
         header = ttk.Frame(body)
         header.pack(fill="x")
-        ttk.Label(header, textvariable=self.header_var, style="Strong.TLabel").pack(side="left", anchor="w")
+        ttk.Label(header, textvariable=self.header_var, style="Strong.TLabel").pack(side="left", anchor="nw")
+        sources = ttk.Frame(header)  # a Murlok.io és a Raider.io adatainak frissítése
+        sources.pack(side="right")
         self.score_button = ttk.Button(
-            header, text="Frissítés a Murlok.io-ról", command=lambda: self.app.refresh_spec_scores(force=True)
+            sources, text="Frissítés a Murlok.io-ról", command=lambda: self.app.refresh_spec_scores(force=True)
         )
-        self.score_button.pack(side="right")
-        ttk.Label(header, textvariable=self.app.score_status_var, style="Hint.TLabel").pack(
-            side="right", padx=(0, 8)
+        self.raiderio_button = ttk.Button(
+            sources, text=RAIDERIO_TITLE, command=lambda: self.app.refresh_raiderio(parent=self)
         )
+        rows = ((self.app.score_status_var, self.score_button), (self.app.raiderio_status_var, self.raiderio_button))
+        for row, (status_var, button) in enumerate(rows):
+            ttk.Label(sources, textvariable=status_var, style="Hint.TLabel").grid(
+                row=row, column=0, sticky="e", padx=(0, 8)
+            )
+            button.grid(row=row, column=1, sticky="ew", pady=(4 if row else 0, 0))
         ttk.Label(
             body,
             text=self.HINT_TEXT,
@@ -999,9 +1009,10 @@ class CharacterListWindow(tk.Toplevel):
         self.app.data.look_ahead = self.look_ahead_var.get()
         self.app.data_changed()
 
-    def update_score_controls(self) -> None:
-        """A Murlok.io frissítés gomb csak akkor használható, ha éppen nem fut lekérés."""
+    def update_fetch_controls(self) -> None:
+        """A Murlok.io és a Raider.io frissítés gombja csak akkor használható, ha éppen nem fut lekérés."""
         self.score_button.state(["!disabled" if self.app.can_fetch_scores() else "disabled"])
+        self.raiderio_button.state(["!disabled" if self.app.can_fetch_raiderio() else "disabled"])
 
     @property
     def view_sort(self) -> tuple[str, bool]:
@@ -1158,7 +1169,7 @@ class App:
     """A főablak: beállítások, új karakter felvétele, a karakterlista, a Gear és a Mythic+ ablak
     megnyitása."""
 
-    def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None) -> None:
+    def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None, fetch_profile=None) -> None:
         self.root = root
         self.data_path = Path(data_path)
         # A Murlok.io-pontszámokat lekérő függvény (None: nincs lekérés, pl. a tesztekben).
@@ -1166,6 +1177,13 @@ class App:
         self._score_fetch_running = False
         self._score_error: str | None = None
         self.score_status_var = tk.StringVar()
+        # Egy karakter Raider.io-adatait lekérő függvény (régió, realm, név) → raiderio.Profile.
+        self._fetch_profile = fetch_profile
+        self._raiderio_running = False
+        self._raiderio_progress = (0, 0)  # hány karakter adata jött már meg, az összesből
+        self._raiderio_error: str | None = None
+        self._raiderio_note: str | None = None  # a legutóbbi lekérés eredménye (ebben a futásban)
+        self.raiderio_status_var = tk.StringVar()
         self.list_window: CharacterListWindow | None = None
         self.gear_window: GearWindow | None = None
         self.mythic_window: MythicPlusWindow | None = None
@@ -1193,6 +1211,7 @@ class App:
             value="" if target_item_level is None else format_item_level(target_item_level)
         )
         self.mode_var = tk.StringVar(value=settings.mode)
+        self.region_var = tk.StringVar(value=settings.region.upper())
         self.settings_message = tk.StringVar()
         self.name_var = tk.StringVar()
         self.realm_var = tk.StringVar()
@@ -1214,11 +1233,14 @@ class App:
             self.target_level_var,
             self.target_item_level_var,
             self.mode_var,
+            self.region_var,
         )
         for variable in settings_vars:
             variable.trace_add("write", self._on_settings_edited)
         self._show_settings_problems(settings.errors())
-        self._update_score_status()  # a listaablakok már a szöveggel együtt méretezik magukat
+        # A listaablakok már a szövegekkel együtt méretezik magukat.
+        self._update_score_status()
+        self._update_raiderio_status()
         self.refresh()
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
@@ -1324,9 +1346,22 @@ class App:
         ttk.Label(item_level_cell, text="nem kötelező (pl. 326,55)", style="Hint.TLabel").pack(
             side="left", padx=(8, 0)
         )
-        field_label(settings, "Ütemezés:", 6, sticky="nw")
+        field_label(settings, "Régió:", 6)
+        region_cell = ttk.Frame(settings)
+        region_cell.grid(row=6, column=1, columnspan=2, sticky="w", pady=3)
+        ttk.Combobox(
+            region_cell,
+            textvariable=self.region_var,
+            values=[region.upper() for region in REGIONS],
+            state="readonly",
+            width=5,
+        ).pack(side="left")
+        ttk.Label(region_cell, text="a karakterek régiója a Raider.io-lekéréshez", style="Hint.TLabel").pack(
+            side="left", padx=(8, 0)
+        )
+        field_label(settings, "Ütemezés:", 7, sticky="nw")
         modes = ttk.Frame(settings)
-        modes.grid(row=6, column=1, columnspan=2, sticky="w", pady=3)
+        modes.grid(row=7, column=1, columnspan=2, sticky="w", pady=3)
         ttk.Radiobutton(
             modes,
             text="Párhuzamosan – mindegyik a kezdő naptól szintez",
@@ -1342,7 +1377,7 @@ class App:
         self.settings_message_label = ttk.Label(
             settings, textvariable=self.settings_message, wraplength=self.px(520), justify="left"
         )
-        self.settings_message_label.grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.settings_message_label.grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         new = ttk.LabelFrame(body, text="Új karakter hozzáadása", padding=10)
         new.grid(row=2, column=1, sticky="nsew", padx=(12, 0))
@@ -1437,7 +1472,7 @@ class App:
         if problems:
             self._show_settings_problems(list(problems.values()))
             return
-        settings = Settings(mode=self.mode_var.get(), **values)
+        settings = Settings(mode=self.mode_var.get(), region=self.region_var.get().lower(), **values)
         problems = settings.errors()
         self._show_settings_problems(problems)
         if not problems and settings != self.data.settings:
@@ -1671,7 +1706,141 @@ class App:
             text = "Murlok.io-pontszámok: még nincsenek lekérve"
         self.score_status_var.set(text)
         for window in self.open_windows():
-            window.update_score_controls()
+            window.update_fetch_controls()
+
+    def can_fetch_raiderio(self) -> bool:
+        return self._fetch_profile is not None and not self._raiderio_running
+
+    def refresh_raiderio(self, parent: tk.Misc | None = None) -> None:
+        """A karakterek itemlevelének és Raider.io pontszámának lekérése a Raider.io-ról, a háttérben
+        (lásd raiderio.py); közben a program használható. Csak a megadott realmű karakterekét kéri le."""
+        parent = parent or self.root
+        if not self.can_fetch_raiderio():
+            return
+        characters = [character for character in self.data.characters if character.realm]
+        jobs = [(character.uid, character.realm, character.name) for character in characters]
+        if not jobs:
+            message = (
+                "A lekéréshez add meg a karakterek realmjét (dupla kattintás a karakterre, "
+                "vagy „Szerkesztés…”)."
+            )
+            messagebox.showinfo(RAIDERIO_TITLE, message, parent=parent)
+            return
+        fetch = self._fetch_profile
+        region = self.data.settings.region
+        results: queue.Queue = queue.Queue()
+
+        def work() -> None:
+            for uid, realm, name in jobs:
+                try:
+                    results.put((uid, fetch(region, realm, name)))
+                except raiderio.CharacterNotFound as exc:
+                    results.put((uid, exc))
+                except raiderio.RaiderioError as exc:  # a többi karakternél sem sikerülne
+                    results.put((None, exc))
+                    return
+                except Exception as exc:  # váratlan hiba se akassza meg a programot
+                    results.put((None, raiderio.RaiderioError(f"váratlan hiba: {exc!r}")))
+                    return
+            results.put((None, None))  # kész
+
+        self._raiderio_running = True
+        self._raiderio_progress = (0, len(jobs))
+        self._raiderio_error = self._raiderio_note = None
+        self._update_raiderio_status()
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(100, self._check_raiderio_fetch, results, {}, parent)
+
+    def _check_raiderio_fetch(self, results: queue.Queue, outcomes: dict, parent: tk.Misc) -> None:
+        while True:
+            try:
+                uid, outcome = results.get_nowait()
+            except queue.Empty:
+                if len(outcomes) != self._raiderio_progress[0]:
+                    self._raiderio_progress = (len(outcomes), self._raiderio_progress[1])
+                    self._update_raiderio_status()
+                self.root.after(100, self._check_raiderio_fetch, results, outcomes, parent)
+                return
+            if uid is None:  # vége; outcome: a lekérést megszakító hiba, ha volt
+                break
+            outcomes[uid] = outcome
+        self._raiderio_running = False
+        self._finish_raiderio(outcomes, outcome, parent if parent.winfo_exists() else self.root)
+
+    def _finish_raiderio(self, outcomes: dict, error: raiderio.RaiderioError | None, parent: tk.Misc) -> None:
+        """A lekért adatok beírása: a növekedések (és az eddig üres értékek) magától, a csökkenések
+        kérdés után (lásd raiderio.profile_changes)."""
+        characters = {character.uid: character for character in self.data.characters}
+        rises, drops, failed = [], [], []
+        for uid, outcome in outcomes.items():
+            character = characters.get(uid)
+            if character is None:  # a lekérés közben törölték
+                continue
+            if isinstance(outcome, raiderio.RaiderioError):
+                failed.append(f"{character.name} ({character.realm}): {outcome}")
+            else:
+                character_rises, character_drops = raiderio.profile_changes(character, outcome)
+                rises += character_rises
+                drops += character_drops
+        for change in rises:
+            change.apply()
+        if error is None:
+            self.data.raiderio_fetched_at = datetime.now()
+        else:
+            self._raiderio_error = str(error)
+        changed = {change.character.uid for change in rises}
+        self._raiderio_note = self._raiderio_changes_text(len(changed))
+        self.data_changed()
+        self._update_raiderio_status()
+
+        notes = []
+        if error is not None and not outcomes:
+            summary = f"Nem sikerült lekérni az adatokat: {error}"
+        else:
+            summary = f"A Raider.io-ról lekért adatok szerint {self._raiderio_note}."
+            if error is not None:
+                notes.append(f"A lekérés közben megszakadt: {error}")
+        if failed:
+            notes.append("Nem sikerült lekérni:\n" + "\n".join(f"• {line}" for line in failed))
+        skipped = [character.name for character in self.data.characters if not character.realm]
+        if skipped:
+            notes.append("Realm nélkül kimaradt: " + ", ".join(skipped))
+        if drops:
+            question = (
+                "A Raider.io ezeknél kisebb értéket mutat, mint ami most be van írva. Lehet, hogy csak az "
+                "adata régebbi: a játékbeli változás néhány óra múlva jelenik meg rajta.\n\n"
+                + "\n".join(f"• {change.describe()}" for change in drops)
+                + "\n\nEzeket is átírjam?"
+            )
+            if messagebox.askyesno(RAIDERIO_TITLE, question, detail="\n\n".join([summary, *notes]), parent=parent):
+                for change in drops:
+                    change.apply()
+                changed |= {change.character.uid for change in drops}
+                self._raiderio_note = self._raiderio_changes_text(len(changed))
+                self.data_changed()
+                self._update_raiderio_status()
+        elif notes or error is not None:
+            messagebox.showinfo(RAIDERIO_TITLE, summary, detail="\n\n".join(notes), parent=parent)
+
+    @staticmethod
+    def _raiderio_changes_text(changed: int) -> str:
+        return f"{changed} karakter adata frissült" if changed else "nem változott semmi"
+
+    def _update_raiderio_status(self) -> None:
+        fetched_at = self.data.raiderio_fetched_at
+        last = f"{fetched_at:%Y-%m-%d %H:%M}" if fetched_at else None
+        if self._raiderio_running:
+            done, total = self._raiderio_progress
+            text = f"Raider.io: lekérés folyamatban… ({done}/{total})"
+        elif self._raiderio_error:
+            text = f"Raider.io: {self._raiderio_error}" + (f" Utolsó sikeres lekérés: {last}." if last else "")
+        elif last:
+            text = f"Raider.io-adatok: {last}" + (f" – {self._raiderio_note}" if self._raiderio_note else "")
+        else:
+            text = "Raider.io-adatok: még nincsenek lekérve"
+        self.raiderio_status_var.set(text)
+        for window in self.open_windows():
+            window.update_fetch_controls()
 
     def data_changed(self, select: Character | None = None) -> None:
         """Módosítás után: mentés, majd minden ablak frissítése."""
@@ -1746,7 +1915,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     _enable_windows_dpi_awareness()
     root = tk.Tk()
-    App(root, args.data_file, fetch_scores=murlok.fetch_spec_scores)
+    App(root, args.data_file, fetch_scores=murlok.fetch_spec_scores, fetch_profile=raiderio.fetch_profile)
     root.mainloop()
 
 

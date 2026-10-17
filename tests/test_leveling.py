@@ -136,6 +136,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(len(make_settings(start_level="80", target_level="80").errors()), 1)
         self.assertEqual(len(make_settings(start_level="85", target_level="80").errors()), 1)
 
+    def test_region_must_be_known(self):
+        self.assertEqual(make_settings().region, "eu")
+        self.assertEqual(dataclasses.replace(make_settings(), region="us").errors(), [])
+        self.assertEqual(dataclasses.replace(make_settings(), region="cn").errors(), ["Ismeretlen régió: cn."])
+
 
 class DeadlineTests(unittest.TestCase):
     def test_single_character_uses_first_date(self):
@@ -847,6 +852,15 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path).spec_scores
         self.assertEqual((loaded.scores, loaded.fetched_at), (scores.scores, scores.fetched_at))
 
+    def test_region_and_raiderio_fetch_time_are_saved(self):
+        data = LevelingData(dataclasses.replace(make_settings(), region="us"))
+        data.raiderio_fetched_at = datetime(2026, 10, 17, 14, 5, 9)
+        save_data(self.path, data)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual((raw["settings"]["region"], raw["raiderio"]), ("us", {"fetched_at": "2026-10-17T14:05:09"}))
+        loaded = load_data(self.path)
+        self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("us", data.raiderio_fetched_at))
+
     def test_look_ahead_switch_is_saved(self):
         save_data(self.path, LevelingData(make_settings(), look_ahead=False))
         self.assertFalse(load_data(self.path).look_ahead)
@@ -858,11 +872,14 @@ class PersistenceTests(unittest.TestCase):
             "settings": {"start_date": "2026-10-01", "first_target_date": "2026-10-10", "last_target_date": "2026-11-01"},
             "characters": [{"name": "Arthas"}],
             "spec_scores": {"fetched_at": "nem dátum", "scores": {}},
+            "raiderio": {"fetched_at": "nem dátum"},
         }
+        content["settings"]["region"] = "xx"
         self.path.write_text(json.dumps(content), encoding="utf-8")
         loaded = load_data(self.path)
         self.assertEqual([c.name for c in loaded.characters], ["Arthas"])
         self.assertIsNone(loaded.spec_scores.fetched_at)
+        self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("eu", None))
 
     def test_missing_file(self):
         with self.assertRaises(FileNotFoundError):
@@ -899,6 +916,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.settings.mode, PARALLEL)
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
         self.assertIsNone(loaded.settings.target_item_level)  # nem kötelező
+        self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("eu", None))
         arthas = loaded.characters[0]
         self.assertEqual(
             (arthas.realm, arthas.race, arthas.char_class, arthas.spec, arthas.level, arthas.raiderio_score),

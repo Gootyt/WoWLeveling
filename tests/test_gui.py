@@ -559,6 +559,118 @@ class GuiTests(unittest.TestCase):
         )
         self.assertNotIn("disabled", app.list_window.score_button.state())  # újra lehet próbálni
 
+    def raiderio_app(self, fetch):
+        """Egy második főablak, amely a megadott függvénnyel „kéri le” a Raider.io-adatokat."""
+        return self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "raiderio.json", fetch_profile=fetch)
+
+    def wait_for_raiderio(self, app):
+        for _ in range(300):
+            self.root.update()
+            if app.can_fetch_raiderio():
+                return
+            time.sleep(0.01)
+        self.fail("a Raider.io-lekérés nem fejeződött be")
+
+    @staticmethod
+    def add_to(app, name, realm="", item_level="", score=""):
+        app.name_var.set(name)
+        app.realm_var.set(realm)
+        app.item_level_var.set(item_level)
+        app.raiderio_var.set(score)
+        app.add_character()
+
+    def test_raiderio_button_fetches_item_levels_and_scores(self):
+        self.app.open_list()  # lekérő függvény nélkül a gomb nem használható
+        self.assertIn("disabled", self.app.list_window.raiderio_button.state())
+
+        Profile = self.gui.raiderio.Profile
+        profiles = {
+            "Thrall": Profile(D("331.25"), D("2543.7")),  # eddig üres: átíródik
+            "Jaina": Profile(D("320.00"), D("2600.0")),  # az itemlevel kisebb (kérdés), a pontszám nagyobb
+            "Arthas": Profile(D("333.00"), None),  # csak egész itemlevel: a pontosabb 333,56 marad
+        }
+        calls = []
+
+        def fetch(region, realm, name):
+            calls.append((region, realm, name))
+            if name == "Valaki":
+                raise self.gui.raiderio.CharacterNotFound("nem található a Raider.io-n")
+            return profiles[name]
+
+        app = self.raiderio_app(fetch)
+        self.add_to(app, "Thrall", "Draenor")
+        self.add_to(app, "Jaina", "Ragnaros", item_level="325,5", score="2500")
+        self.add_to(app, "Arthas", "Draenor", item_level="333,56")
+        self.add_to(app, "Valaki", "Draenor")
+        self.add_to(app, "Illidan")  # realm nélkül nem lehet lekérni
+        thrall, jaina, arthas = app.data.characters[:3]
+        app.open_list()
+        window = app.list_window
+        self.assertEqual(app.raiderio_status_var.get(), "Raider.io-adatok: még nincsenek lekérve")
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False) as ask:
+            window.raiderio_button.invoke()
+            self.assertIn("lekérés folyamatban", app.raiderio_status_var.get())
+            self.assertIn("disabled", window.raiderio_button.state())
+            self.wait_for_raiderio(app)
+        self.assertEqual([call[2] for call in calls], ["Thrall", "Jaina", "Arthas", "Valaki"])
+        self.assertEqual(calls[1], ("eu", "Ragnaros", "Jaina"))
+        self.assertEqual((thrall.item_level, thrall.raiderio_score), (D("331.25"), D("2543.7")))
+        self.assertEqual((jaina.item_level, jaina.raiderio_score), (D("325.50"), D("2600.0")))  # nemet mondtunk
+        self.assertEqual(arthas.item_level, D("333.56"))
+        question, detail = ask.call_args.args[1], ask.call_args.kwargs["detail"]
+        self.assertIn("• Jaina: itemlevel 325,50 → 320,00", question)
+        self.assertNotIn("Thrall", question)
+        self.assertIn("2 karakter adata frissült", detail)
+        self.assertIn("• Valaki (Draenor): nem található a Raider.io-n", detail)
+        self.assertIn("Realm nélkül kimaradt: Illidan", detail)
+        self.assertRegex(app.raiderio_status_var.get(), r"^Raider\.io-adatok: \d{4}-\d\d-\d\d \d\d:\d\d – 2 karakter")
+        self.assertEqual(window.tree.set(thrall.uid, "item_level"), "331,25")  # a táblázat is frissült
+        saved = load_data(app.data_path)
+        self.assertEqual(saved.characters[0].raiderio_score, D("2543.7"))
+        self.assertIsNotNone(saved.raiderio_fetched_at)
+
+        # Újra: a régió a beállításokból jön, és igen válaszra a csökkenés is átíródik.
+        app.region_var.set("US")
+        calls.clear()
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            window.raiderio_button.invoke()
+            self.wait_for_raiderio(app)
+        self.assertEqual({call[0] for call in calls}, {"us"})
+        self.assertEqual(jaina.item_level, D("320.00"))
+        self.assertIn("1 karakter adata frissült", app.raiderio_status_var.get())
+
+    def test_raiderio_fetch_problems_are_reported(self):
+        calls = []
+
+        def fetch(region, realm, name):
+            calls.append(name)
+            raise self.gui.raiderio.RaiderioError("a Raider.io nem érhető el (teszt).")
+
+        app = self.raiderio_app(fetch)
+        self.add_to(app, "Thrall")
+        app.open_gear()
+        window = app.gear_window
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            window.raiderio_button.invoke()  # egyik karakternek sincs realmje
+        self.assertIn("add meg a karakterek realmjét", info.call_args.args[1])
+        self.assertEqual(calls, [])
+
+        self.add_to(app, "Jaina", "Draenor")
+        self.add_to(app, "Arthas", "Draenor")
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            window.raiderio_button.invoke()
+            self.wait_for_raiderio(app)
+        self.assertEqual(calls, ["Jaina"])  # az első hiba után nem próbálkozik tovább
+        self.assertEqual(info.call_args.args[1], "Nem sikerült lekérni az adatokat: a Raider.io nem érhető el (teszt).")
+        self.assertEqual(app.raiderio_status_var.get(), "Raider.io: a Raider.io nem érhető el (teszt).")
+        self.assertIsNone(app.data.raiderio_fetched_at)
+        self.assertNotIn("disabled", window.raiderio_button.state())  # újra lehet próbálni
+
+    def test_region_setting_is_saved(self):
+        self.assertEqual(self.app.region_var.get(), "EU")
+        self.app.region_var.set("KR")
+        self.assertEqual(load_data(self.path).settings.region, "kr")
+
     def test_look_ahead_shows_next_goals_when_todays_are_met(self):
         today = date.today()
         self.app.start_var.set(format_date(today))
