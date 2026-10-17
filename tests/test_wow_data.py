@@ -9,7 +9,9 @@ from wow_data import (
     HORDE,
     MELEE,
     RACE_CLASSES,
+    RACE_FILE_NAMES,
     RANGED,
+    SPEC_IDS,
     SPEC_ROLES,
     TANK,
     WOW_CLASSES,
@@ -85,6 +87,28 @@ class GameDataTests(unittest.TestCase):
         self.assertEqual(find_race("Mag’har orc"), "Mag'har Orc")
         self.assertIsNone(find_race("Ogre"))
         self.assertEqual(specs_for_class("mage"), ("Arcane", "Fire", "Frost"))
+
+    def test_game_ids_of_specs_and_races(self):
+        # Minden specnek egy azonosítója van (forrás: warcraft.wiki.gg, „SpecializationID”).
+        all_specs = sorted((char_class, spec) for char_class, specs in WOW_SPECS.items() for spec in specs)
+        self.assertEqual(sorted(SPEC_IDS.values()), all_specs)
+        self.assertEqual(
+            (SPEC_IDS[250], SPEC_IDS[268], SPEC_IDS[270], SPEC_IDS[1480], SPEC_IDS[1473], SPEC_IDS[73]),
+            (
+                ("Death Knight", "Blood"),
+                ("Monk", "Brewmaster"),
+                ("Monk", "Mistweaver"),
+                ("Demon Hunter", "Devourer"),
+                ("Evoker", "Augmentation"),
+                ("Warrior", "Protection"),
+            ),
+        )
+        # A játék nyelvtől független fajnevei közül a többit a find_race is felismeri.
+        self.assertEqual(set(RACE_FILE_NAMES.values()) - set(WOW_RACES), set())
+        for race_file in ("NightElf", "BloodElf", "HighmountainTauren", "MagharOrc", "ZandalariTroll", "KulTiran"):
+            with self.subTest(race_file=race_file):
+                self.assertIsNotNone(find_race(race_file))
+        self.assertEqual(find_class("DEATHKNIGHT"), "Death Knight")  # a játék kasztazonosítója
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from leveling import (
     HU_MONTHS,
@@ -69,6 +69,7 @@ import gear_advisor
 import gearing
 import murlok
 import raiderio
+import wow_addon
 from recommend import recommend_combo
 from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, role_label, role_of, specs_for_class
 
@@ -80,6 +81,7 @@ except ImportError as exc:  # pl. ha a Pythonból hiányzik az sqlite3: a statis
 
 APP_TITLE = "WoW szintezés tervező"
 RAIDERIO_TITLE = "Frissítés a Raider.io-ról"
+ADDON_TITLE = "WoW addon"
 DATA_FILE_NAME = "szintezes_adatok.json"
 
 INTRO_TEXT = (
@@ -88,6 +90,17 @@ INTRO_TEXT = (
     "program egyenletesen osztja el, és kiszámolja a napi célokat. A szinteket két tizedesjegy "
     "pontossággal adhatod meg (pl. 83,45)."
 )
+ADDON_HINT = (
+    "Add meg a World of Warcraft mappáját: a program indításkor (és az „Importálás most” gombbal) "
+    "beolvassa a WoWLeveling addon mentéseit. Az addont az „Addon telepítése…” gomb másolja a játékba."
+)
+ADDON_INSTALLED = (
+    "Az addon a helyén van. Ha a játék fut, írd be a chatbe: /reload (különben a következő "
+    "indításkor töltődik be); a karakterválasztó „AddOns” gombjával ellenőrizheted, hogy be van-e "
+    "kapcsolva.\n\nA játék kilépéskor, kijelentkezéskor és /reload után menti a karakterek adatait, "
+    "a program ezeket olvassa be."
+)
+ADDON_LIST_LIMIT = 30  # ennél több változást (vagy nevet) nem sorol fel egyenként
 
 
 HU_WEEKDAYS = ("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
@@ -537,6 +550,59 @@ class FactionDialog(tk.Toplevel):
 
     def choose(self, faction: str) -> None:
         self.result = faction
+        self.destroy()
+
+
+class NewCharactersDialog(tk.Toplevel):
+    """Az addon mentéseiben szereplő, de a listán még nem lévő karakterek: melyek kerüljenek fel."""
+
+    ROWS_PER_COLUMN = 15
+
+    def __init__(self, parent: tk.Misc, snapshots: list[wow_addon.Snapshot], intro: str = "") -> None:
+        super().__init__(parent)
+        self.withdraw()
+        self.title(f"Új karakterek – {ADDON_TITLE}")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+        self.result: list[wow_addon.Snapshot] | None = None  # a felveendő karakterek (None: mégse)
+        self.snapshots = snapshots
+        self.chosen_vars = [tk.BooleanVar(value=True) for _ in snapshots]
+        wrap = round(560 * max(1.0, self.winfo_fpixels("1i") / 96))
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        if intro:
+            ttk.Label(body, text=intro, wraplength=wrap, justify="left").pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            body,
+            text=(
+                "Ezek a karakterek még nincsenek a listán. A bejelöltek a lista végére kerülnek; a többit "
+                "a program megjegyzi, és nem kínálja fel újra (kézzel felvéve az adataik ugyanúgy frissülnek)."
+            ),
+            style="Hint.TLabel",
+            wraplength=wrap,
+            justify="left",
+        ).pack(anchor="w")
+        checks = ttk.Frame(body)
+        checks.pack(anchor="w", pady=(8, 0))
+        for index, (snapshot, variable) in enumerate(zip(snapshots, self.chosen_vars)):
+            ttk.Checkbutton(checks, text=snapshot.describe(), variable=variable).grid(
+                row=index % self.ROWS_PER_COLUMN, column=index // self.ROWS_PER_COLUMN, sticky="w", padx=(0, 18)
+            )
+        buttons = ttk.Frame(body)
+        buttons.pack(anchor="e", pady=(12, 0))
+        accept = ttk.Button(buttons, text="Felvétel", command=self.accept)
+        accept.pack(side="left", padx=(0, 6))
+        ttk.Button(buttons, text="Mégse", command=self.destroy).pack(side="left")
+
+        self.bind("<Return>", lambda _event: self.accept())
+        self.bind("<Escape>", lambda _event: self.destroy())
+        place_over(self, parent)
+        show_modal(self)
+        accept.focus_set()
+
+    def accept(self) -> None:
+        self.result = [snapshot for snapshot, variable in zip(self.snapshots, self.chosen_vars) if variable.get()]
         self.destroy()
 
 
@@ -1282,6 +1348,9 @@ class App:
         self.new_level_var = tk.StringVar()
         self.feedback_var = tk.StringVar()
         self.summary_var = tk.StringVar()
+        # A WoWLeveling addon mentéseinek helye és a legutóbbi beolvasás eredménye (lásd wow_addon.py).
+        self.addon_path_var = tk.StringVar(value=self.data.addon_path)
+        self.addon_status_var = tk.StringVar()
 
         self._build()
         settings_vars = (
@@ -1301,6 +1370,7 @@ class App:
         self._update_score_status()
         self._update_raiderio_status()
         self.refresh()
+        self.import_addon(automatic=True)  # a játékban elmentett adatok beolvasása
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
 
@@ -1495,8 +1565,29 @@ class App:
             row=len(fields) + 2, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
 
+        addon = ttk.LabelFrame(body, text="WoW addon – a játékban elmentett adatok", padding=10)
+        addon.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        addon.columnconfigure(1, weight=1)
+        ttk.Label(addon, text="WoW mappa:").grid(row=0, column=0, sticky="w", padx=(0, 12))
+        path_entry = ttk.Entry(addon, textvariable=self.addon_path_var)
+        path_entry.grid(row=0, column=1, sticky="ew")
+        path_entry.bind("<Return>", lambda _event: self.import_addon())
+        path_entry.bind("<FocusOut>", self._store_addon_path)
+        addon_buttons = ttk.Frame(addon)
+        addon_buttons.grid(row=0, column=2, sticky="e")
+        for text, command in (
+            ("Tallózás…", self.browse_addon_path),
+            ("Importálás most", self.import_addon),
+            ("Addon telepítése…", self.install_addon),
+        ):
+            ttk.Button(addon_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
+        self.addon_status_label = ttk.Label(
+            addon, textvariable=self.addon_status_var, style="Hint.TLabel", wraplength=self.px(940), justify="left"
+        )
+        self.addon_status_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         footer = ttk.Frame(body)
-        footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        footer.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
         window_buttons = ttk.Frame(footer)
         window_buttons.pack(side="right", anchor="n")
@@ -2038,6 +2129,185 @@ class App:
         self.raiderio_status_var.set(text)
         for window in self.open_windows():
             window.update_fetch_controls()
+
+    def _store_addon_path(self, *_args) -> None:
+        """A beírt WoW mappa megjegyzése (az adatfájlban)."""
+        path = self.addon_path_var.get().strip()
+        if path != self.data.addon_path:
+            self.data.addon_path = path
+            self.save()
+
+    def browse_addon_path(self) -> None:
+        """A WoW mappa kiválasztása, utána a mentések beolvasása."""
+        text = self.addon_path_var.get().strip()
+        current = Path(text).expanduser() if text else None
+        if current is not None and current.is_file():
+            current = current.parent
+        if current is None or not current.is_dir():
+            current = next(iter(wow_addon.default_wow_folders()), None)
+        folder = filedialog.askdirectory(
+            parent=self.root,
+            title="A World of Warcraft mappája",
+            initialdir=None if current is None else str(current),
+            mustexist=True,
+        )
+        if folder:
+            self.addon_path_var.set(str(Path(folder)))
+            self.import_addon()
+
+    def import_addon(self, automatic: bool = False) -> None:
+        """A WoWLeveling addon mentéseinek beolvasása (lásd wow_addon.py): a listán lévő karakterek
+        adatainak frissítése, a gombbal indított importálásnál pedig az új karakterek felvétele.
+
+        automatic: indításkor; ilyenkor nem kérdez és nem nyit ablakot, csak a WoW addon keretben
+        írja ki az eredményt. Ha nincs megadva a WoW mappája, a szokásos helyeken keresi.
+        """
+        self._store_addon_path()
+        if not self.data.addon_path and automatic:
+            self._find_addon_path()
+        path = self.data.addon_path
+        if not path:
+            self._show_addon_status(ADDON_HINT)
+            if not automatic:
+                messagebox.showinfo(ADDON_TITLE, ADDON_HINT, parent=self.root)
+            return
+        try:
+            addon_data = wow_addon.load_addon_data(path)
+        except wow_addon.AddonError as exc:
+            problem = str(exc)
+        except Exception as exc:  # váratlan hiba se akassza meg a programot
+            problem = f"Váratlan hiba az addon mentéseinek beolvasásakor: {exc!r}"
+        else:
+            problem = None
+        if problem is not None:
+            self._show_addon_status(problem, problem=True)
+            if not automatic:
+                messagebox.showwarning(ADDON_TITLE, problem, parent=self.root)
+            return
+        data = self.data
+        plan = wow_addon.plan_import(data.characters, addon_data.snapshots, data.addon_imported, data.addon_skipped)
+        plan.apply(data)
+        added: list[Character] = []
+        waiting = plan.new  # a listán nem szereplő karakterek, amelyekről még nem döntött a felhasználó
+        if plan.new and not automatic:
+            chosen = self._choose_new_characters(plan.new, self._addon_summary(plan))
+            if chosen is not None:
+                added = wow_addon.add_new_characters(data, plan.new, chosen)
+                waiting = []
+        self.data_changed(select=added[0] if added else None)
+        self._show_addon_status(
+            self._addon_note(addon_data, plan, added, waiting),
+            problem=bool(addon_data.problems),
+            changed=bool(plan.changes or added),
+        )
+        if not automatic and not plan.new:
+            self._report_addon_import(addon_data, plan)
+
+    def _find_addon_path(self) -> None:
+        """A WoW szokásos telepítési helyein keresi az addon mentéseit; ha megvannak, megjegyzi a helyét."""
+        for folder in wow_addon.default_wow_folders():
+            try:
+                wow_addon.find_saved_variables(folder)
+            except wow_addon.AddonError:
+                continue
+            self.addon_path_var.set(str(folder))
+            self._store_addon_path()
+            return
+
+    def _choose_new_characters(
+        self, snapshots: list[wow_addon.Snapshot], intro: str
+    ) -> list[wow_addon.Snapshot] | None:
+        """Melyik új karakter kerüljön fel a listára (None: mégse)."""
+        dialog = NewCharactersDialog(self.root, snapshots, intro)
+        self.root.wait_window(dialog)
+        return dialog.result
+
+    @staticmethod
+    def _addon_summary(plan: wow_addon.ImportPlan) -> str:
+        count = plan.updated_count()
+        if count:
+            return f"Az addon mentése szerint {count} karakter adata frissült."
+        if plan.matched:
+            return "Az addon mentése szerint a listán lévő karakterek adatai nem változtak."
+        return "A listán lévő karakterek közül egyik sincs az addon mentésében."
+
+    @staticmethod
+    def _addon_note(
+        addon_data: wow_addon.AddonData,
+        plan: wow_addon.ImportPlan,
+        added: list[Character],
+        waiting: list[wow_addon.Snapshot],
+    ) -> str:
+        """Az importálás eredménye a WoW addon keretben."""
+        saved_at = addon_data.saved_at
+        if saved_at is None:
+            sentences = [
+                "Az addon mentésében még nincs karakter: lépj be vele a játékba, majd lépj ki "
+                "(vagy írd be: /reload)."
+            ]
+        else:
+            count = plan.updated_count()
+            result = [f"{count} karakter adata frissült"] if count else []
+            if added:
+                result.append(f"{len(added)} új karakter felkerült a listára")
+            outcome = ", ".join(result) if result else "nem változott semmi"
+            sentences = [
+                f"Az addon legutóbbi mentése: {saved_at:%Y-%m-%d %H:%M}.",
+                outcome[:1].upper() + outcome[1:] + ".",
+            ]
+        if waiting:
+            names = ", ".join(snapshot.name for snapshot in waiting[:5])
+            if len(waiting) > 5:
+                names += f" és még {len(waiting) - 5}"
+            sentences.append(
+                f"Nincs a listán: {names} – a felvételükhöz kattints az „Importálás most” gombra."
+            )
+        sentences += [f"Gond: {problem}" for problem in addon_data.problems]
+        return " ".join(sentences)
+
+    def _report_addon_import(self, addon_data: wow_addon.AddonData, plan: wow_addon.ImportPlan) -> None:
+        """A gombbal indított importálás eredménye (ha nem volt új karakter)."""
+        lines = [change.describe() for change in plan.changes[:ADDON_LIST_LIMIT]]
+        if len(plan.changes) > ADDON_LIST_LIMIT:
+            lines.append(f"… és még {len(plan.changes) - ADDON_LIST_LIMIT} változás")
+        notes = ["\n".join(lines)] if lines else []
+        if plan.skipped:
+            names = ", ".join(snapshot.name for snapshot in plan.skipped[:ADDON_LIST_LIMIT])
+            notes.append(f"Ezeket korábban nem kérted a listára: {names}.")
+        notes += addon_data.problems
+        messagebox.showinfo(ADDON_TITLE, self._addon_summary(plan), detail="\n\n".join(notes), parent=self.root)
+
+    def _show_addon_status(self, text: str, problem: bool = False, changed: bool = False) -> None:
+        self.addon_status_var.set(text)
+        style = "Error.TLabel" if problem else "Ok.TLabel" if changed else "Hint.TLabel"
+        self.addon_status_label.configure(style=style)
+
+    def install_addon(self) -> None:
+        """Az addon bemásolása (frissítése) a játék Interface/AddOns mappájába, kérdés után."""
+        text = self.addon_path_var.get().strip()
+        folders = [Path(text)] if text else wow_addon.default_wow_folders()
+        game = next((found for found in map(wow_addon.game_folder, folders) if found is not None), None)
+        if game is None:
+            message = (
+                "Nem találom a játék mappáját. Add meg a World of Warcraft mappáját (Tallózás…), "
+                "és a program oda telepíti az addont."
+            )
+            messagebox.showinfo(ADDON_TITLE, message, parent=self.root)
+            return
+        target = game / "Interface" / "AddOns" / wow_addon.ADDON_NAME
+        question = f"Telepítsem (frissítsem) az addont ide?\n{target}"
+        if not messagebox.askyesno(ADDON_TITLE, question, parent=self.root):
+            return
+        try:
+            wow_addon.install_addon(game)
+        except OSError as exc:
+            message = f"Nem sikerült telepíteni az addont ide:\n{target}\n\n{exc}"
+            messagebox.showerror(ADDON_TITLE, message, parent=self.root)
+            return
+        if not text:  # a szokásos helyen talált játék mappája
+            self.addon_path_var.set(str(game.parent if game.name.casefold() == "_retail_" else game))
+            self._store_addon_path()
+        messagebox.showinfo(ADDON_TITLE, ADDON_INSTALLED, parent=self.root)
 
     def data_changed(self, select: Character | None = None) -> None:
         """Módosítás után: mentés, majd minden ablak frissítése."""

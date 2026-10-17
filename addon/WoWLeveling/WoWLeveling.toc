@@ -1,0 +1,8 @@
+## Interface: 120100, 120105, 120107, 120200, 120205, 120207
+## Title: WoWLeveling
+## Notes: Saves each character's level, item level, spec and Mythic+ score for the WoW leveling planner (WoWLeveling).
+## Author: WoWLeveling
+## Version: 1.0.0
+## SavedVariables: WoWLevelingDB
+
+WoWLeveling.lua

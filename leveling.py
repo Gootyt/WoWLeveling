@@ -1062,6 +1062,12 @@ class LevelingData:
     stats_options: dict = field(default_factory=dict)
     # A gear ajánló statisztikákból frissített belépési ilvl-jei: tartalom neve → ilvl (lásd gearing.py).
     gear_entry_min: dict = field(default_factory=dict)
+    # A WoWLeveling addon mentéseinek helye: a WoW mappája vagy a mentés fájlja ("": nincs megadva).
+    addon_path: str = ""
+    # Az addonból már beolvasott mentések ideje karakterenként (Unix-idő; lásd wow_addon.py).
+    addon_imported: dict = field(default_factory=dict)
+    # Az addon karakterei közül azok, amelyeket a felhasználó nem kért fel a listára.
+    addon_skipped: list = field(default_factory=list)
 
     def raiderio_is_stale(self, now: datetime | None = None) -> bool:
         """Igaz, ha még nem volt Raider.io-lekérés, vagy a legutóbbi régebbi fél óránál."""
@@ -1080,6 +1086,7 @@ class LevelingData:
             "raiderio": {"fetched_at": None if fetched_at is None else fetched_at.isoformat(timespec="seconds")},
             "stats_options": self.stats_options,
             "gear_entry_min": self.gear_entry_min,
+            "addon": {"path": self.addon_path, "imported": self.addon_imported, "skipped": self.addon_skipped},
         }
 
     @classmethod
@@ -1102,6 +1109,11 @@ class LevelingData:
             for name, value in (gear_entry_min.items() if isinstance(gear_entry_min, dict) else ())
             if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
         }
+        addon = data.get("addon")
+        addon = addon if isinstance(addon, dict) else {}
+        addon_path = addon.get("path")
+        imported = addon.get("imported")
+        skipped = addon.get("skipped")
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
@@ -1110,6 +1122,13 @@ class LevelingData:
             raiderio_fetched_at=raiderio_fetched_at,
             stats_options=stats_options if isinstance(stats_options, dict) else {},
             gear_entry_min=gear_entry_min,
+            addon_path=addon_path.strip() if isinstance(addon_path, str) else "",
+            addon_imported={
+                str(key): int(value)
+                for key, value in (imported.items() if isinstance(imported, dict) else ())
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            },
+            addon_skipped=[str(key) for key in skipped] if isinstance(skipped, list) else [],
         )
 
 

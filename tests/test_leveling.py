@@ -872,6 +872,32 @@ class PersistenceTests(unittest.TestCase):
         data.raiderio_fetched_at = datetime(2026, 10, 17, 15, 0)  # a jövőben (pl. átállított óra)
         self.assertTrue(data.raiderio_is_stale(now))
 
+    def test_addon_settings_are_saved(self):
+        data = LevelingData(make_settings())
+        data.addon_path = r"C:\Program Files (x86)\World of Warcraft"
+        data.addon_imported = {"draenor/thrall": 1760700660}
+        data.addon_skipped = ["draenor/jaina"]
+        save_data(self.path, data)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            raw["addon"],
+            {"path": data.addon_path, "imported": {"draenor/thrall": 1760700660}, "skipped": ["draenor/jaina"]},
+        )
+        loaded = load_data(self.path)
+        self.assertEqual(
+            (loaded.addon_path, loaded.addon_imported, loaded.addon_skipped),
+            (data.addon_path, data.addon_imported, data.addon_skipped),
+        )
+        # A hibás értékek kimaradnak, a többi adat megmarad.
+        raw["addon"] = {"path": 5, "imported": {"a/b": "tegnap", "c/d": 1760000000.0, "e/f": True}, "skipped": "x"}
+        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        loaded = load_data(self.path)
+        self.assertEqual((loaded.addon_path, loaded.addon_imported, loaded.addon_skipped), ("", {"c/d": 1760000000}, []))
+        del raw["addon"]  # a régebbi adatfájlokban nincs ilyen
+        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        loaded = load_data(self.path)
+        self.assertEqual((loaded.addon_path, loaded.addon_imported, loaded.addon_skipped), ("", {}, []))
+
     def test_look_ahead_switch_is_saved(self):
         save_data(self.path, LevelingData(make_settings(), look_ahead=False))
         self.assertFalse(load_data(self.path).look_ahead)

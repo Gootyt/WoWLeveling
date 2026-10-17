@@ -16,6 +16,7 @@ try:
 except ImportError:
     tk = ttk = None
 
+import wow_addon
 from leveling import (
     SEQUENTIAL,
     Character,
@@ -28,6 +29,43 @@ from leveling import (
 )
 
 D = Decimal
+
+# A WoWLeveling addon mentése, ahogy a játék kiírja (lásd tests/test_wow_addon.py).
+ADDON_SAVE = """
+WoWLevelingDB = {
+\t["characters"] = {
+\t\t["Thrall-Draenor"] = {
+\t\t\t["name"] = "Thrall",
+\t\t\t["realm"] = "Draenor",
+\t\t\t["raceFile"] = "Orc",
+\t\t\t["classFile"] = "SHAMAN",
+\t\t\t["specID"] = 263,
+\t\t\t["level"] = 85,
+\t\t\t["xp"] = 2999,
+\t\t\t["xpMax"] = 10000,
+\t\t\t["itemLevel"] = 301.5625,
+\t\t\t["mythicPlusScore"] = 1234.5,
+\t\t\t["updated"] = 1760700000,
+\t\t},
+\t\t["Jaina-Draenor"] = {
+\t\t\t["name"] = "Jaina",
+\t\t\t["realm"] = "Draenor",
+\t\t\t["classFile"] = "MAGE",
+\t\t\t["specID"] = 64,
+\t\t\t["level"] = 90,
+\t\t\t["updated"] = 1760700100,
+\t\t},
+\t\t["Arthas-Draenor"] = {
+\t\t\t["name"] = "Arthas",
+\t\t\t["realm"] = "Draenor",
+\t\t\t["classFile"] = "DEATHKNIGHT",
+\t\t\t["level"] = 80,
+\t\t\t["updated"] = 1760700200,
+\t\t},
+\t},
+\t["version"] = 1,
+}
+"""
 
 
 @unittest.skipIf(tk is None, "a tkinter nincs telepítve")
@@ -42,6 +80,10 @@ class GuiTests(unittest.TestCase):
         self.gui = wow_leveling
         self.temp_dir = tempfile.TemporaryDirectory()
         self.path = Path(self.temp_dir.name) / "adatok.json"
+        # A gépen telepített játék mentéseit a tesztek ne olvassák be.
+        patcher = mock.patch.object(wow_addon, "default_wow_folders", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.app = wow_leveling.App(self.root, self.path)
 
     def tearDown(self):
@@ -138,6 +180,10 @@ class GuiTests(unittest.TestCase):
         self.assertEqual([button.cget("text") for button in buttons], ["Karakterlista", "Gear", "Mythic+"])
         self.find_button(self.root, "Karakterlista").invoke()
         self.assertIsNotNone(self.app.list_window)
+        buttons = self.find_button(self.root, "Importálás most").master.winfo_children()
+        self.assertEqual(
+            [button.cget("text") for button in buttons], ["Tallózás…", "Importálás most", "Addon telepítése…"]
+        )
 
     def test_double_click_opens_the_editor_in_both_windows(self):
         self.add("Thrall", "Jaina")
@@ -1135,6 +1181,207 @@ class GuiTests(unittest.TestCase):
             window.reset_entry_mins()
         self.assertEqual(load_data(self.path).gear_entry_min, {})
         self.assertIn("az alapértékek", window.source_var.get())
+
+    def addon_folder(self, text=ADDON_SAVE):
+        """Egy World of Warcraft mappa, benne az addon mentésével."""
+        root = Path(self.temp_dir.name) / "World of Warcraft"
+        saved = root / "_retail_" / "WTF" / "Account" / "111#1" / "SavedVariables"
+        saved.mkdir(parents=True, exist_ok=True)
+        (saved / "WoWLeveling.lua").write_text(text, encoding="utf-8")
+        return root
+
+    def test_addon_data_is_imported_at_startup(self):
+        data = LevelingData(Settings.default(), [Character("Thrall", level=D("84.00")), Character("Garrosh")])
+        data.addon_path = str(self.addon_folder())
+        path = Path(self.temp_dir.name) / "addon.json"
+        save_data(path, data)
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info, mock.patch.object(
+            self.gui.messagebox, "showwarning"
+        ) as warning, mock.patch.object(self.gui, "NewCharactersDialog") as dialog:
+            app = self.gui.App(tk.Toplevel(self.root), path)
+        for silent in (info, warning, dialog):  # indításkor nem kérdez, és nem nyit ablakot
+            silent.assert_not_called()
+        thrall = app.data.characters[0]
+        self.assertEqual(
+            (thrall.realm, thrall.race, thrall.char_class, thrall.spec, thrall.level, thrall.item_level),
+            ("Draenor", "Orc", "Shaman", "Enhancement", D("85.29"), D("301.56")),
+        )
+        self.assertEqual(thrall.raiderio_score, D("1234.5"))
+        self.assertEqual([c.name for c in app.data.characters], ["Thrall", "Garrosh"])  # az újak nem kerülnek fel
+        saved_at = datetime.fromtimestamp(1760700200)
+        self.assertEqual(
+            app.addon_status_var.get(),
+            f"Az addon legutóbbi mentése: {saved_at:%Y-%m-%d %H:%M}. 1 karakter adata frissült. Nincs a listán: "
+            "Jaina, Arthas – a felvételükhöz kattints az „Importálás most” gombra.",
+        )
+        self.assertEqual(app.addon_status_label.cget("style"), "Ok.TLabel")
+        self.assertEqual(load_data(path).characters[0].level, D("85.29"))  # mentette
+        self.assertEqual(load_data(path).addon_imported, {"draenor/thrall": 1760700000})
+
+        # Újraindításkor ugyanaz a mentés már nem írja felül a programban közben átírt adatokat.
+        thrall.level = D("85.50")
+        app.save()
+        app = self.gui.App(tk.Toplevel(self.root), path)
+        self.assertEqual(app.data.characters[0].level, D("85.50"))
+        self.assertIn(". Nem változott semmi. Nincs a listán: Jaina, Arthas", app.addon_status_var.get())
+        self.assertEqual(app.addon_status_label.cget("style"), "Hint.TLabel")
+
+    def test_addon_import_button_adds_the_chosen_new_characters(self):
+        self.add("Thrall", realm="Draenor")
+        folder = self.addon_folder()
+        self.app.addon_path_var.set(str(folder))
+        with mock.patch.object(self.app, "_choose_new_characters", return_value=None) as choose:
+            self.find_button(self.root, "Importálás most").invoke()  # az új karakterekről: Mégse
+        offered, intro = choose.call_args.args
+        self.assertEqual([snapshot.name for snapshot in offered], ["Jaina", "Arthas"])  # a magasabb szintű elöl
+        self.assertEqual(intro, "Az addon mentése szerint 1 karakter adata frissült.")
+        self.assertEqual([c.name for c in self.app.data.characters], ["Thrall"])
+        self.assertEqual(self.app.data.characters[0].level, D("85.29"))
+        self.assertIn("Nincs a listán: Jaina, Arthas", self.app.addon_status_var.get())
+        self.assertEqual(load_data(self.path).addon_path, str(folder))  # a megadott mappát megjegyzi
+
+        with mock.patch.object(self.app, "_choose_new_characters", side_effect=lambda found, _intro: found[:1]):
+            self.app.import_addon()  # Jaina kell, Arthas nem
+        jaina = self.app.data.characters[-1]
+        self.assertEqual(
+            [(c.name, c.realm, c.char_class, c.spec, c.level) for c in self.app.data.characters],
+            [("Thrall", "Draenor", "Shaman", "Enhancement", D("85.29")), ("Jaina", "Draenor", "Mage", "Frost", D("90.00"))],
+        )
+        self.assertEqual(self.app.addon_status_var.get().split(". ", 1)[1], "1 új karakter felkerült a listára.")
+        saved = load_data(self.path)
+        self.assertEqual((saved.addon_skipped, len(saved.characters)), (["draenor/arthas"], 2))
+        self.app.open_list()
+        self.assertIn(jaina.uid, self.app.list_window.tree.get_children())
+
+        # Ha nincs új karakter, az eredmény egy üzenetben jelenik meg.
+        with mock.patch.object(self.app, "_choose_new_characters") as choose, mock.patch.object(
+            self.gui.messagebox, "showinfo"
+        ) as info:
+            self.app.import_addon()
+        choose.assert_not_called()
+        self.assertEqual(
+            info.call_args.args[1], "Az addon mentése szerint a listán lévő karakterek adatai nem változtak."
+        )
+        self.assertEqual(info.call_args.kwargs["detail"], "Ezeket korábban nem kérted a listára: Arthas.")
+
+        # Az újabb mentés adatai felülírják a program adatait; a változások felsorolva.
+        newer = ADDON_SAVE.replace("1760700000", "1760800000").replace('["level"] = 85', '["level"] = 86')
+        self.addon_folder(newer)
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.import_addon()
+        self.assertEqual(info.call_args.args[1], "Az addon mentése szerint 1 karakter adata frissült.")
+        self.assertTrue(info.call_args.kwargs["detail"].startswith("Thrall: szint 85,29 → 86,29\n\n"))
+
+    def test_addon_problems_are_reported(self):
+        self.assertEqual(self.app.addon_status_var.get(), self.gui.ADDON_HINT)  # nincs megadva mappa
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.import_addon()
+        self.assertEqual(info.call_args.args[1], self.gui.ADDON_HINT)
+
+        self.app.addon_path_var.set(str(Path(self.temp_dir.name) / "nincs"))
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            self.app.import_addon(automatic=True)  # indításkor nem nyit ablakot
+        warning.assert_not_called()
+        self.assertIn("Nem létezik ez a mappa vagy fájl", self.app.addon_status_var.get())
+        self.assertEqual(self.app.addon_status_label.cget("style"), "Error.TLabel")
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            self.app.import_addon()
+        self.assertIn("Nem létezik ez a mappa vagy fájl", warning.call_args.args[1])
+
+        broken = Path(self.temp_dir.name) / "WoWLeveling.lua"
+        broken.write_text("WoWLevelingDB = {", encoding="utf-8")
+        self.app.addon_path_var.set(str(broken))
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            self.app.import_addon()
+        self.assertIn("nem az addon mentése, vagy sérült", warning.call_args.args[1])
+        with mock.patch.object(self.gui.wow_addon, "load_addon_data", side_effect=RuntimeError("hopp")):
+            self.app.import_addon(automatic=True)  # a váratlan hiba sem akasztja meg a programot
+        self.assertIn("Váratlan hiba", self.app.addon_status_var.get())
+
+        # Az addon által jelzett hiba az eredmény mellett látszik.
+        self.addon_folder(ADDON_SAVE.replace('\t["version"] = 1,', '\t["lastError"] = "hopp",\n\t["version"] = 1,'))
+        self.app.addon_path_var.set(str(Path(self.temp_dir.name) / "World of Warcraft"))
+        self.app.import_addon(automatic=True)
+        self.assertTrue(self.app.addon_status_var.get().endswith("Gond: az addon hibát jelzett: hopp"))
+        self.assertEqual(self.app.addon_status_label.cget("style"), "Error.TLabel")
+
+    def test_wow_folder_can_be_browsed_and_the_addon_installed(self):
+        folder = self.addon_folder()
+        with mock.patch.object(self.gui.filedialog, "askdirectory", return_value=str(folder)) as ask, mock.patch.object(
+            self.app, "_choose_new_characters", return_value=None
+        ):
+            self.find_button(self.root, "Tallózás…").invoke()
+        self.assertIsNone(ask.call_args.kwargs["initialdir"])
+        self.assertEqual(self.app.data.addon_path, str(folder))
+        self.assertIn("Nincs a listán: Jaina, Thrall, Arthas", self.app.addon_status_var.get())  # be is olvasta
+        with mock.patch.object(self.gui.filedialog, "askdirectory", return_value="") as ask:
+            self.app.browse_addon_path()  # Mégse
+        self.assertEqual(ask.call_args.kwargs["initialdir"], str(folder))
+        self.assertEqual(self.app.data.addon_path, str(folder))
+
+        target = folder / "_retail_" / "Interface" / "AddOns" / "WoWLeveling"
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True) as ask, mock.patch.object(
+            self.gui.messagebox, "showinfo"
+        ) as info:
+            self.find_button(self.root, "Addon telepítése…").invoke()
+        self.assertEqual(ask.call_args.args[1], f"Telepítsem (frissítsem) az addont ide?\n{target}")
+        self.assertEqual(info.call_args.args[1], self.gui.ADDON_INSTALLED)
+        self.assertEqual(sorted(path.name for path in target.iterdir()), ["WoWLeveling.lua", "WoWLeveling.toc"])
+
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True), mock.patch.object(
+            self.gui.wow_addon, "install_addon", side_effect=PermissionError("nincs jogosultság")
+        ), mock.patch.object(self.gui.messagebox, "showerror") as error:
+            self.app.install_addon()
+        self.assertIn("nincs jogosultság", error.call_args.args[1])
+
+        # A szokásos helyen talált játékba is telepíthető, és a mappát megjegyzi.
+        self.app.addon_path_var.set("")
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.install_addon()
+        self.assertIn("Nem találom a játék mappáját", info.call_args.args[1])
+        with mock.patch.object(wow_addon, "default_wow_folders", return_value=[folder]), mock.patch.object(
+            self.gui.messagebox, "askyesno", return_value=True
+        ), mock.patch.object(self.gui.messagebox, "showinfo"):
+            self.app.install_addon()
+        self.assertEqual(self.app.addon_path_var.get(), str(folder))
+        self.assertEqual(self.app.data.addon_path, str(folder))
+
+    def test_addon_is_found_in_the_usual_place_at_startup(self):
+        folder = self.addon_folder()
+        with mock.patch.object(wow_addon, "default_wow_folders", return_value=[Path(self.temp_dir.name), folder]):
+            app = self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "uj.json")
+        self.assertEqual(app.data.addon_path, str(folder))
+        self.assertIn("Nincs a listán: Jaina, Thrall, Arthas", app.addon_status_var.get())
+
+    def test_new_characters_dialog(self):
+        snapshots = [
+            wow_addon.Snapshot("Jaina", "Draenor", "eu", "", "Mage", "Frost", D("90.00"), None, None, 1),
+            wow_addon.Snapshot("Arthas", "Draenor", "eu", "Human", "Death Knight", "", D("80.50"), D("280"), None, 2),
+        ]
+
+        def checkbuttons(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Checkbutton):
+                    yield child
+                yield from checkbuttons(child)
+
+        def pick():
+            dialog = next(w for w in self.root.winfo_children() if isinstance(w, self.gui.NewCharactersDialog))
+            self.assertEqual(
+                [check.cget("text") for check in checkbuttons(dialog)],
+                [
+                    "Jaina (Draenor) – szint: 90,00, Mage, Frost",
+                    "Arthas (Draenor) – szint: 80,50, Human Death Knight, itemlevel 280,00",
+                ],
+            )
+            dialog.chosen_vars[0].set(False)
+            dialog.accept()
+
+        self.root.after(50, pick)
+        self.assertEqual(self.app._choose_new_characters(snapshots, "1 karakter adata frissült."), snapshots[1:])
+        dialog = self.gui.NewCharactersDialog(self.root, snapshots)
+        dialog.destroy()  # Mégse vagy Escape
+        self.assertIsNone(dialog.result)
 
     def test_region_setting_is_saved(self):
         self.assertEqual(self.app.region_var.get(), "EU")

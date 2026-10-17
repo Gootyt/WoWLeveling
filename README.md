@@ -66,6 +66,11 @@ megtervezéséhez és követéséhez.
   vagy a Great Vaultból, melyikhez túl alacsony, és melyiket nőtted már ki. A
   Mythic+ és a raid sorok belépési ilvl-jét a statisztikákból frissíti (lásd lent,
   „Gear ajánló”).
+- **WoW addon:** a mellékelt WoWLeveling addon a játékban elmenti a karakterek
+  szintjét (a tapasztalattal együtt), itemlevelét, Mythic+ pontszámát, faját,
+  kasztját és specjét. A program a játék mappájának megadása után ezeket **minden
+  indításkor magától**, és bármikor az „Importálás most” gombbal beolvassa (lásd
+  lent, „WoW addon”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -173,6 +178,10 @@ python wow_leveling.py masik_terv.json
    belépési ilvl-jeibe írja.
 10. **Gear ajánló**: a főablak „Gear ajánló” gombjával, vagy a Gear ablakban a
     kijelölt karakterhez a „Gear ajánló…” gombbal (lásd lent).
+11. **WoW addon**: a főablak „WoW addon” keretében add meg a World of Warcraft
+    mappáját (beírva vagy a „Tallózás…” gombbal), és telepítsd az addont az
+    „Addon telepítése…” gombbal. A program ezután minden indításkor beolvassa a
+    játékban elmentett adatokat, és bármikor az „Importálás most” gombbal (lásd lent).
 
 ## Hogyan számol a program?
 
@@ -501,6 +510,66 @@ más ugyanaz marad.
 A tartalmak listája (belépési, drop és Vault ilvl-ek) a `gearing.py` elején van
 (`GROUPS`); új szezonnál ott kell átírni.
 
+## WoW addon
+
+Az `addon/WoWLeveling` mappában lévő addon a játékban minden karakterről, amellyel
+belépsz, elmenti:
+
+- a nevét, a realmjét és a régióját,
+- a faját, a kasztját és az aktív specjét,
+- a szintjét a tapasztalattal együtt (pl. 85-ös szint, a következő szinthez
+  szükséges tapasztalat 29%-a: `85,29`),
+- a felvett tárgyak átlagos itemlevelét (amit a karakterlap is mutat),
+- az aktuális szezon Mythic+ pontszámát.
+
+**Telepítés.** A főablak „WoW addon” keretében add meg a World of Warcraft
+mappáját (pl. `C:\Program Files (x86)\World of Warcraft`; a „Tallózás…” gombbal ki
+is választhatod), majd kattints az „Addon telepítése…” gombra: a program a
+`_retail_\Interface\AddOns\WoWLeveling` mappába másolja az addont (frissíteni is
+így lehet). Kézzel is bemásolhatod oda az `addon\WoWLeveling` mappát. Ha a játék
+fut, írd be a chatbe: `/reload`. A karakterválasztó „AddOns” gombjával
+ellenőrizheted, hogy be van-e kapcsolva.
+
+**Mentés.** A játék a mentett adatokat kilépéskor, kijelentkezéskor és `/reload`
+után írja ki, fiókonként ide:
+
+```
+World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
+```
+
+Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
+elmentett adatait, a `/wowleveling lista` pedig az összes elmentett karakterét.
+
+**Importálás.** A program **minden indításkor magától** beolvassa a mentéseket,
+és bármikor az „Importálás most” gombbal. Útvonalként a World of Warcraft
+mappáját érdemes megadni, de jó a `_retail_`, a `WTF`, egy fiók mappája vagy maga
+a `WoWLeveling.lua` fájl is; több fiók mentéseit is beolvassa. Ha nincs megadva
+útvonal, indításkor a szokásos telepítési helyeken keresi (Windowson a Program
+Files mappában, macOS-en az Applications mappában).
+
+- A listán lévő karaktereket **név és realm szerint** párosítja; a kis- és
+  nagybetűk, az ékezetek és a realm szóközei nem számítanak (`Zoltan` = `Zôltan`,
+  `TwistingNether` = `Twisting Nether`). A realm nélküli karaktert név szerint, ha
+  egyértelmű; ilyenkor a realmjét is kitölti.
+- A **szint**, az **itemlevel** és a **Raider.io pontszám** (a játékbeli Mythic+
+  pontszám, ha nem nulla) a játékbeli értékre változik, a név a játékbeli
+  írásmódra. A realm, a faj, a kaszt és a spec csak az üres mezőbe kerül be (a spec
+  csak akkor, ha a kaszt is ugyanaz).
+- Egy mentést csak egyszer használ fel: ha a programban kézzel átírsz egy adatot,
+  azt csak a játékból jövő újabb mentés írja felül.
+- A listán még nem szereplő karaktereket indításkor csak felsorolja. Az
+  „Importálás most” gomb megkérdezi, melyek kerüljenek fel: a bejelöltek a lista
+  végére kerülnek, a magasabb szintűek előbb. Akiket nem jelölsz be, azokat a
+  program megjegyzi, és többé nem kínálja fel (ha mégis kell valamelyik, vedd fel
+  kézzel – az adatai ugyanúgy frissülnek).
+- Az eredmény (és az esetleges hiba) a „WoW addon” keretben látszik; a gombbal
+  indított importálás a változásokat egy üzenetben is felsorolja.
+
+Az addon a Midnight 12.1-es patchéhez készült. Ha egy újabb patch után a játék
+elavultnak („Out of date”) jelzi, az AddOns ablakban kapcsold be a „Load out of
+date AddOns” lehetőséget, vagy írd át a `WoWLeveling.toc` fájl `## Interface:`
+sorában a számot az új verzióéra.
+
 ## Adatok
 
 A beállítások és a karakterek a program mappájában lévő `szintezes_adatok.json`
@@ -514,6 +583,10 @@ A statisztikák a fájljaikat az adatfájl mellé teszik: `raiderio_ilvl_cache.j
 és `wcl_cache.sqlite` (a letöltött adatok gyorsítótára – bármikor törölhető, csak
 újra le kell tölteni őket), valamint – ha kéred – `api_kulcsok.json` (az
 API-kulcsok).
+
+Az addon mentéseinek beolvasásához a program az adatfájlban megjegyzi a WoW
+mappáját, karakterenként a legutóbb felhasznált mentés idejét, és azokat a
+karaktereket, amelyeket nem kértél fel a listára.
 
 ## Fájlok
 
@@ -535,7 +608,10 @@ API-kulcsok).
   mentése…” sablonja)
 - `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
   a választható faj–kaszt kombinációk
-- `tests/` – automatikus tesztek
+- `wow_addon.py` – a WoWLeveling addon mentéseinek beolvasása és importálása
+- `addon/WoWLeveling/` – a WoW addon (`WoWLeveling.toc`, `WoWLeveling.lua`)
+- `tests/` – automatikus tesztek (a `tests/addon_harness.lua` a játék nélkül,
+  utánzott játékkörnyezetben futtatja az addont)
 
 ## Tesztek
 
@@ -544,4 +620,6 @@ python -m unittest discover -s tests -v
 ```
 
 A felület tesztjeihez grafikus kijelző kell (Linuxon kijelző nélkül pl.
-`xvfb-run python -m unittest discover -s tests`); ha nincs, ezek kimaradnak.
+`xvfb-run python -m unittest discover -s tests`); ha nincs, ezek kimaradnak. Az
+addon tesztjéhez Lua-értelmező kell (`lua5.1`, `luajit` vagy `lua`); ha nincs, ez
+a teszt kimarad.

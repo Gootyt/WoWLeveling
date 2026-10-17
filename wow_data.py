@@ -220,6 +220,33 @@ RACE_CLASSES = {
 }
 
 
+# A specializációk játékbeli azonosítói (specID; a WoWLeveling addon ezt menti), a WOW_SPECS
+# sorrendjében; SPEC_IDS: azonosító → (kaszt, spec).
+_CLASS_SPEC_IDS = {
+    "Death Knight": (250, 251, 252),
+    "Demon Hunter": (577, 581, 1480),
+    "Druid": (102, 103, 104, 105),
+    "Evoker": (1467, 1468, 1473),
+    "Hunter": (253, 254, 255),
+    "Mage": (62, 63, 64),
+    "Monk": (268, 270, 269),
+    "Paladin": (65, 66, 70),
+    "Priest": (256, 257, 258),
+    "Rogue": (259, 260, 261),
+    "Shaman": (262, 263, 264),
+    "Warlock": (265, 266, 267),
+    "Warrior": (71, 72, 73),
+}
+SPEC_IDS = {
+    spec_id: (char_class, spec)
+    for char_class, ids in _CLASS_SPEC_IDS.items()
+    for spec_id, spec in zip(ids, WOW_SPECS[char_class])
+}
+# A fajok játékbeli, nyelvtől független nevei (pl. „NightElf”) közül azok, amelyekből a
+# find_race nem ismeri fel a fajt.
+RACE_FILE_NAMES = {"Scourge": "Undead", "EarthenDwarf": "Earthen"}
+
+
 def _name_key(text: str) -> str:
     """Összehasonlítási kulcs: kisbetűs, csak betűk és számok („Mag’har orc” = „Mag'har Orc”)."""
     return "".join(char for char in text.casefold() if char.isalnum())
