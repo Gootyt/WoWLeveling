@@ -2,15 +2,22 @@
 --
 --   lua addon_harness.lua <az addon mappája> <a mentett adatok fájlja>
 --
--- Utánozza a játék addonoknak szóló függvényeit, lejátszik egy belépést, néhány
--- eseményt és a /wowleveling parancsot, végül úgy írja ki a WoWLevelingDB táblát,
--- ahogy a játék a SavedVariables mappába. A chatüzenetek a kimenetre kerülnek.
+-- Utánozza a játék addonoknak szóló függvényeit, betölti az addon fájljait a .toc szerint,
+-- lejátszik egy belépést, néhány eseményt és a /wowleveling parancsot, közben kiírja a
+-- lemaradás ablakának tartalmát, végül úgy írja ki a WoWLevelingDB táblát, ahogy a játék a
+-- SavedVariables mappába. A chatüzenetek és az ablak sorai a kimenetre kerülnek.
 
 local addonDir, outputPath = arg[1], arg[2]
 
 local now = 1760700000
-function time()
+function time(fields)
+	if fields then
+		return os.time(fields)
+	end
 	return now
+end
+function date(format, when)
+	return os.date(format, when or now)
 end
 
 local SECRET = 999.5 -- ezt a számot a játék „titkosként” adná vissza
@@ -20,11 +27,15 @@ end
 
 UNKNOWNOBJECT = "Unknown"
 SlashCmdList = {}
+RAID_CLASS_COLORS = { SHAMAN = { colorStr = "ff0070dd" }, MAGE = { colorStr = "ff3fc7eb" } }
 
-local timers = {}
+local timers, tickers = {}, {}
 C_Timer = {
 	After = function(_, callback)
 		timers[#timers + 1] = callback
+	end,
+	NewTicker = function(_, callback)
+		tickers[#tickers + 1] = callback
 	end,
 }
 local function RunTimers()
@@ -36,29 +47,76 @@ local function RunTimers()
 	return #due
 end
 
--- A játékban ismeretlen esemény regisztrálása hibát okoz.
-local UNKNOWN_EVENTS = { CHALLENGE_MODE_COMPLETED = true }
+-- Keretek és feliratok: amit az addon használ, azt megjegyzik, a többi metódus nem csinál semmit.
+local UNKNOWN_EVENTS = { CHALLENGE_MODE_COMPLETED = true } -- ennek a regisztrálása hibát okoz
+local Widget = {}
+Widget.__index = function(_, key)
+	return rawget(Widget, key) or function() end
+end
+local function NewWidget()
+	return setmetatable({ events = {}, scripts = {}, shown = true }, Widget)
+end
+function Widget:RegisterEvent(event)
+	if UNKNOWN_EVENTS[event] then
+		error('Attempt to register unknown event "' .. event .. '"')
+	end
+	self.events[event] = true
+end
+function Widget:SetScript(name, handler)
+	self.scripts[name] = handler
+end
+function Widget:CreateFontString()
+	return NewWidget()
+end
+function Widget:SetText(text)
+	self.text = text
+end
+function Widget:Show()
+	self.shown = true
+end
+function Widget:Hide()
+	self.shown = false
+end
+function Widget:IsShown()
+	return self.shown
+end
+function Widget:GetPoint()
+	return "TOPLEFT", UIParent, "TOPLEFT", 100, -50
+end
+UIParent = NewWidget()
 local frames = {}
-function CreateFrame()
-	local frame = { events = {} }
-	function frame:RegisterEvent(event)
-		if UNKNOWN_EVENTS[event] then
-			error('Attempt to register unknown event "' .. event .. '"')
-		end
-		self.events[event] = true
-	end
-	function frame:SetScript(_, handler)
-		self.handler = handler
-	end
+function CreateFrame(_, name)
+	local frame = NewWidget()
 	frames[#frames + 1] = frame
+	if name then
+		_G[name] = frame
+	end
 	return frame
 end
 local function Fire(event, ...)
 	for _, frame in ipairs(frames) do
 		if frame.events[event] then
-			frame.handler(frame, event, ...)
+			frame.scripts.OnEvent(frame, event, ...)
 		end
 	end
+end
+
+-- A lemaradás ablakának tartalma a kimenetre (a Python-teszt ellenőrzi).
+local function DumpWindow(label)
+	local window = WoWLevelingWindow
+	if not window then
+		print("window " .. label .. ": nincs")
+		return
+	end
+	local function Text(widget) -- a még be nem állított felirat üres (nem a metódusokat utánzó függvény)
+		return rawget(widget, "text") or ""
+	end
+	print("window " .. label .. ": " .. (window.shown and "látszik" or "rejtve"))
+	for _, key in ipairs({ "level", "itemLevel", "score" }) do
+		local cells = window.rows[key]
+		print(string.format("row %s: %s | %s | %s", key, Text(cells[2]), Text(cells[3]), Text(cells[4])))
+	end
+	print("footer: " .. Text(window.footer))
 end
 
 -- A belépett karakter: Zôltan, Orc Enhancement Shaman a Twisting Nether (EU) realmen.
@@ -109,9 +167,15 @@ C_SpecializationInfo = {
 	end,
 }
 
--- Az addon betöltése, ahogy a játék: előbb a fájlja, aztán a mentett adatai.
-local chunk = assert(loadfile(addonDir .. "/WoWLeveling.lua"))
-chunk("WoWLeveling", {})
+-- Az addon betöltése, ahogy a játék: előbb a fájljai a .toc sorrendjében (közös névtérrel),
+-- aztán a mentett adatai.
+local ns = {}
+for line in io.lines(addonDir .. "/WoWLeveling.toc") do
+	local file = line:match("^([%w_]+%.lua)%s*$")
+	if file then
+		assert(loadfile(addonDir .. "/" .. file))("WoWLeveling", ns)
+	end
+end
 WoWLevelingDB = {
 	version = 1,
 	characters = {
@@ -132,11 +196,19 @@ WoWLevelingDB = {
 Fire("ADDON_LOADED", "Blizzard_Other")
 Fire("ADDON_LOADED", "WoWLeveling")
 
--- Belépés, közben a felszerelés is változik: a két eseményre csak egyszer ment.
+-- Belépés, közben a felszerelés is változik: a két eseményre csak egyszer ment; a lemaradás
+-- ablaka is ekkor nyílik meg.
 Fire("PLAYER_ENTERING_WORLD", true, false)
 Fire("PLAYER_EQUIPMENT_CHANGED", 1, true)
 print("timers: " .. RunTimers())
+DumpWindow("login")
 SlashCmdList.WOWLEVELING("")
+
+-- Tapasztalat: ha a kilistázott karakterekkel játszik, az ablak magától frissül.
+player.xp = 4000
+Fire("PLAYER_XP_UPDATE", "player")
+print("timers: " .. RunTimers())
+DumpWindow("xp")
 
 -- Szintlépés; közben az itemlevel „titkos”, ezért a korábbi érték marad meg. A régi
 -- spec-függvények is működnek, ha nincs C_SpecializationInfo.
@@ -152,8 +224,28 @@ end
 Fire("PLAYER_LEVEL_UP", 86)
 Fire("PLAYER_SPECIALIZATION_CHANGED", "party1") -- más egység: nem ment
 print("timers: " .. RunTimers())
+DumpWindow("levelup")
 Fire("PLAYER_SPECIALIZATION_CHANGED", "player")
 print("timers: " .. RunTimers())
+
+-- Már nincs a kilistázottak között: a tapasztalattól nem számol újra.
+player.xp = 600
+Fire("PLAYER_XP_UPDATE", "player")
+print("timers: " .. RunTimers())
+
+-- Éjfél után új nap: új szintcélok.
+now = now + 86400
+for _, tick in ipairs(tickers) do
+	tick()
+end
+DumpWindow("nextday")
+
+-- Az ablak be- és kikapcsolása, áthelyezése.
+SlashCmdList.WOWLEVELING("ablak")
+DumpWindow("off")
+SlashCmdList.WOWLEVELING(" Ablak ")
+DumpWindow("on")
+WoWLevelingWindow.scripts.OnDragStop(WoWLevelingWindow)
 
 -- Egy váratlan hiba nem akasztja meg a játékot, a program jelezheti (lastError).
 player.levelError = true

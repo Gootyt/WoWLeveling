@@ -1,17 +1,30 @@
 """A WoWLeveling addon mentéseinek beolvasása, megkeresése és importálása (wow_addon.py), valamint
 maga az addon (addon/WoWLeveling), ha van Lua-értelmező a gépen."""
 
+import random
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import wow_addon
-from leveling import Character, LevelingData, Settings
+from leveling import (
+    MODES,
+    Character,
+    LevelingData,
+    Settings,
+    SpecScores,
+    build_plan,
+    lookahead_day,
+    plan_item_levels,
+    plan_raiderio_scores,
+)
 from wow_addon import AddonError, LuaSyntaxError, Snapshot, parse_lua
+from wow_data import WOW_SPECS
 
 D = Decimal
 TESTS = Path(__file__).resolve().parent
@@ -297,9 +310,16 @@ class FilesTests(unittest.TestCase):
         self.assertEqual((empty.snapshots, empty.problems, empty.saved_at), ([], [], None))
 
     def test_addon_is_installed_into_the_game(self):
+        self.assertIsNone(wow_addon.installed_addon(self.root))
         target = wow_addon.install_addon(self.game)
         self.assertEqual(target, self.game / "Interface" / "AddOns" / "WoWLeveling")
-        self.assertEqual(sorted(path.name for path in target.iterdir()), ["WoWLeveling.lua", "WoWLeveling.toc"])
+        self.assertEqual(
+            sorted(path.name for path in target.iterdir()),
+            ["Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
+        )
+        for place in (self.root, self.game, target):
+            with self.subTest(place=place):
+                self.assertEqual(wow_addon.installed_addon(place), target)
         (target / "WoWLeveling.lua").write_text("-- régi változat", encoding="utf-8")
         wow_addon.install_addon(self.game)  # frissítés
         source = wow_addon.ADDON_SOURCE / "WoWLeveling.lua"
@@ -312,7 +332,77 @@ class FilesTests(unittest.TestCase):
         versions = [int(version) for version in directives["Interface"].split(",")]
         self.assertIn(120105, versions)  # 12.1.5 (2026. október)
         files = [line for line in toc.splitlines() if line.strip() and not line.startswith("#")]
-        self.assertEqual(files, ["WoWLeveling.lua"])
+        self.assertEqual(files, ["PlanData.lua", "Plan.lua", "WoWLeveling.lua"])  # előbb az adatok
+        self.assertRegex(directives["Version"], r"^\d+\.\d+\.\d+$")
+        # A program nélkül telepítve még nincs terv (a program ezt írja felül).
+        placeholder = (wow_addon.ADDON_SOURCE / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
+        self.assertEqual(parse_lua(placeholder), {})
+
+    def test_plan_is_written_into_the_installed_addon(self):
+        target = wow_addon.install_addon(self.game)
+        settings = Settings(date(2026, 10, 1), date(2026, 10, 10), date(2026, 10, 20), target_item_level=D("330.5"))
+        thrall = Character(
+            "Thrall", "death knight", "Frost", D("83.29"), realm="Twisting Nether", item_level=D("301.56"),
+            raiderio_score=D("1234.6"),
+        )
+        data = LevelingData(settings, [thrall, Character("Jaina")], SpecScores({"death knight/frost": D("3700.5")}))
+        data.addon_imported = {"twistingnether/thrall": 1760700000}
+        payload = wow_addon.plan_payload(data, datetime(2026, 10, 17, 12, 30))
+        self.assertEqual(
+            {key: value for key, value in payload.items() if key != "characters"},
+            {
+                "version": 1,
+                "generated": int(datetime(2026, 10, 17, 12, 30).timestamp()),
+                "lookAhead": True,
+                "specScores": True,
+                "startLevel": 100,
+                "targetLevel": 9000,
+                "targetItemLevel": 33050,
+            },
+        )
+        self.assertEqual(
+            payload["characters"][0],
+            {
+                "name": "Thrall",
+                "realm": "Twisting Nether",
+                "class": "DEATHKNIGHT",
+                "level": 8329,
+                "itemLevel": 30156,
+                "score": 123460,
+                "start": "2026-10-01",
+                "deadline": "2026-10-10",
+                "specKey": "death knight/frost",
+                "specScore": 370050,
+                "addonUpdated": 1760700000,  # ennél újabb mentése az addonban frissebb a program adatánál
+            },
+        )
+        jaina = payload["characters"][1]
+        self.assertEqual((jaina["class"], jaina["itemLevel"], jaina["deadline"]), (None, None, "2026-10-20"))
+        path = wow_addon.write_plan(target, payload)
+        self.assertEqual(path, target / "PlanData.lua")
+        text = path.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("-- A WoW szintezés tervező írta (2026-10-17 12:30)"))
+        written = parse_lua(text)[wow_addon.PLAN_VARIABLE]
+        self.assertEqual(written["characters"][1]["name"], "Thrall")  # a Lua-tömb 1-től számozott
+        self.assertEqual(written["characters"][2], {k: v for k, v in payload["characters"][1].items() if v is not None})
+        self.assertEqual(sorted(p.name for p in target.iterdir())[:2], ["Plan.lua", "PlanData.lua"])  # nincs .tmp
+
+        # Egy régebbi addont előbb frissít (különben nem olvasná be a tervet).
+        (target / "WoWLeveling.toc").write_text("## Version: 1.0.0\n\nWoWLeveling.lua\n", encoding="utf-8")
+        (target / "Plan.lua").unlink()
+        wow_addon.write_plan(target, payload)
+        self.assertEqual(wow_addon.addon_version(target), wow_addon.addon_version(wow_addon.ADDON_SOURCE))
+        self.assertTrue((target / "Plan.lua").is_file())
+        rewritten = parse_lua((target / "PlanData.lua").read_text(encoding="utf-8"))
+        self.assertEqual(rewritten[wow_addon.PLAN_VARIABLE], written)
+
+    def test_lua_strings_are_escaped(self):
+        text = 'A "b" \\ c\nd\te\x01 Zôltan'
+        self.assertEqual(parse_lua(f"X = {wow_addon.lua_value({'s': text, 'list': [1, True, False]})}")["X"], {
+            "s": text, "list": {1: 1, 2: True, 3: False},
+        })
+        with self.assertRaises(TypeError):
+            wow_addon.lua_value(1.5)
 
 
 class ImportTests(unittest.TestCase):
@@ -436,29 +526,190 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(self.data.addon_skipped, ["kazzak/jaina"])
 
 
+def random_plan(rng: random.Random) -> tuple[LevelingData, date]:
+    """Véletlen terv és nap az addon számolásának ellenőrzéséhez (sok egyezéssel és határesettel)."""
+    start = date(2026, 9, 1) + timedelta(days=rng.randint(0, 60))
+    first = start + timedelta(days=rng.randint(0, 30))
+    last = first + timedelta(days=rng.randint(0, 45))
+    start_level = Decimal(rng.choice((1, 10, 70, 80, 85)))
+    target_level = start_level + rng.randint(1, 15)
+    target_item_level = rng.choice((None, Decimal(rng.randint(29000, 33500)) / 100))
+    settings = Settings(start, first, last, start_level, target_level, rng.choice(MODES), target_item_level)
+    pairs = [(char_class, spec) for char_class, specs in WOW_SPECS.items() for spec in specs]
+    if rng.random() < 0.5:
+        pairs = rng.sample(pairs, 3)  # kevés spec: több karakter egy specben (Murlok.io-körök)
+    scores = {}
+    if rng.random() < 0.85:
+        for char_class, spec in rng.sample(pairs, rng.randint(1, len(pairs))):
+            scores[SpecScores.spec_key(char_class, spec)] = Decimal(rng.choice((0, rng.randint(15000, 40000)))) / 10
+    levels = [start_level + Decimal(rng.randint(-200, int(target_level - start_level) * 100 + 200)) / 100]
+    characters = []
+    for index in range(rng.randint(0, 8)):
+        char_class, spec = rng.choice(pairs) if rng.random() < 0.85 else ("", "")
+        level = rng.choice(levels) if rng.random() < 0.3 else start_level + Decimal(
+            rng.randint(-200, int(target_level - start_level) * 100 + 200)
+        ) / 100
+        levels.append(level)
+        item_level = None if rng.random() < 0.2 else Decimal(rng.randint(27000, 34000)) / 100
+        score = None if rng.random() < 0.25 else Decimal(rng.choice((0, rng.randint(0, 40000)))) / 10
+        characters.append(
+            Character(
+                f"Karakter{index}",
+                char_class,
+                spec,
+                max(Decimal(1), level),
+                realm=rng.choice(("Draenor", "")),
+                item_level=item_level,
+                raiderio_score=score,
+            )
+        )
+    data = LevelingData(settings, characters, SpecScores(scores), look_ahead=rng.random() < 0.6)
+    return data, start + timedelta(days=rng.randint(-10, 80))
+
+
+def expected_rows(data: LevelingData, today: date) -> dict:
+    """A program szerinti legnagyobb lemaradások, ahogy az addon is kiírja (századokban, a
+    pontszám tizedekben); a lista sorrendjében az első a legkisebb eltéréssel."""
+    settings, characters = data.settings, data.characters
+    goal_day = lookahead_day(settings, characters, today) if data.look_ahead else today
+
+    def most_behind(rows, scale):
+        best = None
+        for character, current, planned in rows:
+            if current is not None and planned is not None and (best is None or current - planned < best[1]):
+                best = (character, current - planned, planned)
+        if best is None:
+            return {"problem": True}
+        if best[1] >= 0:
+            return {"ok": True}
+        return {"name": best[0].name, "target": int(best[2] * scale), "missing": int(-best[1] * scale)}
+
+    plans = build_plan(settings, characters, today, data.spec_scores, goal_day)
+    levels = ((p.character, p.character.level, p.character.level - p.deviation) for p in plans)
+    rows = {"level": most_behind(levels, 100)}
+    for key, plan, value, scale in (
+        ("itemLevel", plan_item_levels(characters, data.spec_scores, settings.target_item_level), "item_level", 100),
+        ("score", plan_raiderio_scores(characters, data.spec_scores, settings.target_item_level), "raiderio_score", 10),
+    ):
+        rows[key] = (
+            {"problem": True}
+            if plan.step is None
+            else most_behind(((c, getattr(c, value), plan.planned.get(c)) for c in characters), scale)
+        )
+    rows["goalDay"] = (goal_day - date(1970, 1, 1)).days
+    return rows
+
+
+@unittest.skipIf(LUA is None, "nincs Lua-értelmező (lua5.1, luajit vagy lua)")
+class PlanTests(unittest.TestCase):
+    """Az addon (Plan.lua) ugyanazt számolja-e, mint a program (leveling.py)."""
+
+    def test_addon_computes_what_the_program_does(self):
+        rng = random.Random(20261017)
+        cases, expected = [], []
+        # Kézzel: senki sincs lemaradásban itemlevelben (a két legnagyobb arány egyenlő: 10/1 = 20/2).
+        settings = Settings(date(2026, 10, 1), date(2026, 10, 10), date(2026, 10, 20), target_item_level=Decimal(330))
+        even = LevelingData(
+            settings, [Character("A", item_level=Decimal(320)), Character("B", item_level=Decimal(310))]
+        )
+        for data, today in [(even, date(2026, 10, 5))] + [random_plan(rng) for _ in range(400)]:
+            cases.append({"data": wow_addon.plan_payload(data, datetime(2026, 10, 17, 12)), "today": today.isoformat()})
+            expected.append(expected_rows(data, today))
+        with tempfile.TemporaryDirectory() as folder:
+            cases_path, output = Path(folder) / "esetek.lua", Path(folder) / "eredmenyek.lua"
+            cases_path.write_text(f"Cases = {wow_addon.lua_value(cases)}\n", encoding="utf-8")
+            plan_lua = wow_addon.ADDON_SOURCE / "Plan.lua"
+            result = subprocess.run(
+                [LUA, str(TESTS / "plan_harness.lua"), str(plan_lua), str(cases_path), str(output)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            results = parse_lua(output.read_text(encoding="utf-8"))["Results"]
+        kinds = set()
+        for index, want in enumerate(expected):
+            got = results[index + 1]
+            for key in ("level", "itemLevel", "score"):
+                row = got[key]
+                got[key] = {"problem": True} if "problem" in row else row
+                kinds.add((key, next(iter(want[key]))))
+            with self.subTest(case=index):
+                self.assertEqual(got, want)
+        # A véletlen esetek között minden fajta eredmény előfordult.
+        self.assertEqual(len(kinds), 9, kinds)
+
+    def test_rounding_and_dates(self):
+        script = (
+            "local ns = {}\n"
+            f"assert(loadfile({str(wow_addon.ADDON_SOURCE / 'Plan.lua')!r}))('WoWLeveling', ns)\n"
+            "local P = ns.Plan\n"
+            "print(P.RoundHalfUp(5, 2), P.RoundHalfUp(-5, 2), P.RoundHalfUp(7, 3), P.RoundHalfUp(-7, 3))\n"
+            "print(P.ParseDay('1970-01-01'), P.ParseDay('2026-10-17'),\n"
+            "    P.ParseDay('2028-02-29') - P.ParseDay('2028-02-28'))\n"
+            "print(P.PlannedLevel(10, 19, 100, 9000, 9), P.PlannedLevel(10, 19, 100, 9000, 10), "
+            "P.PlannedLevel(10, 19, 100, 9000, 14), P.PlannedLevel(10, 19, 100, 9000, 19))\n"
+        )
+        result = subprocess.run([LUA, "-"], input=script, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        days = (date(2026, 10, 17) - date(1970, 1, 1)).days
+        self.assertEqual(
+            result.stdout.split(),
+            ["3", "-3", "2", "-2", "0", str(days), "1", "100", "990", "4550", "9000"],
+        )
+
+
 @unittest.skipIf(LUA is None, "nincs Lua-értelmező (lua5.1, luajit vagy lua)")
 class AddonTests(unittest.TestCase):
     """Az addon lefuttatása a játékot utánzó környezetben (tests/addon_harness.lua)."""
 
+    HARNESS_TIME = 1760700000  # a harness órája indításkor
+
+    def run_addon(self, addon_dir: Path) -> tuple[str, Path, dict]:
+        """A harness kimenete (chat és ablak), és a játék által kiírt mentés (fájl és tartalom)."""
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        output = folder / "WoWLeveling.lua"
+        result = subprocess.run(
+            [LUA, str(TESTS / "addon_harness.lua"), str(addon_dir), str(output)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            cwd=folder,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout, output, parse_lua(output.read_text(encoding="utf-8"))[wow_addon.DB_VARIABLE]
+
+    @staticmethod
+    def windows(chat: str) -> dict:
+        """Az ablak kiírt állapotai: név → {"shown", "level", "itemLevel", "score", "footer"} (színkódok nélkül)."""
+        plain = re.sub(r"\|c[0-9a-fA-F]{8}|\|r", "", chat)
+        dumps, current = {}, None
+        for line in plain.splitlines():
+            if match := re.match(r"window (\w+): (\S+)$", line):
+                current = dumps[match.group(1)] = {"shown": match.group(2) == "látszik"}
+            elif match := re.match(r"row (\w+): (.*)$", line):
+                current[match.group(1)] = [cell.strip() for cell in match.group(2).split(" | ")]
+            elif line.startswith("footer: "):
+                current["footer"] = line[len("footer: "):]
+        return dumps
+
     def test_addon_saves_the_characters(self):
-        with tempfile.TemporaryDirectory() as folder:
-            output = Path(folder) / "WoWLeveling.lua"
-            result = subprocess.run(
-                [LUA, str(TESTS / "addon_harness.lua"), str(wow_addon.ADDON_SOURCE), str(output)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=30,
-                cwd=folder,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            data = wow_addon.load_addon_data(output)
-        chat = result.stdout
+        chat, output, _db = self.run_addon(wow_addon.ADDON_SOURCE)
+        data = wow_addon.load_addon_data(output)
         self.assertIn("Zôltan (Twisting Nether): szint 85,29, itemlevel 301,56, M+ pontszám 1234", chat)
-        # A belépés és a felszerelés cseréje után csak egyszer mentett, és csak a saját spec váltásakor.
-        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["1", "1", "1"])
+        # A belépés és a felszerelés cseréje után csak egyszer mentett (és megnyitotta az ablakot),
+        # szintlépéskor és a saját spec váltásakor mentett; a terv nélküli ablak nem frissül magától.
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "0", "1", "1", "0"])
+        login = self.windows(chat)["login"]
+        self.assertTrue(login["shown"])
+        self.assertEqual(
+            [login["level"][0], login["itemLevel"][0]],
+            ["Még nincs szinkronizált terv.", "A programban: Szinkronizálás, majd /reload."],
+        )
         self.assertIn("2 karakter adatai vannak elmentve:", chat)
-        self.assertIn("Zôltan (Twisting Nether): szint 86,00, itemlevel 301,56", chat)  # a titkos érték nem kell
+        self.assertIn("Zôltan (Twisting Nether): szint 86,05, itemlevel 301,56", chat)  # a titkos érték nem kell
         self.assertIn("hiba: ", chat)
         self.assertIn("UnitLevel: próba hiba", chat)
         self.assertEqual(data.problems, [])  # a kilépéskori mentés már sikerült
@@ -475,11 +726,84 @@ class AddonTests(unittest.TestCase):
                 D("86.28"),
                 D("303.25"),
                 D("1500.5"),
-                1760700660,
+                1760700000 + 600 + 86400 + 60,  # a harness órája kilépéskor
             ),
         )
         jaina = next(s for s in data.snapshots if s.name == "Jaina")
         self.assertEqual((jaina.level, jaina.updated), (D("90.00"), 1760000000))  # a korábbi mentés megmaradt
+
+    def plan_data(self, **overrides) -> LevelingData:
+        """A harness karaktereinek terve; overrides: név → (szint, itemlevel, pontszám) a program adata helyett."""
+        today = date.fromtimestamp(self.HARNESS_TIME)
+        settings = Settings(
+            today - timedelta(days=5), today + timedelta(days=5), today + timedelta(days=5), D(80), D(90),
+            target_item_level=D(320),
+        )
+        values = {"Zôltan": ("84.50", 300, 1200), "Jaina": ("90.00", 305, 1500), "Thrall": ("85.40", 290, 900)}
+        values.update(overrides)
+        specs = {"Zôltan": ("Shaman", "Enhancement"), "Jaina": ("Mage", "Frost"), "Thrall": ("Shaman", "Elemental")}
+        realms = {"Zôltan": "Twisting Nether", "Jaina": "Draenor", "Thrall": "Draenor"}
+        characters = [
+            Character(name, *specs[name], D(level), realm=realms[name], item_level=D(ilvl), raiderio_score=D(score))
+            for name, (level, ilvl, score) in values.items()
+        ]
+        scores = {"mage/frost": D(3600), "shaman/enhancement": D(3500), "shaman/elemental": D(3400)}
+        return LevelingData(settings, characters, SpecScores(scores), look_ahead=False)
+
+    @staticmethod
+    def window_rows(data: LevelingData, today: date) -> dict:
+        """Amit az ablaknak mutatnia kell a program számolása szerint (lásd expected_rows)."""
+        shown = {}
+        for key, scale, digits in (("level", 100, 2), ("itemLevel", 100, 2), ("score", 10, 1)):
+            row = expected_rows(data, today)[key]
+            text = lambda value: f"{D(value) / scale:.{digits}f}".replace(".", ",")  # noqa: E731
+            if "name" in row:
+                shown[key] = [row["name"], f"cél: {text(row['target'])}", f"hiányzik: {text(row['missing'])}"]
+            else:
+                shown[key] = ["senki sincs lemaradásban" if "ok" in row else row, "", ""]
+        return shown
+
+    def test_window_shows_the_largest_lag(self):
+        # A program szinkronizálja a tervet az addon egy másolatába.
+        addon = Path(tempfile.mkdtemp()) / wow_addon.ADDON_NAME
+        self.addCleanup(shutil.rmtree, addon.parent)
+        shutil.copytree(wow_addon.ADDON_SOURCE, addon)
+        synced = self.plan_data()
+        payload = wow_addon.plan_payload(synced, datetime.fromtimestamp(self.HARNESS_TIME - 3600))
+        wow_addon.write_plan(addon, payload)
+        chat, _output, db = self.run_addon(addon)
+        windows = self.windows(chat)
+        today = date.fromtimestamp(self.HARNESS_TIME)
+
+        # Belépéskor: Zôltan élő adataival (85,29, 301,56, 1234), Jaina az addon újabb mentésével
+        # (90, 310,25), Thrall a program adataival. Zôltan a legnagyobb lemaradásban szintben.
+        live = {"Jaina": ("90.00", "310.25", 1500)}
+        expected = self.window_rows(self.plan_data(Zôltan=("85.29", "301.56", 1234), **live), today)
+        login = windows["login"]
+        self.assertEqual({key: login[key] for key in expected}, expected)
+        self.assertEqual(login["level"], ["Zôltan", "cél: 85,45", "hiányzik: 0,16"])
+        self.assertEqual(login["itemLevel"][0], "Thrall")
+        self.assertEqual(login["score"][0], "Jaina")
+        stamp = datetime.fromtimestamp(payload["generated"]).strftime("%Y-%m-%d %H:%M")
+        self.assertEqual(login["footer"], f"Szinkronizálva: {stamp} · automatikus frissítés: Zôltan")
+        # A listán van, így a tapasztalattól magától frissül; szintlépéskor kiesik a listából.
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "1", "2", "1", "0"])
+        xp = self.window_rows(self.plan_data(Zôltan=("85.40", "301.56", 1234), **live), today)
+        self.assertEqual(windows["xp"]["level"], xp["level"])
+        self.assertEqual(xp["level"], ["Zôltan", "cél: 85,45", "hiányzik: 0,05"])  # Thrall-lal egyenlő: az első
+        levelup = self.window_rows(self.plan_data(Zôltan=("86.00", "301.56", 1234), **live), today)
+        self.assertEqual({key: windows["levelup"][key] for key in levelup}, levelup)
+        self.assertEqual(windows["levelup"]["level"][0], "Thrall")
+        self.assertEqual(windows["levelup"]["footer"], f"Szinkronizálva: {stamp}")
+        # Másnap az új szintcélokkal.
+        nextday = self.window_rows(self.plan_data(Zôltan=("86.05", "301.56", 1234), **live), today + timedelta(days=1))
+        self.assertEqual({key: windows["nextday"][key] for key in nextday}, nextday)
+        self.assertEqual(windows["nextday"]["level"], ["Thrall", "cél: 86,36", "hiányzik: 0,96"])
+        # Ki- és bekapcsolható; a helyét és az állapotát megjegyzi.
+        self.assertEqual((windows["off"]["shown"], windows["on"]["shown"]), (False, True))
+        self.assertEqual(
+            db["window"], {"hidden": False, "point": "TOPLEFT", "relativePoint": "TOPLEFT", "x": 100, "y": -50}
+        )
 
 
 if __name__ == "__main__":

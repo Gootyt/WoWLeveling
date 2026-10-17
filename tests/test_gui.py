@@ -187,7 +187,8 @@ class GuiTests(unittest.TestCase):
         self.assertIsNotNone(self.app.list_window)
         buttons = self.find_button(self.root, "Importálás most").master.winfo_children()
         self.assertEqual(
-            [button.cget("text") for button in buttons], ["Tallózás…", "Importálás most", "Addon telepítése…"]
+            [button.cget("text") for button in buttons],
+            ["Tallózás…", "Importálás most", "Szinkronizálás", "Addon telepítése…"],
         )
 
     def test_double_click_opens_the_editor_in_both_windows(self):
@@ -1550,7 +1551,13 @@ class GuiTests(unittest.TestCase):
             self.find_button(self.root, "Addon telepítése…").invoke()
         self.assertEqual(ask.call_args.args[1], f"Telepítsem (frissítsem) az addont ide?\n{target}")
         self.assertEqual(info.call_args.args[1], self.gui.ADDON_INSTALLED)
-        self.assertEqual(sorted(path.name for path in target.iterdir()), ["WoWLeveling.lua", "WoWLeveling.toc"])
+        self.assertEqual(
+            sorted(path.name for path in target.iterdir()),
+            ["Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
+        )
+        plan = wow_addon.parse_lua((target / "PlanData.lua").read_text(encoding="utf-8"))  # a terv is odakerült
+        self.assertEqual(plan[wow_addon.PLAN_VARIABLE]["version"], 1)
+        self.assertIn("Szinkronizálva az addonba:", self.app.addon_status_var.get())
 
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True), mock.patch.object(
             self.gui.wow_addon, "install_addon", side_effect=PermissionError("nincs jogosultság")
@@ -1569,6 +1576,71 @@ class GuiTests(unittest.TestCase):
             self.app.install_addon()
         self.assertEqual(self.app.addon_path_var.get(), str(folder))
         self.assertEqual(self.app.data.addon_path, str(folder))
+
+    def test_plan_is_synced_to_the_addon(self):
+        def plan_names():
+            text = (target / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
+            characters = wow_addon.parse_lua(text)[wow_addon.PLAN_VARIABLE]["characters"]
+            return [characters[index]["name"] for index in sorted(characters)]
+
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.find_button(self.root, "Szinkronizálás").invoke()  # nincs megadva a WoW mappája
+        self.assertIn("Add meg a World of Warcraft mappáját", info.call_args.args[1])
+        folder = self.addon_folder()
+        self.app.addon_path_var.set(str(folder))
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app.sync_addon_plan()  # nincs telepítve az addon
+        self.assertIn("Az addon nincs telepítve ebben a WoW mappában", info.call_args.args[1])
+
+        target = wow_addon.install_addon(folder / "_retail_")
+        self.add("Thrall", realm="Draenor", level="83,5")
+        self.app.sync_addon_plan()
+        self.assertEqual(plan_names(), ["Thrall"])
+        status = self.app.addon_status_var.get()
+        self.assertRegex(
+            status, r"Szinkronizálva az addonba: \d{4}-\d\d-\d\d \d\d:\d\d – a játékban /reload után látszik\.$"
+        )
+
+        # Minden mentés után magától, egy másodperccel később (a gyors mentések után egyszer).
+        self.add("Jaina")
+        self.assertIsNotNone(self.app._sync_job)
+        for _ in range(300):
+            self.root.update()
+            if self.app._sync_job is None:
+                break
+            time.sleep(0.01)
+        self.assertEqual(plan_names(), ["Thrall", "Jaina"])
+        with mock.patch.object(wow_addon, "write_plan") as write:
+            self.app.save()  # nem változott a terv: nem írja újra
+            self.app.sync_addon_plan(automatic=True)
+        write.assert_not_called()
+
+        # Ha nem írható, az állapotsor jelzi (a gombnál üzenet is).
+        self.app.data.characters[0].level = D("84.00")
+        with mock.patch.object(wow_addon, "write_plan", side_effect=PermissionError("nincs jogosultság")):
+            self.app.sync_addon_plan(automatic=True)
+            self.assertIn("A terv átadása az addonnak nem sikerült: nincs jogosultság", self.app.addon_status_var.get())
+            self.assertEqual(self.app.addon_status_label.cget("style"), "Error.TLabel")
+            with mock.patch.object(self.gui.messagebox, "showerror") as error:
+                self.app.sync_addon_plan()
+        self.assertIn("nincs jogosultság", error.call_args.args[1])
+        self.app.sync_addon_plan(automatic=True)
+        self.assertNotEqual(self.app.addon_status_label.cget("style"), "Error.TLabel")
+        self.assertEqual(self.app._sync_job, None)
+
+    def test_plan_is_synced_at_startup(self):
+        folder = self.addon_folder()
+        target = wow_addon.install_addon(folder / "_retail_")
+        data = LevelingData(Settings.default(), [Character("Thrall")])
+        data.addon_path = str(folder)
+        path = Path(self.temp_dir.name) / "indulas.json"
+        save_data(path, data)
+        before = (target / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
+        self.assertEqual(wow_addon.parse_lua(before), {})  # még a telepítéskori üres terv
+        app = self.gui.App(tk.Toplevel(self.root), path)
+        plan = wow_addon.parse_lua((target / wow_addon.PLAN_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(plan[wow_addon.PLAN_VARIABLE]["characters"][1]["name"], "Thrall")
+        self.assertIn("Szinkronizálva az addonba:", app.addon_status_var.get())
 
     def test_addon_is_found_in_the_usual_place_at_startup(self):
         folder = self.addon_folder()

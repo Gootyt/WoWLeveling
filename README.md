@@ -70,8 +70,11 @@ megtervezéséhez és követéséhez.
 - **WoW addon:** a mellékelt WoWLeveling addon a játékban elmenti a karakterek
   szintjét (a tapasztalattal együtt), itemlevelét, Mythic+ pontszámát, faját,
   kasztját és specjét. A program a játék mappájának megadása után ezeket **minden
-  indításkor magától**, és bármikor az „Importálás most” gombbal beolvassa (lásd
-  lent, „WoW addon”).
+  indításkor magától**, és bármikor az „Importálás most” gombbal beolvassa. Az
+  addon egy kis ablakban azt is mutatja, melyik karakter van a **legnagyobb
+  lemaradásban** szintben, itemlevelben és Mythic+ pontszámban, mennyit kell
+  elérnie, és mennyi hiányzik; a tervet a program szinkronizálja neki (lásd lent,
+  „WoW addon”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -563,7 +566,8 @@ World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
 ```
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
-elmentett adatait, a `/wowleveling lista` pedig az összes elmentett karakterét.
+elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a
+`/wowleveling ablak` pedig be- és kikapcsolja a lemaradás ablakát (lásd lent).
 
 **Importálás.** A program **minden indításkor magától** beolvassa a mentéseket,
 és bármikor az „Importálás most” gombbal. Útvonalként a World of Warcraft
@@ -590,6 +594,35 @@ Files mappában, macOS-en az Applications mappában).
 - Az eredmény (és az esetleges hiba) a „WoW addon” keretben látszik; a gombbal
   indított importálás a változásokat egy üzenetben is felsorolja.
 
+**A lemaradás ablaka.** Az addon egy kis, egérrel áthelyezhető ablakban mutatja,
+hogy a program terve szerint
+
+| Sor | melyik karakter | cél | hiányzik |
+|---|---|---|---|
+| Szint | a legnagyobb szinteltérésű (a leginkább lemaradt) | az a szint, amellyel 0 lenne az eltérése (a mai cél) | ennyi szint |
+| Itemlevel | a legnagyobb itemlevel-eltérésű | a tervezett itemlevele | ennyi itemlevel |
+| Mythic+ | a legnagyobb Raider.io-különbözetű | a tervezett pontszáma | ennyi pont |
+
+Ha senki sincs lemaradásban, ezt írja ki; ha egy terv nem számolható (pl. nincs
+célitemlevel), az okát. Az ablak ugyanazt számolja, mint a program (a
+karakterlista, a Gear és a Mythic+ ablak), az előretekintéssel együtt: a mai
+napot a gép órájából veszi, így napok múlva is a napi célokkal számol. Bezárni a
+sarkában lévő X-szel, újra megnyitni a `/wowleveling ablak` paranccsal lehet; a
+helyét és azt, hogy látszik-e, megjegyzi.
+
+- **Szinkronizálás:** a program a terv adatait (a karaktereket a szintjükkel,
+  itemlevelükkel, pontszámukkal és a terv beállításaival) a telepített addon
+  mappájába írja (`PlanData.lua`): magától minden változás után, és a „WoW addon”
+  keret „Szinkronizálás” gombjával. A játék az addon fájljait belépéskor és
+  `/reload` után olvassa be, így a változás ezután látszik az ablakban. Ha az
+  addon régebbi változat, a program a szinkronizáláskor frissíti is.
+- **Automatikus frissítés:** ha a három kiírt karakter valamelyikével játszol, az
+  ablak a játékbeli adatokból magától frissül (tapasztalat, szintlépés,
+  felszerelés, Mythic+ pontszám), és ezt a lábléc jelzi. Ha közben más karakter
+  kerül a legnagyobb lemaradásba, azt mutatja. A többi karakterhez az addon a
+  saját mentéseit is felhasználja, ha azok újabbak annál, amit a program már
+  beolvasott (pl. ha ugyanabban a játékmenetben több karakterrel is játszol).
+
 Az addon a Midnight 12.1-es patchéhez készült. Ha egy újabb patch után a játék
 elavultnak („Out of date”) jelzi, az AddOns ablakban kapcsold be a „Load out of
 date AddOns” lehetőséget, vagy írd át a `WoWLeveling.toc` fájl `## Interface:`
@@ -609,11 +642,11 @@ A statisztikák a fájljaikat az adatfájl mellé teszik: `raiderio_ilvl_cache.j
 újra le kell tölteni őket), valamint – ha kéred – `api_kulcsok.json` (az
 API-kulcsok).
 
-Az addon mentéseinek beolvasásához a program az adatfájlban megjegyzi a WoW
-mappáját, karakterenként a legutóbb felhasznált mentés idejét, és azokat a
-karaktereket, amelyeket nem kértél fel a listára. A gear ajánló automatikus
-frissítéséhez a beállításait és azt, hogy a két statisztika eredménye mikor került
-át utoljára.
+Az addon mentéseinek beolvasásához és a terv szinkronizálásához a program az
+adatfájlban megjegyzi a WoW mappáját, karakterenként a legutóbb felhasznált mentés
+idejét, és azokat a karaktereket, amelyeket nem kértél fel a listára. A gear
+ajánló automatikus frissítéséhez a beállításait és azt, hogy a két statisztika
+eredménye mikor került át utoljára.
 
 ## Fájlok
 
@@ -635,10 +668,14 @@ frissítéséhez a beállításait és azt, hogy a két statisztika eredménye m
   mentése…” sablonja)
 - `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
   a választható faj–kaszt kombinációk
-- `wow_addon.py` – a WoWLeveling addon mentéseinek beolvasása és importálása
-- `addon/WoWLeveling/` – a WoW addon (`WoWLeveling.toc`, `WoWLeveling.lua`)
+- `wow_addon.py` – a WoWLeveling addon mentéseinek beolvasása és importálása, a
+  terv átadása az addonnak
+- `addon/WoWLeveling/` – a WoW addon: `WoWLeveling.toc`, `WoWLeveling.lua` (mentés
+  és az ablak), `Plan.lua` (a lemaradások számolása, mint a programban),
+  `PlanData.lua` (a program által szinkronizált terv)
 - `tests/` – automatikus tesztek (a `tests/addon_harness.lua` a játék nélkül,
-  utánzott játékkörnyezetben futtatja az addont)
+  utánzott játékkörnyezetben futtatja az addont, a `tests/plan_harness.lua` pedig
+  véletlen terveken összeveti a számolását a programéval)
 
 ## Tesztek
 

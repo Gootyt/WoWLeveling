@@ -92,7 +92,8 @@ INTRO_TEXT = (
 )
 ADDON_HINT = (
     "Add meg a World of Warcraft mappáját: a program indításkor (és az „Importálás most” gombbal) "
-    "beolvassa a WoWLeveling addon mentéseit. Az addont az „Addon telepítése…” gomb másolja a játékba."
+    "beolvassa a WoWLeveling addon mentéseit, és átadja neki a tervet a lemaradás ablakához. Az addont "
+    "az „Addon telepítése…” gomb másolja a játékba."
 )
 ADDON_INSTALLED = (
     "Az addon a helyén van. Ha a játék fut, írd be a chatbe: /reload (különben a következő "
@@ -1362,6 +1363,12 @@ class App:
         # A WoWLeveling addon mentéseinek helye és a legutóbbi beolvasás eredménye (lásd wow_addon.py).
         self.addon_path_var = tk.StringVar(value=self.data.addon_path)
         self.addon_status_var = tk.StringVar()
+        self._addon_status = ("", "Hint.TLabel")  # a beolvasás eredménye és stílusa
+        # A terv átadása az addonnak (lásd sync_addon_plan): a késleltetett automatikus szinkronizálás,
+        # a legutóbb kiírt terv (az időbélyeg nélkül) és az eredménye (szöveg, gond-e).
+        self._sync_job: str | None = None
+        self._synced_plan: dict | None = None
+        self._sync_note: tuple[str, bool] | None = None
 
         self._build()
         settings_vars = (
@@ -1382,6 +1389,7 @@ class App:
         self._update_raiderio_status()
         self.refresh()
         self.import_addon(automatic=True)  # a játékban elmentett adatok beolvasása
+        self.sync_addon_plan(automatic=True)  # és a terv átadása az addonnak (ha telepítve van)
         self.update_gear_stats()
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
@@ -1590,6 +1598,7 @@ class App:
         for text, command in (
             ("Tallózás…", self.browse_addon_path),
             ("Importálás most", self.import_addon),
+            ("Szinkronizálás", self.sync_addon_plan),
             ("Addon telepítése…", self.install_addon),
         ):
             ttk.Button(addon_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
@@ -2425,12 +2434,73 @@ class App:
         messagebox.showinfo(ADDON_TITLE, self._addon_summary(plan), detail="\n\n".join(notes), parent=self.root)
 
     def _show_addon_status(self, text: str, problem: bool = False, changed: bool = False) -> None:
+        self._addon_status = (text, "Error.TLabel" if problem else "Ok.TLabel" if changed else "Hint.TLabel")
+        self._render_addon_status()
+
+    def _render_addon_status(self) -> None:
+        """A WoW addon keret állapotsora: a beolvasás és a szinkronizálás eredménye."""
+        text, style = self._addon_status
+        if self._sync_note is not None:
+            note, problem = self._sync_note
+            text = f"{text} {note}".strip()
+            style = "Error.TLabel" if problem else style
         self.addon_status_var.set(text)
-        style = "Error.TLabel" if problem else "Ok.TLabel" if changed else "Hint.TLabel"
         self.addon_status_label.configure(style=style)
 
+    def sync_addon_plan(self, automatic: bool = False) -> None:
+        """A terv átadása az addonnak: a telepített addon mappájába írja a PlanData.lua fájlt (lásd
+        wow_addon.write_plan), amelyből az addon ablaka a legnagyobb lemaradásokat mutatja (a játékban
+        /reload után). automatic: mentés után magától – ilyenkor nem nyit ablakot, csak akkor ír, ha a
+        terv változott, és ha nincs telepítve az addon, nem csinál semmit."""
+        if self._sync_job is not None:  # a még várakozó automatikus szinkronizálás már nem kell
+            self.root.after_cancel(self._sync_job)
+            self._sync_job = None
+        if not automatic:
+            self._store_addon_path()
+        path = self.data.addon_path
+        folder = wow_addon.installed_addon(path) if path else None
+        if folder is None:
+            if not automatic:
+                message = (
+                    f"Az addon nincs telepítve ebben a WoW mappában:\n{path}\n\n"
+                    "Telepítsd az „Addon telepítése…” gombbal, és a program oda írja a tervet."
+                    if path
+                    else "Add meg a World of Warcraft mappáját (Tallózás…), és telepítsd az addont („Addon "
+                    "telepítése…”): a program az addon mappájába írja a tervet."
+                )
+                messagebox.showinfo(ADDON_TITLE, message, parent=self.root)
+            return
+        payload = wow_addon.plan_payload(self.data)
+        plan = {key: value for key, value in payload.items() if key != "generated"}
+        if automatic and plan == self._synced_plan:
+            return  # már ez van az addonban
+        try:
+            wow_addon.write_plan(folder, payload)
+        except OSError as exc:
+            self._sync_note = (f"A terv átadása az addonnak nem sikerült: {exc}", True)
+            self._render_addon_status()
+            if not automatic:
+                messagebox.showerror(ADDON_TITLE, f"Nem sikerült a tervet az addonba írni:\n{exc}", parent=self.root)
+            return
+        self._synced_plan = plan
+        stamp = datetime.fromtimestamp(payload["generated"])
+        note = f"Szinkronizálva az addonba: {stamp:%Y-%m-%d %H:%M} – a játékban /reload után látszik."
+        self._sync_note = (note, False)
+        self._render_addon_status()
+
+    def _schedule_addon_sync(self) -> None:
+        """Mentés után egy másodperccel átadja a tervet az addonnak (gyors egymás utáni mentéseknél
+        csak egyszer)."""
+        if not self.data.addon_path:
+            return
+        if self._sync_job is not None:
+            self.root.after_cancel(self._sync_job)
+        self._sync_job = self.root.after(1000, self.sync_addon_plan, True)
+
     def install_addon(self) -> None:
-        """Az addon bemásolása (frissítése) a játék Interface/AddOns mappájába, kérdés után."""
+        """Az addon bemásolása (frissítése) a játék Interface/AddOns mappájába, kérdés után; utána a
+        tervet is átadja neki."""
+        self._store_addon_path()
         text = self.addon_path_var.get().strip()
         folders = [Path(text)] if text else wow_addon.default_wow_folders()
         game = next((found for found in map(wow_addon.game_folder, folders) if found is not None), None)
@@ -2454,6 +2524,7 @@ class App:
         if not text:  # a szokásos helyen talált játék mappája
             self.addon_path_var.set(str(game.parent if game.name.casefold() == "_retail_" else game))
             self._store_addon_path()
+        self.sync_addon_plan()
         messagebox.showinfo(ADDON_TITLE, ADDON_INSTALLED, parent=self.root)
 
     def data_changed(self, select: Character | None = None) -> None:
@@ -2474,6 +2545,7 @@ class App:
                 )
         else:
             self._save_error_shown = False
+            self._schedule_addon_sync()
 
     def known_realms(self) -> list[str]:
         """A karaktereknél már megadott realmek, a realm mezők javaslataihoz."""

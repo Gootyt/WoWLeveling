@@ -21,15 +21,22 @@ mappája vagy maga a fájl) megkeresi a fiókok mentéseit (find_saved_variables
   akkor, ha a karakter kasztja is ugyanaz.
 * A listán nem szereplő karaktereket a felhasználó veheti fel (add_new_characters); akiket
   nem kér, azokat a program nem kínálja fel újra.
+
+A másik irányban a program a terv adatait adja át az addonnak (sync_plan): a telepített addon
+mappájába írja a PlanData.lua fájlt, amelyből az addon ablaka kiszámolja, melyik karakter van
+a legnagyobb lemaradásban szintben, itemlevelben és Mythic+ pontszámban (Plan.lua). A játék
+az addon fájljait belépéskor és /reload után olvassa be.
 """
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import re
 import shutil
 import sys
+import tempfile
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
@@ -47,9 +54,11 @@ from leveling import (
     RAIDERIO_STEP,
     Character,
     LevelingData,
+    SpecScores,
     format_item_level,
     format_level,
     format_raiderio_score,
+    leveling_windows,
 )
 from wow_data import RACE_FILE_NAMES, SPEC_IDS, WOW_SPECS, find_class, find_race, find_spec
 
@@ -57,6 +66,9 @@ ADDON_NAME = "WoWLeveling"
 ADDON_SOURCE = Path(__file__).resolve().with_name("addon") / ADDON_NAME  # a telepítendő addon
 SAVED_VARIABLES = f"{ADDON_NAME}.lua"  # a mentett adatok fájlja
 DB_VARIABLE = "WoWLevelingDB"  # a mentett adatok változója (lásd a .toc fájlt)
+PLAN_FILE = "PlanData.lua"  # a program által az addon mappájába írt terv
+PLAN_VARIABLE = "WoWLevelingPlanData"
+PLAN_VERSION = 1
 # A megadott mappa alatt ezeken a helyeken keresi a mentéseket; az első találat számít.
 _SEARCH_PATTERNS = (
     SAVED_VARIABLES,  # a SavedVariables mappa
@@ -334,6 +346,11 @@ def realm_key(realm: str) -> str:
     return "".join(char for char in _fold(realm) if char.isalnum())
 
 
+def snapshot_key(realm: str, name: str) -> str:
+    """Egy karakter azonosítója a program adatfájljában (pl. „twistingnether/zoltan”)."""
+    return f"{realm_key(realm)}/{name_key(name)}"
+
+
 def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
@@ -368,8 +385,8 @@ class Snapshot:
 
     @property
     def key(self) -> str:
-        """A karakter azonosítója a program adatfájljában (pl. „twistingnether/zoltan”)."""
-        return f"{realm_key(self.realm)}/{name_key(self.name)}"
+        """A karakter azonosítója a program adatfájljában (lásd snapshot_key)."""
+        return snapshot_key(self.realm, self.name)
 
     def describe(self) -> str:
         """Pl. „Zôltan (Twisting Nether) – szint: 85,29, Orc Shaman, Enhancement, itemlevel 301,56”."""
@@ -545,15 +562,146 @@ def load_addon_data(path: str | os.PathLike) -> AddonData:
     return AddonData(snapshots, files, problems)
 
 
+def addon_folder(game: Path) -> Path:
+    """Az addon helye a játék mappájában."""
+    return game / "Interface" / "AddOns" / ADDON_NAME
+
+
+def installed_addon(path: str | os.PathLike) -> Path | None:
+    """A telepített addon mappája a megadott WoW mappában (None, ha nincs telepítve)."""
+    game = game_folder(path)
+    folder = None if game is None else addon_folder(game)
+    return folder if folder is not None and (folder / f"{ADDON_NAME}.toc").is_file() else None
+
+
+def addon_version(folder: Path) -> str | None:
+    """Az addon változata a .toc fájlból (pl. „1.1.0”), ha olvasható."""
+    try:
+        toc = (folder / f"{ADDON_NAME}.toc").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^## Version:\s*(\S+)", toc, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def install_addon(game: Path) -> Path:
     """Az addon bemásolása (vagy frissítése) a játék Interface/AddOns mappájába; a
     telepített addon mappája."""
-    target = game / "Interface" / "AddOns" / ADDON_NAME
+    target = addon_folder(game)
     target.mkdir(parents=True, exist_ok=True)
     for source in sorted(ADDON_SOURCE.iterdir()):
         if source.is_file() and source.suffix in (".toc", ".lua"):
             shutil.copyfile(source, target / source.name)
     return target
+
+
+# --- A terv átadása az addonnak -------------------------------------------------------
+
+
+def _hundredths(value: Decimal | None) -> int | None:
+    return None if value is None else int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def plan_payload(data: LevelingData, now: datetime | None = None) -> dict:
+    """A terv adatai az addon lemaradás-ablakához. A szintek, az itemlevelek és a pontszámok
+    századokban (egész számok), a dátumok ÉÉÉÉ-HH-NN alakban; a számolás a Plan.lua-ban van."""
+    settings = data.settings
+    characters = []
+    windows = leveling_windows(settings, len(data.characters))
+    for character, (start, deadline) in zip(data.characters, windows):
+        spec_score = data.spec_scores.score_for(character)
+        char_class = find_class(character.char_class)
+        characters.append(
+            {
+                "name": character.name,
+                "realm": character.realm,
+                "class": char_class.upper().replace(" ", "") if char_class else None,  # pl. DEATHKNIGHT
+                "level": _hundredths(character.level),
+                "itemLevel": _hundredths(character.item_level),
+                "score": _hundredths(character.raiderio_score),
+                "start": start.isoformat(),
+                "deadline": deadline.isoformat(),
+                "specKey": None if spec_score is None else SpecScores.spec_key(character.char_class, character.spec),
+                "specScore": _hundredths(spec_score),
+                # Az addon ennél újabb mentése frissebb a program adatánál (lásd plan_import).
+                "addonUpdated": data.addon_imported.get(snapshot_key(character.realm, character.name), 0),
+            }
+        )
+    return {
+        "version": PLAN_VERSION,
+        "generated": int((now or datetime.now()).timestamp()),
+        "lookAhead": data.look_ahead,
+        "specScores": bool(data.spec_scores.scores),
+        "startLevel": _hundredths(settings.start_level),
+        "targetLevel": _hundredths(settings.target_level),
+        "targetItemLevel": _hundredths(settings.target_item_level),
+        "characters": characters,
+    }
+
+
+def _lua_string(text: str) -> str:
+    out = []
+    for char in text:
+        if char in '"\\':
+            out.append("\\" + char)
+        elif char == "\n":
+            out.append("\\n")
+        elif ord(char) < 32 or ord(char) == 127:
+            out.append(f"\\{ord(char):03d}")
+        else:
+            out.append(char)
+    return '"' + "".join(out) + '"'
+
+
+def lua_value(value: object, indent: str = "") -> str:
+    """Python érték (szótár, lista, szöveg, egész, logikai) Lua-táblaként, ahogy a játék is írja.
+    A None értékű kulcsok kimaradnak (a Luában a nil érték nem létezik)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return _lua_string(value)
+    inner = indent + "\t"
+    if isinstance(value, dict):
+        lines = [
+            f"{inner}[{_lua_string(str(key))}] = {lua_value(item, inner)},"
+            for key, item in value.items()
+            if item is not None
+        ]
+    elif isinstance(value, (list, tuple)):
+        lines = [f"{inner}{lua_value(item, inner)}, -- [{index}]" for index, item in enumerate(value, start=1)]
+    else:
+        raise TypeError(f"nem írható Lua-értékként: {value!r}")
+    return "{\n" + "".join(line + "\n" for line in lines) + indent + "}"
+
+
+def plan_file_text(payload: dict) -> str:
+    """A PlanData.lua tartalma."""
+    stamp = datetime.fromtimestamp(payload["generated"]).strftime("%Y-%m-%d %H:%M")
+    return (
+        f"-- A WoW szintezés tervező írta ({stamp}), a lemaradás ablakához. Ne szerkeszd kézzel:\n"
+        "-- a program minden szinkronizáláskor felülírja.\n"
+        f"{PLAN_VARIABLE} = {lua_value(payload)}\n"
+    )
+
+
+def write_plan(folder: Path, payload: dict) -> Path:
+    """A terv kiírása az addon mappájába (előbb ideiglenes fájlba, így a játék sosem lát félkész
+    fájlt). Ha az addon régebbi változat, előbb frissíti (lásd install_addon)."""
+    if addon_version(folder) != addon_version(ADDON_SOURCE):
+        install_addon(folder.parents[2])
+    path = folder / PLAN_FILE
+    handle, temp_name = tempfile.mkstemp(dir=folder, prefix=PLAN_FILE, suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(plan_file_text(payload))
+        os.replace(temp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise
+    return path
 
 
 # --- Importálás ------------------------------------------------------------------------

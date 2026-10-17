@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
+from fractions import Fraction
 from pathlib import Path
 
 from wow_data import ROLES, role_of
@@ -932,6 +933,15 @@ def murlok_order(characters: list[Character], spec_scores: SpecScores) -> list[C
     return order + unranked
 
 
+def _round_half_up(value: Fraction, step: Decimal) -> Decimal:
+    """Pontos érték kerekítése a step többszörösére, a felénél a nullától el (mint a ROUND_HALF_UP).
+    A tervezett itemlevel és pontszám így pontosan ugyanannyi, mint amennyit a WoWLeveling addon
+    egész számokkal számol (addon/WoWLeveling/Plan.lua)."""
+    units = value / Fraction(step)
+    whole = math.floor(abs(units) + Fraction(1, 2))
+    return Decimal(whole if units >= 0 else -whole) * step
+
+
 def reached_target_item_level(character: Character, target_item_level: Decimal | None) -> bool:
     """Elérte-e a karakter a célitemlevelt (ha mindkettő ismert)."""
     return (
@@ -980,7 +990,7 @@ def plan_item_levels(
     order = murlok_order(remaining, spec_scores)
     ratios = sorted(
         (
-            (target_item_level - character.item_level) / position
+            Fraction(target_item_level - character.item_level) / position
             for position, character in enumerate(order, start=1)
             if character.item_level is not None
         ),
@@ -989,10 +999,11 @@ def plan_item_levels(
     if len(ratios) < 2:
         problem = "legalább két, a célitemlevel alatti karakternél meg kell adni az itemlevelt."
         return ItemLevelPlan(None, {}, problem, reached)
-    step = ratios[1]
+    exact_step = ratios[1]
+    step = Decimal(exact_step.numerator) / Decimal(exact_step.denominator)
     planned = {
         character: max(
-            Decimal(0), (target_item_level - position * step).quantize(ITEM_LEVEL_STEP, rounding=ROUND_HALF_UP)
+            Decimal(0), _round_half_up(Fraction(target_item_level) - position * exact_step, ITEM_LEVEL_STEP)
         )
         for position, character in enumerate(order, start=1)
     }
@@ -1041,11 +1052,12 @@ def plan_raiderio_scores(
         return RaiderioPlan(None, {}, "legalább két karakternél kell Raider.io és Murlok.io pontszám.")
     position, character, score = anchors[1]
     step = (1 - character.raiderio_score / score) / position
+    exact_step = (1 - Fraction(character.raiderio_score) / Fraction(score)) / position
     planned = {}
     for position, character in enumerate(order, start=1):
         score = spec_scores.score_for(character)
         if score is not None:
-            value = (score * (1 - position * step)).quantize(RAIDERIO_STEP, rounding=ROUND_HALF_UP)
+            value = _round_half_up(Fraction(score) * (1 - position * exact_step), RAIDERIO_STEP)
             planned[character] = max(Decimal(0), value)
     return RaiderioPlan(step, planned)
 
