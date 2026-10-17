@@ -61,6 +61,11 @@ megtervezéséhez és követéséhez.
   kulcsszintenként; a „Raid ilvl statisztika” a Warcraft Logs adataiból azt, hogy
   milyen itemlevellel ölik meg az aktuális raid bossait Normal, Heroic és Mythic
   nehézségen (lásd lent, „Statisztikák”).
+- **Gear ajánló:** egy itemlevelhez (vagy egy karakteréhez) megmutatja, melyik
+  tartalom (dungeon, Mythic+, delve, prey, raid, daily) ad még fejlesztést dropból
+  vagy a Great Vaultból, melyikhez túl alacsony, és melyiket nőtted már ki. A
+  Mythic+ és a raid sorok belépési ilvl-jét a statisztikákból frissíti (lásd lent,
+  „Gear ajánló”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -164,7 +169,10 @@ python wow_leveling.py masik_terv.json
    gombja egy-egy külön ablakot nyit. Állítsd be a lekérdezést, majd „Indítás”: a
    lekérdezés a háttérben fut, a táblázat menet közben frissül, a „Leállítás” az
    addigi adatokkal zárja le, a „CSV mentése…” pedig fájlba írja az eredményt
-   (lásd lent).
+   (lásd lent). Az „Átvitel a gear ajánlóba” az eredmény mediánjait a gear ajánló
+   belépési ilvl-jeibe írja.
+10. **Gear ajánló**: a főablak „Gear ajánló” gombjával, vagy a Gear ablakban a
+    kijelölt karakterhez a „Gear ajánló…” gombbal (lásd lent).
 
 ## Hogyan számol a program?
 
@@ -449,6 +457,50 @@ python raiderio_ilvl_stats.py --guild "Solutions@ragnaros" --levels 2,3,4,5,6,7,
 python wcl_raid_ilvl_stats.py --days 14 --pages 150 --csv stat.csv
 ```
 
+## Gear ajánló
+
+A „WoW Gearing Ajánló” HTML-oldal a programban. Add meg az itemlevelt (vagy
+válassz karaktert a megadott itemlevelűek közül – ha az itemlevele változik, az
+ajánló is követi), és a táblázat minden tartalomról megmondja, megéri-e:
+
+| Ajánlás | Jelentés |
+|---|---|
+| Irány farmolni! | a drop még fejleszt (megjegyzés: mennyit) |
+| Csak Vaultért | a drop már nem, de a Great Vault még fejleszt |
+| Túl alacsony ilvl | a belépési ilvl alatt vagy (megjegyzés: mennyi hiányzik) |
+| Túlfejlett vagy | már a Vault sem fejleszt |
+
+A sorrend: előbb az ajánlottak (a legnagyobb fejlesztés elöl), aztán a csak
+Vaultért érdemesek, a túl magasak (a legközelebbi elöl), végül a kinőttek. A
+tartalomtípusok (Dungeon, Mythic+, Delve, Prey, Raid, Világ / Daily) ki-be
+kapcsolhatók; a Delve és a Prey csoportból alapból csak a legjobb elérhető tier
+látszik („Minden Delve/Prey tier mutatása”). Itemlevel nélkül minden sor látszik,
+értékelés nélkül.
+
+**A belépési ilvl-ek frissítése (adatátvitel).** A Mythic+ sorok belépési ilvl-je
+a kulcsszint játékosainak medián itemlevele (M+ ilvl statisztika), a raid soroké a
+boss kill-jeinek medián itemlevele az adott nehézségen (Raid ilvl statisztika, a
+„raid átlag / kill” mérőszám). Átvinni lehet:
+
+- a statisztikai ablakokból, az „Átvitel a gear ajánlóba” gombbal, a lekérdezés
+  után;
+- a gear ajánlóban az „Importálás CSV-ből…” gombbal a statisztikák CSV-jéből
+  (`live.csv`, `stat.csv` – a parancssori programok `--csv` kimenete, vagy a
+  „CSV mentése…” gombé). Egyszerre több fájl is választható.
+
+Átírás előtt a program megmutatja, mi változik, és rákérdez. Ahol nincs adat (a
+statisztikában nem szereplő kulcsszint, még meg nem ölt boss), ott a belépési ilvl
+marad; az „Összes boss” sor nem számít. A frissített értékek az adatfájlba
+kerülnek, az „Alapértékek visszaállítása” gomb törli őket.
+
+**HTML mentése.** A „HTML mentése…” gomb elmenti a „WoW Gearing Ajánló”
+HTML-oldalt a program mostani adataival (böngészőben is használható). A
+`wow-gearing-ajanlo-refaktoralt.html` sablonban csak a számok cserélődnek, minden
+más ugyanaz marad.
+
+A tartalmak listája (belépési, drop és Vault ilvl-ek) a `gearing.py` elején van
+(`GROUPS`); új szezonnál ott kell átírni.
+
 ## Adatok
 
 A beállítások és a karakterek a program mappájában lévő `szintezes_adatok.json`
@@ -476,6 +528,11 @@ API-kulcsok).
 - `wcl_raid_ilvl_stats.py` – raid itemlevel-statisztika a Warcraft Logs-ról
   (önállóan is futtatható)
 - `httpcompat.py` – a `requests` csomag pótlása a szabványos urllib-bel
+- `gearing.py` – a gear ajánló adatai és számolása, az adatátvitel a
+  statisztikákból
+- `gear_advisor.py` – a gear ajánló ablaka
+- `wow-gearing-ajanlo-refaktoralt.html` – a gear ajánló HTML-oldala (a „HTML
+  mentése…” sablonja)
 - `wow_data.py` – a kasztok, specek, szerepek, páncéltípusok, fajok, frakciók és
   a választható faj–kaszt kombinációk
 - `tests/` – automatikus tesztek

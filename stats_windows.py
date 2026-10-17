@@ -24,6 +24,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
+import gearing
 import raiderio_ilvl_stats as mplus
 import wcl_raid_ilvl_stats as wcl
 
@@ -233,7 +234,10 @@ class StatsWindow(tk.Toplevel):
         self.start_button = ttk.Button(buttons, text="Indítás", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Leállítás", command=self.stop, state="disabled")
         self.csv_button = ttk.Button(buttons, text="CSV mentése…", command=self.save_csv, state="disabled")
-        for button in (self.start_button, self.stop_button, self.csv_button):
+        self.transfer_button = ttk.Button(
+            buttons, text="Átvitel a gear ajánlóba", command=self.transfer, state="disabled"
+        )
+        for button in (self.start_button, self.stop_button, self.csv_button, self.transfer_button):
             button.pack(side="left", padx=(0, 6))
         self.status_label = ttk.Label(buttons, textvariable=self.status_var, wraplength=px(620), justify="left")
         self.status_label.pack(side="left", padx=(6, 0))
@@ -375,10 +379,24 @@ class StatsWindow(tk.Toplevel):
     def _set_buttons(self) -> None:
         self.start_button.state(["disabled" if self._running else "!disabled"])
         self.stop_button.state(["!disabled" if self._running else "disabled"])
-        self.csv_button.state(["!disabled" if not self._running and self.has_results() else "disabled"])
+        ready = not self._running and self.has_results()
+        for button in (self.csv_button, self.transfer_button):
+            button.state(["!disabled" if ready else "disabled"])
 
     def has_results(self) -> bool:
         raise NotImplementedError
+
+    def _gear_targets(self) -> tuple[dict, str]:
+        """Az eredményből a gear ajánló sorainak új belépési ilvl-je és a sorok névkezdete."""
+        raise NotImplementedError
+
+    def transfer(self) -> None:
+        """Az eredmény (medián itemlevelek) átvitele a gear ajánló belépési ilvl-jeibe."""
+        targets, prefix = self._gear_targets()
+        changed = self.app.transfer_gear_targets(targets, [prefix], self.TITLE, parent=self)
+        if changed:
+            self.status_var.set(f"Átvive a gear ajánlóba: {changed} belépési ilvl.")
+            self.status_label.configure(style="Ok.TLabel")
 
     def save_csv(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -689,6 +707,9 @@ class MythicStatsWindow(StatsWindow):
     def _write_csv(self, path: str) -> None:
         mplus.write_csv(path, self.result_rows)
 
+    def _gear_targets(self) -> tuple[dict, str]:
+        return gearing.mplus_targets(self.result_rows), gearing.MPLUS_PREFIX
+
 
 class RaidStatsWindow(StatsWindow):
     """Az aktuális raid bossainak kill-jei itemlevel szerint, a Warcraft Logs adataiból."""
@@ -900,3 +921,6 @@ class RaidStatsWindow(StatsWindow):
 
     def _write_csv(self, path: str) -> None:
         wcl.write_csv(path, self.result["sections"])
+
+    def _gear_targets(self) -> tuple[dict, str]:
+        return gearing.raid_targets(self.result["sections"]), gearing.RAID_PREFIX

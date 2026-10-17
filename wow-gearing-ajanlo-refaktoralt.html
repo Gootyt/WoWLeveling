@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>WoW Gearing Ajánló (12.2)</title>
+    <style>
+        /* ============================================================
+           Színek – egy helyen, a lap többi része csak ezekre hivatkozik
+           ============================================================ */
+        :root {
+            --bg-base:      #1a1a2e;   /* lap háttere, gombok, beviteli mező */
+            --bg-panel:     #16213e;   /* központi doboz */
+            --bg-raised:    #0f3460;   /* ilvl-sáv, táblázatfejléc */
+            --line:         #2a3a5a;
+            --line-control: #555;
+            --text:         #e0e0e0;
+            --text-strong:  #fff;
+            --text-soft:    #b8c4d4;
+            --text-muted:   #95a5a6;
+            --accent:       #fca311;
+            --accent-soft:  rgba(252, 163, 17, 0.12);
+            --accent-text:  #e0b25c;
+            --danger:       #e94560;
+        }
+
+        /* Állapotszínek – a táblázat sorai és a jelmagyarázat is ezeket használja */
+        [data-status="recommended"] { --status-color: #2ecc71; --status-bg: rgba(46, 204, 113, 0.2); }
+        [data-status="vault"]       { --status-color: #f1c40f; --status-bg: rgba(241, 196, 15, 0.15); }
+        [data-status="undergeared"] { --status-color: #e74c3c; --status-bg: rgba(231, 76, 60, 0.15); --status-opacity: 0.75; }
+        [data-status="outgrown"]    { --status-color: #95a5a6; --status-opacity: 0.45; }
+
+        /* ---- Alap elrendezés ---- */
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text);
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px;
+            background-color: var(--bg-panel);
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);
+        }
+        h1 {
+            margin-bottom: 30px;
+            text-align: center;
+            color: var(--accent);
+        }
+
+        /* ---- Középre zárt, törő sávok (ilvl, szűrők, kapcsoló) ---- */
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .toolbar--tight {
+            gap: 8px;
+        }
+
+        .ilvl-bar {
+            gap: 15px;
+            padding: 20px;
+            background-color: var(--bg-raised);
+            border-radius: 8px;
+        }
+        .ilvl-bar label {
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .ilvl-bar input {
+            width: 100px;
+            padding: 10px;
+            font-size: 1.2rem;
+            text-align: center;
+            color: var(--text-strong);
+            background-color: var(--bg-base);
+            border: 2px solid var(--danger);
+            border-radius: 6px;
+        }
+        .ilvl-bar input:focus-visible {
+            outline: 2px solid transparent;   /* nagy kontrasztú módban ebből lesz látható fókuszkeret */
+            box-shadow: 0 0 10px var(--danger);
+        }
+        .hint {
+            min-height: 1.2em;
+            margin-bottom: 12px;
+            text-align: center;
+            font-size: 0.9rem;
+            color: var(--danger);
+        }
+
+        /* ---- Gombok és pipás chipek közös alapja ---- */
+        .btn,
+        .chip {
+            border: 2px solid var(--line-control);
+            background-color: var(--bg-base);
+            color: var(--text);
+            cursor: pointer;
+            transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+        }
+
+        .btn {
+            padding: 10px 18px;
+            font-size: 1rem;
+            border-radius: 6px;
+        }
+        .btn--pill {
+            padding: 8px 14px;
+            font-size: 0.9rem;
+            border-radius: 999px;
+        }
+        .btn:hover,
+        .btn:focus-visible {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* A chip kinézete közvetlenül a benne lévő checkboxot követi (:has), JS nélkül */
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            color: var(--text-soft);
+            user-select: none;
+        }
+        .chip:hover {
+            border-color: var(--accent);
+        }
+        .chip:has(:checked) {
+            border-color: var(--accent);
+            color: var(--accent);
+            background-color: var(--accent-soft);
+        }
+        .chip:has(:focus-visible) {
+            box-shadow: 0 0 8px var(--accent);
+        }
+        .chip input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .chip .count {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .chip:has(:checked) .count {
+            color: var(--accent-text);
+        }
+
+        /* ---- Jelmagyarázat: ugyanazok a színek, mint a soroknál ---- */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            padding: 0;
+            list-style: none;
+            font-size: 0.9rem;
+        }
+        .legend li {
+            padding: 8px 12px;
+            border: 1px solid var(--status-color);
+            border-radius: 4px;
+            background-color: var(--status-bg, transparent);
+        }
+        .legend li[data-status="outgrown"] {
+            opacity: 0.6;   /* halvány, mint a sor, de olvasható marad */
+        }
+
+        /* ---- Táblázat ---- */
+        .table-wrap {
+            max-height: 70vh;
+            overflow: auto;
+            border-radius: 8px;
+        }
+        table {
+            width: 100%;
+            min-width: 640px;
+            border-collapse: collapse;
+        }
+        th,
+        td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+        }
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background-color: var(--bg-raised);
+            color: var(--text-strong);
+        }
+        td + td {
+            font-size: 0.95rem;   /* a név kivételével minden oszlop */
+        }
+        tr[data-status] {
+            background-color: var(--status-bg, transparent);
+            opacity: var(--status-opacity, 1);
+        }
+        .status-cell {
+            font-weight: bold;
+        }
+        tr[data-status] .status-cell {
+            color: var(--status-color);
+        }
+        .delta {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: normal;
+            color: var(--text-soft);
+        }
+        .no-match td {
+            padding: 24px 15px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: -1px;
+            padding: 0;
+            border: 0;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+
+        @media (max-width: 600px) {
+            body       { padding: 10px; }
+            .container { padding: 16px; }
+        }
+    </style>
+</head>
+<body>
+
+<main class="container">
+    <h1>⚔️ Teljes Gearing Ajánló</h1>
+
+    <div class="toolbar ilvl-bar">
+        <label for="ilvlInput">Jelenlegi Item Level (ilvl):</label>
+        <input type="number" id="ilvlInput" min="1" max="500" step="0.01"
+               inputmode="decimal" placeholder="Pl: 285.00" aria-describedby="ilvlHint">
+        <button type="button" class="btn" id="resetBtn" title="Mező ürítése">↺ Nullázás</button>
+    </div>
+    <p class="hint" id="ilvlHint" role="status"></p>
+
+    <!-- A chipek a GROUPS adatból generálódnak -->
+    <div class="toolbar" id="groupFilters" role="group" aria-label="Tartalomtípusok szűrése"></div>
+
+    <div class="toolbar toolbar--tight">
+        <button type="button" class="btn btn--pill" id="selectAllBtn">Mindet mutat</button>
+        <button type="button" class="btn btn--pill" id="selectNoneBtn">Pipák törlése</button>
+    </div>
+
+    <div class="toolbar">
+        <label class="chip">
+            <input type="checkbox" id="showAllTiersInput">
+            <span>Minden Delve/Prey tier mutatása</span>
+        </label>
+    </div>
+
+    <!-- A jelmagyarázat a STATUS adatból generálódik -->
+    <ul class="legend" id="legend" aria-label="Jelmagyarázat"></ul>
+
+    <div class="table-wrap">
+        <table>
+            <caption class="visually-hidden">Tartalomtípusok belépési, drop és Great Vault item level értékei</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Tartalom Típusa</th>
+                    <th scope="col">Belépési ilvl</th>
+                    <th scope="col">Drop ilvl</th>
+                    <th scope="col">Great Vault</th>
+                    <th scope="col">Ajánlás</th>
+                </tr>
+            </thead>
+            <tbody id="lootTableBody"></tbody>
+        </table>
+    </div>
+    <p class="visually-hidden" id="resultSummary" role="status"></p>
+</main>
+
+<script type="module">
+    // ============================================================
+    // ADATOK
+    // ------------------------------------------------------------
+    // A GROUPS sorrendje = a szűrő-chipek és a táblázat alapsorrendje.
+    //   tiered   : true → ilvl megadásakor csak a legjobb elérhető tier
+    //              látszik, ezért a sorokat tier-sorrendben kell felvenni
+    //
+    // Egy sor mezői:
+    //   entryMin : minimális belépési ilvl (0 = nincs korlát)
+    //   dropMax  : a legmagasabb ilvl, amit dropból kaphatsz
+    //   vaultMax : a legmagasabb ilvl, amit Vaultból kaphatsz
+    //              (null = nincs érdemi Vault-plafon, a dropMax marad)
+    // ============================================================
+    const GROUPS = [
+        {
+            id: "dungeon", label: "Dungeon",
+            rows: [
+                { name: "Normal Dungeon",        entryMin: 0,   dropMax: 214, vaultMax: null },
+                { name: "Heroic Dungeon",        entryMin: 256, dropMax: 276, vaultMax: 292 },
+                { name: "Mythic 0 (Napi Reset)", entryMin: 280, dropMax: 292, vaultMax: 302 },
+            ],
+        },
+        {
+            id: "mplus", label: "Mythic+",
+            rows: [
+                { name: "Mythic+ 2",  entryMin: 288,    dropMax: 295, vaultMax: 305 },
+                { name: "Mythic+ 3",  entryMin: 290,    dropMax: 295, vaultMax: 305 },
+                { name: "Mythic+ 4",  entryMin: 291.5,    dropMax: 298, vaultMax: 308 },
+                { name: "Mythic+ 5",  entryMin: 293,    dropMax: 302, vaultMax: 308 },
+                { name: "Mythic+ 6",  entryMin: 297,    dropMax: 305, vaultMax: 311 },
+                { name: "Mythic+ 7",  entryMin: 299,    dropMax: 305, vaultMax: 315 },
+                { name: "Mythic+ 8",  entryMin: 303,    dropMax: 308, vaultMax: 315 },
+                { name: "Mythic+ 9",  entryMin: 303,    dropMax: 308, vaultMax: 315 },
+                { name: "Mythic+ 10", entryMin: 311.6,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 11", entryMin: 312,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 12", entryMin: 318,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 13", entryMin: 318,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 14", entryMin: 320,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 15", entryMin: 321,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 16", entryMin: 322,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 17", entryMin: 323.2,    dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 18", entryMin: 324.3, dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 19", entryMin: 325.3, dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 20", entryMin: 326.6, dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 21", entryMin: 327.8, dropMax: 311, vaultMax: 318 },
+                { name: "Mythic+ 22", entryMin: 329.2, dropMax: 311, vaultMax: 318 },
+            ],
+        },
+        {
+            id: "delve", label: "Delve", tiered: true,
+            rows: [
+                { name: "Bountiful Delve Tier 1",  entryMin: 0,   dropMax: 266, vaultMax: 279 },
+                { name: "Bountiful Delve Tier 2",  entryMin: 187, dropMax: 269, vaultMax: 282 },
+                { name: "Bountiful Delve Tier 3",  entryMin: 200, dropMax: 272, vaultMax: 285 },
+                { name: "Bountiful Delve Tier 4",  entryMin: 259, dropMax: 276, vaultMax: 289 },
+                { name: "Bountiful Delve Tier 5",  entryMin: 268, dropMax: 279, vaultMax: 292 },
+                { name: "Bountiful Delve Tier 6",  entryMin: 275, dropMax: 282, vaultMax: 298 },
+                { name: "Bountiful Delve Tier 7",  entryMin: 281, dropMax: 292, vaultMax: 302 },
+                { name: "Bountiful Delve Tier 8",  entryMin: 290, dropMax: 295, vaultMax: 305 },
+                { name: "Bountiful Delve Tier 9",  entryMin: 296, dropMax: 295, vaultMax: 305 },
+                { name: "Bountiful Delve Tier 10", entryMin: 303, dropMax: 295, vaultMax: 305 },
+                { name: "Bountiful Delve Tier 11", entryMin: 309, dropMax: 295, vaultMax: 305 },
+            ],
+        },
+        {
+            id: "prey", label: "Prey", tiered: true,
+            rows: [
+                { name: "Prey - Normal",            entryMin: 1, dropMax: 266, vaultMax: 279 },
+                { name: "Prey - Hard",              entryMin: 262, dropMax: 279, vaultMax: 292 },
+                { name: "Prey - Nightmare (Szóló)", entryMin: 280, dropMax: 292, vaultMax: 305 },
+            ],
+        },
+        {
+            id: "raid", label: "Raid",
+            rows: [
+                { name: "Raid - LFR (Venomous Abyss)",           entryMin: 273, dropMax: 289, vaultMax: 292 },
+
+                { name: "Raid - Nek'zali the Soulcoiler Normal", entryMin: 306.8, dropMax: 292, vaultMax: 305 },
+                { name: "Raid - The Lost Explorers Normal",      entryMin: 305.6, dropMax: 295, vaultMax: 305 },
+                { name: "Raid - Entombed Sentinels Normal",      entryMin: 305.5, dropMax: 295, vaultMax: 305 },
+                { name: "Raid - Vashnik the Malignant Normal",   entryMin: 305.6, dropMax: 298, vaultMax: 305 },
+                { name: "Raid - Sszorak Normal",                 entryMin: 306, dropMax: 298, vaultMax: 305 },
+                { name: "Raid - The Twin Fangs Normal",          entryMin: 306.5, dropMax: 302, vaultMax: 305 },
+                { name: "Raid - The Coiled Altar Normal",        entryMin: 310.3, dropMax: 302, vaultMax: 305 },
+                { name: "Raid - Ula'tek Normal",                 entryMin: 311.2, dropMax: 302, vaultMax: 305 },
+                { name: "Raid - Nymrissa Wavecaller Normal",     entryMin: 303.9, dropMax: 292, vaultMax: 305 },
+                { name: "Raid - Kith'ix Normal",                 entryMin: 350, dropMax: 298, vaultMax: 305 },
+
+                { name: "Raid - Nek'zali the Soulcoiler Heroic", entryMin: 319.4, dropMax: 305, vaultMax: 318 },
+                { name: "Raid - The Lost Explorers Heroic",      entryMin: 319.4, dropMax: 308, vaultMax: 318 },
+                { name: "Raid - Entombed Sentinels Heroic",      entryMin: 319.3, dropMax: 308, vaultMax: 318 },
+                { name: "Raid - Vashnik the Malignant Heroic",   entryMin: 319.3, dropMax: 311, vaultMax: 318 },
+                { name: "Raid - Sszorak Heroic",                 entryMin: 319.8, dropMax: 311, vaultMax: 318 },
+                { name: "Raid - The Twin Fangs Heroic",          entryMin: 320.2, dropMax: 311, vaultMax: 318 },
+                { name: "Raid - The Coiled Altar Heroic",        entryMin: 321.2, dropMax: 315, vaultMax: 318 },
+                { name: "Raid - Ula'tek Heroic",                 entryMin: 321.9, dropMax: 315, vaultMax: 318 },
+                { name: "Raid - Nymrissa Wavecaller Heroic",     entryMin: 317.7, dropMax: 305, vaultMax: 318 },
+                { name: "Raid - Kith'ix Heroic",                 entryMin: 350, dropMax: 302, vaultMax: 318 },
+
+                { name: "Raid - Nek'zali the Soulcoiler Mythic", entryMin: 323.9, dropMax: 318, vaultMax: 335 },
+                { name: "Raid - The Lost Explorers Mythic",      entryMin: 324.1, dropMax: 321, vaultMax: 335 },
+                { name: "Raid - Entombed Sentinels Mythic",      entryMin: 324.9, dropMax: 321, vaultMax: 335 },
+                { name: "Raid - Vashnik the Malignant Mythic",   entryMin: 325.1, dropMax: 324, vaultMax: 335 },
+                { name: "Raid - Sszorak Mythic",                 entryMin: 326.1, dropMax: 324, vaultMax: 335 },
+                { name: "Raid - The Twin Fangs Mythic",          entryMin: 326.6, dropMax: 324, vaultMax: 335 },
+                { name: "Raid - The Coiled Altar Mythic",        entryMin: 328.5, dropMax: 344, vaultMax: 344 },
+                { name: "Raid - Ula'tek Mythic",                 entryMin: 330.3, dropMax: 344, vaultMax: 344 },
+                { name: "Raid - Nymrissa Wavecaller Mythic",     entryMin: 324.6, dropMax: 318, vaultMax: 335 },
+                { name: "Raid - Kith'ix Mythic",                 entryMin: 350, dropMax: 344, vaultMax: 305 },
+            ],
+        },
+        {
+            id: "world", label: "Világ / Daily",
+            rows: [
+                { name: "Daily quest reward", entryMin: 0, dropMax: 276, vaultMax: null },
+            ],
+        },
+    ];
+
+    // ============================================================
+    // ÁLLAPOTOK – a táblázat és a jelmagyarázat is ebből épül.
+    // A priority a rendezési sorrend és a jelmagyarázat számozása.
+    // (A színek a CSS-ben vannak, [data-status="..."] alatt.)
+    // ============================================================
+    const STATUS = {
+        recommended: { priority: 1, label: "Irány farmolni!",   legend: "Ideális! (Közvetlen loot fejlesztés)" },
+        vault:       { priority: 2, label: "Csak Vaultért",     legend: "Vault miatt éri meg (a drop már nem javít)" },
+        undergeared: { priority: 3, label: "Túl alacsony ilvl", legend: "Túl alacsony ilvl (Nehéz lehet)" },
+        outgrown:    { priority: 4, label: "Túlfejlett vagy",   legend: "Kimaxoltad (Nincs értelme ide menni)" }
+    };
+
+    // ============================================================
+    // LOGIKA – tiszta függvények, nem nyúlnak a DOM-hoz
+    // ============================================================
+    const vaultCeilingOf = (row) => row.vaultMax ?? row.dropMax;
+
+    // Legfeljebb 2 tizedes, így nem jelenik meg lebegőpontos zaj (pl. 6.6299999999999955)
+    const formatIlvl = (value) => String(Math.round(value * 100) / 100);
+
+    // Egy sor értékelése adott ilvl mellett.
+    // A gain a kategórián belüli rendezési súly (nagyobb = előrébb):
+    //   recommended : mennyit ad még a drop
+    //   vault       : mennyit ad még a Vault-plafon
+    //   undergeared : negatív hiány → a legközelebbi cél kerül előre
+    //   outgrown    : mindig <= 0 → a legmagasabb szintű tartalom elöl
+    function evaluate(ilvl, row) {
+        const ceiling = vaultCeilingOf(row);
+
+        if (ilvl < row.entryMin) {
+            const missing = row.entryMin - ilvl;
+            return { status: "undergeared", gain: -missing, note: `${formatIlvl(missing)} ilvl hiányzik` };
+        }
+        if (ilvl < row.dropMax) {
+            const gain = row.dropMax - ilvl;
+            return { status: "recommended", gain, note: `dropból még +${formatIlvl(gain)} ilvl` };
+        }
+        if (ilvl < ceiling) {
+            const gain = ceiling - ilvl;
+            return { status: "vault", gain, note: `Vaultból még +${formatIlvl(gain)} ilvl` };
+        }
+        return { status: "outgrown", gain: ceiling - ilvl, note: "" };
+    }
+
+    // Tiered csoport legjobb elérhető tierje: az utolsó, aminek a belépési
+    // ilvl-jét már eléred; ha egyiket sem, akkor az első.
+    function bestReachableRow(group, ilvl) {
+        return group.rows.findLast(row => ilvl >= row.entryMin) ?? group.rows[0];
+    }
+
+    // A megjelenítendő sorok szűrve, értékelve és rendezve
+    function buildItems(ilvl, activeGroupIds, showAllTiers) {
+        const collapseTiers = ilvl !== null && !showAllTiers;
+
+        const rows = GROUPS
+            .filter(group => activeGroupIds.has(group.id))
+            .flatMap(group => collapseTiers && group.tiered ? [bestReachableRow(group, ilvl)] : group.rows);
+
+        if (ilvl === null) {
+            return rows.map(row => ({ row, status: null, note: "" }));   // nincs ilvl: adat-sorrend
+        }
+
+        return rows
+            .map(row => ({ row, ...evaluate(ilvl, row) }))
+            .sort((a, b) =>
+                STATUS[a.status].priority - STATUS[b.status].priority ||   // 1. státusz-kategória
+                b.gain - a.gain ||                                         // 2. kategórián belül a legnagyobb nyereség
+                vaultCeilingOf(b.row) - vaultCeilingOf(a.row)              // 3. azonos nyereségnél a magasabb Vault-plafon
+            );                                                             // teljes egyezésnél marad az adat-sorrend (stabil sort)
+    }
+
+    // ============================================================
+    // DOM
+    // ============================================================
+    const byId = (id) => document.getElementById(id);
+
+    const ilvlInput     = byId("ilvlInput");
+    const ilvlHint      = byId("ilvlHint");
+    const groupFilters  = byId("groupFilters");
+    const showAllTiers  = byId("showAllTiersInput");
+    const legend        = byId("legend");
+    const tableBody     = byId("lootTableBody");
+    const resultSummary = byId("resultSummary");
+
+    // Az érvényes tartomány egyetlen forrása az input min/max attribútuma
+    const MIN_ILVL = Number(ilvlInput.min);
+    const MAX_ILVL = Number(ilvlInput.max);
+    const RANGE_ERROR = `Adj meg egy ${MIN_ILVL.toFixed(2)} és ${MAX_ILVL.toFixed(2)} közötti item levelt.`;
+
+    // Apró segéd elemek építéséhez. A szöveg textContent-ként kerül be,
+    // így nem kell kézzel HTML-escape-elni.
+    function h(tag, { dataset, ...props } = {}, ...children) {
+        const el = Object.assign(document.createElement(tag), props);
+        if (dataset) Object.assign(el.dataset, dataset);
+        el.append(...children.filter(child => child != null));
+        return el;
+    }
+
+    // Üres mező → nincs ilvl; hibás vagy tartományon kívüli érték → hibaüzenet
+    function readIlvl() {
+        const value = ilvlInput.valueAsNumber;   // üres vagy hibás bevitelnél NaN
+        if (Number.isNaN(value)) {
+            return { ilvl: null, error: ilvlInput.validity.badInput ? RANGE_ERROR : "" };
+        }
+        if (value < MIN_ILVL || value > MAX_ILVL) {
+            return { ilvl: null, error: RANGE_ERROR };
+        }
+        return { ilvl: value, error: "" };
+    }
+
+    // A pipák állapota az egyetlen igazságforrás – nincs külön, kézzel szinkronizált Set
+    function readActiveGroupIds() {
+        const checked = groupFilters.querySelectorAll("input:checked");
+        return new Set(Array.from(checked, box => box.value));
+    }
+
+    function renderGroupFilters() {
+        groupFilters.replaceChildren(...GROUPS.map(group =>
+            h("label", { className: "chip" },
+                h("input", { type: "checkbox", value: group.id, checked: true }),
+                h("span", {}, group.label),
+                h("span", { className: "count" }, `(${group.rows.length})`)
+            )
+        ));
+    }
+
+    function renderLegend() {
+        const statuses = Object.entries(STATUS).sort(([, a], [, b]) => a.priority - b.priority);
+        legend.replaceChildren(...statuses.map(([key, status]) =>
+            h("li", { dataset: { status: key } }, `${status.priority}. ${status.legend}`)
+        ));
+    }
+
+    function renderRow({ row, status, note }) {
+        return h("tr", { dataset: status ? { status } : null },
+            h("td", {}, row.name),
+            h("td", {}, formatIlvl(Math.max(row.entryMin, MIN_ILVL))),   // 0 (nincs korlát) → a legkisebb ilvl
+            h("td", {}, formatIlvl(row.dropMax)),
+            h("td", {}, row.vaultMax === null ? "Nincs" : formatIlvl(row.vaultMax)),
+            h("td", { className: "status-cell" },
+                status ? STATUS[status].label : "-",
+                note ? h("span", { className: "delta" }, note) : null
+            )
+        );
+    }
+
+    function render() {
+        const { ilvl, error } = readIlvl();
+        const activeGroupIds = readActiveGroupIds();
+        const items = buildItems(ilvl, activeGroupIds, showAllTiers.checked);
+
+        ilvlHint.textContent = error;
+
+        if (items.length === 0) {
+            const message = activeGroupIds.size === 0
+                ? "Nincs bepipálva egyetlen tartalomtípus sem. Válassz legalább egyet a szűrők közül."
+                : "Erre a szűrésre nincs találat.";
+            tableBody.replaceChildren(h("tr", { className: "no-match" }, h("td", { colSpan: 5 }, message)));
+            resultSummary.textContent = message;
+            return;
+        }
+
+        tableBody.replaceChildren(...items.map(renderRow));
+
+        // Rövid összegzés képernyőolvasóknak (maga a táblázat nem "élő" régió,
+        // különben minden billentyűleütésnél felolvasná az összes sort)
+        const recommended = items.filter(item => item.status === "recommended").length;
+        resultSummary.textContent = ilvl === null
+            ? `${items.length} sor látható.`
+            : `${items.length} sor látható, ebből ${recommended} ajánlott.`;
+    }
+
+    // ============================================================
+    // ESEMÉNYEK
+    // ============================================================
+    function debounce(fn, delay = 150) {
+        let timer;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), delay);
+        };
+    }
+
+    function setAllGroups(checked) {
+        groupFilters.querySelectorAll("input").forEach(box => { box.checked = checked; });
+        render();
+    }
+
+    // Gépelés közben csak újraszámolunk. A mezőt csak véglegesítéskor
+    // (Enter, fókuszvesztés, léptető nyíl) formázzuk 2 tizedesre, különben
+    // a félkész számot írnánk át (pl. "28" → "28.00", és a "285"-ből "28.005" lenne).
+    ilvlInput.addEventListener("input", debounce(render));
+    ilvlInput.addEventListener("change", () => {
+        const { ilvl } = readIlvl();
+        if (ilvl !== null) ilvlInput.value = ilvl.toFixed(2);
+        render();
+    });
+
+    groupFilters.addEventListener("change", render);
+    showAllTiers.addEventListener("change", render);
+
+    byId("selectAllBtn").addEventListener("click", () => setAllGroups(true));
+    byId("selectNoneBtn").addEventListener("click", () => setAllGroups(false));
+
+    byId("resetBtn").addEventListener("click", () => {
+        ilvlInput.value = "";
+        render();
+        ilvlInput.focus();
+    });
+
+    renderGroupFilters();
+    renderLegend();
+    render();
+</script>
+
+</body>
+</html>

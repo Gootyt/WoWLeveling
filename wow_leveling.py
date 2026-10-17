@@ -65,6 +65,8 @@ from leveling import (
     save_data,
     sort_plans,
 )
+import gear_advisor
+import gearing
 import murlok
 import raiderio
 from recommend import recommend_combo
@@ -701,7 +703,9 @@ class CharacterListWindow(tk.Toplevel):
         delete_button = ttk.Button(action_row, text="Törlés", command=self.delete_selected)
         for button in (up_button, down_button, self.murlok_order_button, edit_button, delete_button):
             button.pack(side="left", padx=(0, 6))
-        ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel").pack(side="left", padx=(6, 0))
+        self.order_hint_label = ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel")
+        self.order_hint_label.pack(side="left", padx=(6, 0))
+        self.action_row = action_row
         self._selection_widgets = (self.value_spin, set_button, plus_button, edit_button, delete_button)
         self._order_widgets = (up_button, down_button)  # csak az eredeti sorrendben használhatók
 
@@ -1099,6 +1103,11 @@ class GearWindow(CharacterListWindow):
 
     def _build(self) -> None:
         super()._build()
+        ttk.Button(
+            self.action_row,
+            text="Gear ajánló…",
+            command=lambda: self.app.open_gear_advisor(self._selected_character()),
+        ).pack(side="left", padx=(0, 6), before=self.order_hint_label)
         self.info_var = tk.StringVar()  # a terv összefoglalója a táblázat fölött
         self.info_label = ttk.Label(self.table_frame.master, textvariable=self.info_var)
         self.info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
@@ -1233,9 +1242,10 @@ class App:
         self.list_window: CharacterListWindow | None = None
         self.gear_window: GearWindow | None = None
         self.mythic_window: MythicPlusWindow | None = None
-        # A statisztikai ablakok (lásd stats_windows.py).
+        # A statisztikai ablakok (lásd stats_windows.py) és a gear ajánló (gear_advisor.py).
         self.mplus_stats_window: stats_windows.MythicStatsWindow | None = None
         self.raid_stats_window: stats_windows.RaidStatsWindow | None = None
+        self.gear_advisor_window: gear_advisor.GearAdvisorWindow | None = None
         self.list_sort = LIST_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
         self.mythic_sort = MYTHIC_ORDER  # a Mythic+ ablak rendezése
@@ -1499,6 +1509,7 @@ class App:
         stats_buttons = ttk.Frame(footer)  # a beépített statisztikai programok
         stats_buttons.pack(side="right", anchor="n", padx=(0, 12))
         for text, command in (
+            ("Gear ajánló", self.open_gear_advisor),
             ("M+ ilvl statisztika", self.open_mplus_stats),
             ("Raid ilvl statisztika", self.open_raid_stats),
         ):
@@ -1716,6 +1727,57 @@ class App:
         self.refresh_spec_scores()  # ha a tárolt adat már régebbi 8 óránál
         if self.data.raiderio_is_stale():  # ha a legutóbbi lekérés régebbi fél óránál
             self.refresh_raiderio(automatic=True)
+
+    def gear_groups(self) -> tuple[gearing.ContentGroup, ...]:
+        """A gear ajánló tartalmai, a statisztikákból frissített belépési ilvl-ekkel."""
+        return gearing.with_entry_mins(self.data.gear_entry_min)
+
+    def open_gear_advisor(self, character: Character | None = None) -> None:
+        """Megnyitja a gear ajánlót (ha meg van adva, a karakter itemlevelével); ha már nyitva
+        van, előtérbe hozza."""
+        window = self.gear_advisor_window
+        if window is not None and window.winfo_exists():
+            window.select_character(character)
+            window.deiconify()
+            window.lift()
+            window.focus_set()
+            return
+        self.gear_advisor_window = gear_advisor.GearAdvisorWindow(self, character)
+
+    def transfer_gear_targets(self, targets: dict, prefixes, source: str, parent: tk.Misc) -> int:
+        """Statisztikai adatok átvitele a gear ajánlóba (mint az update.py): a Mythic+, illetve a
+        raid sorok belépési ilvl-je a medián lesz. Előtte megmutatja, mi változik, és rákérdez.
+        Visszaadja az átírt sorok számát."""
+        title = "Átvitel a gear ajánlóba"
+        plan = gearing.plan_transfer(targets, self.gear_groups(), prefixes)
+        details = [f"Már naprakész: {len(plan.unchanged)} sor."]
+        if plan.no_data:
+            names = ", ".join(f"{name} (marad: {gearing.format_ilvl(old)})" for name, old in plan.no_data)
+            details.append(f"Nincs hozzá adat, változatlan ({len(plan.no_data)}): {names}")
+        if plan.orphans:
+            details.append(f"Ezekhez nincs sor a gear ajánlóban ({len(plan.orphans)}): {', '.join(plan.orphans)}")
+        if not plan.changed:
+            message = f"A gear ajánló belépési ilvl-jei már megegyeznek a(z) {source} mediánjával."
+            messagebox.showinfo(title, message, detail="\n\n".join(details), parent=parent)
+            return 0
+        shown = 25
+        lines = [
+            f"• {name}: {gearing.format_ilvl(old)} → {gearing.format_ilvl(new)}" for name, old, new in plan.changed
+        ]
+        if len(lines) > shown:
+            lines = lines[:shown] + [f"… és még {len(lines) - shown} sor"]
+        question = (
+            f"A gear ajánló belépési ilvl-jei a(z) {source} mediánja szerint így változnak:\n\n"
+            + "\n".join(lines)
+            + "\n\nÁtírjam?"
+        )
+        if not messagebox.askyesno(title, question, detail="\n\n".join(details), parent=parent):
+            return 0
+        self.data.gear_entry_min.update(plan.values())
+        self.save()
+        if self.gear_advisor_window is not None and self.gear_advisor_window.winfo_exists():
+            self.gear_advisor_window.render()
+        return len(plan.changed)
 
     def open_mplus_stats(self) -> None:
         self._open_stats_window("MythicStatsWindow")
@@ -2017,6 +2079,8 @@ class App:
             self.summary_var.set("Még nincs karakter a listán.")
         for window in self.open_windows():
             window.refresh(select=select)
+        if self.gear_advisor_window is not None and self.gear_advisor_window.winfo_exists():
+            self.gear_advisor_window.refresh_characters()  # pl. megváltozott egy karakter itemlevele
 
     def _watch_date(self) -> None:
         """Éjfél után frissíti a napi célokat, ha a program végig nyitva marad."""

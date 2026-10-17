@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -1057,8 +1058,10 @@ class LevelingData:
     look_ahead: bool = True
     # A legutóbbi olyan Raider.io-lekérés ideje (helyi idő), amely minden karakterre kiterjedt.
     raiderio_fetched_at: datetime | None = None
-    # A statisztikai ablakok (M+ és raid ilvl statisztika) mezőinek utolsó értékei, ablakonként.
+    # Az ablakok (M+ és raid ilvl statisztika, gear ajánló) mezőinek utolsó értékei, ablakonként.
     stats_options: dict = field(default_factory=dict)
+    # A gear ajánló statisztikákból frissített belépési ilvl-jei: tartalom neve → ilvl (lásd gearing.py).
+    gear_entry_min: dict = field(default_factory=dict)
 
     def raiderio_is_stale(self, now: datetime | None = None) -> bool:
         """Igaz, ha még nem volt Raider.io-lekérés, vagy a legutóbbi régebbi fél óránál."""
@@ -1076,6 +1079,7 @@ class LevelingData:
             "view": {"look_ahead": self.look_ahead},
             "raiderio": {"fetched_at": None if fetched_at is None else fetched_at.isoformat(timespec="seconds")},
             "stats_options": self.stats_options,
+            "gear_entry_min": self.gear_entry_min,
         }
 
     @classmethod
@@ -1092,6 +1096,12 @@ class LevelingData:
         except (KeyError, TypeError, ValueError):
             raiderio_fetched_at = None  # még nem volt lekérés (vagy sérült az adat)
         stats_options = data.get("stats_options")
+        gear_entry_min = data.get("gear_entry_min")
+        gear_entry_min = {
+            str(name): float(value)
+            for name, value in (gear_entry_min.items() if isinstance(gear_entry_min, dict) else ())
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+        }
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
@@ -1099,6 +1109,7 @@ class LevelingData:
             look_ahead=look_ahead if isinstance(look_ahead, bool) else True,
             raiderio_fetched_at=raiderio_fetched_at,
             stats_options=stats_options if isinstance(stats_options, dict) else {},
+            gear_entry_min=gear_entry_min,
         )
 
 

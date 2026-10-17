@@ -1010,6 +1010,132 @@ class GuiTests(unittest.TestCase):
             self.wait_until_finished(window)
         self.assertEqual(stats.load_api_keys(self.path.parent), {})
 
+    def test_gear_advisor_window(self):
+        advisor = self.gui.gear_advisor
+        self.add("Thrall", item_level="305,25")
+        self.add("Arthas")  # itemlevel nélkül nem választható
+        self.find_button(self.root, "Gear ajánló").invoke()
+        window = self.app.gear_advisor_window
+        self.assertIsInstance(window, advisor.GearAdvisorWindow)
+        self.assertEqual(list(window.character_box["values"]), [advisor.MANUAL, "Thrall (305,25)"])
+        self.assertEqual(window.summary_var.get(), "70 sor látható.")  # itemlevel nélkül minden sor
+        window.character_box.current(1)
+        window._character_chosen()
+        self.assertEqual(window.ilvl_var.get(), "305,25")
+        self.assertEqual(
+            window.rows()[0], ("Mythic+ 8", "303", "308", "315", "Irány farmolni!", "dropból még +2,75 ilvl")
+        )
+        self.assertEqual(window.tree.item(window.tree.get_children()[0], "tags"), ("recommended",))
+        self.assertEqual(window.summary_var.get(), "58 sor látható, ebből 2 ajánlott.")
+
+        # Kézzel átírva már nem a karakteré; hibás értéknél figyelmeztet, véglegesítéskor két tizedesre formáz.
+        window.ilvl_var.set("abc")
+        window.render()
+        self.assertEqual(window.character_var.get(), advisor.MANUAL)
+        self.assertEqual(window.error_var.get(), "Adj meg egy 1,00 és 500,00 közötti item levelt.")
+        window.ilvl_var.set("320.5")
+        window._format_ilvl()
+        self.assertEqual((window.ilvl_var.get(), window.error_var.get()), ("320,50", ""))
+
+        window.set_all_groups(False)
+        self.assertIn("Nincs bepipálva egyetlen tartalomtípus sem", window.summary_var.get())
+        window.group_vars["delve"].set(True)
+        window.render()
+        self.assertEqual(window.rows()[0][0], "Bountiful Delve Tier 11")  # csak a legjobb elérhető tier
+        window.show_all_var.set(True)
+        window.render()
+        self.assertEqual(len(window.rows()), 11)
+
+        # A Gear ablakból a kijelölt karakterrel nyílik; az itemlevele változását is követi.
+        thrall = self.app.data.characters[0]
+        self.app.open_gear()
+        self.select_in(self.app.gear_window, thrall)
+        self.find_button(self.app.gear_window, "Gear ajánló…").invoke()
+        self.assertIs(self.app.gear_advisor_window, window)
+        self.assertEqual(window.ilvl_var.get(), "305,25")
+        thrall.item_level = D("310.00")
+        self.app.data_changed()
+        self.assertEqual((window.ilvl_var.get(), window.character_var.get()), ("310,00", "Thrall (310,00)"))
+
+        window.close()
+        self.assertIsNone(self.app.gear_advisor_window)
+        self.assertEqual(load_data(self.path).stats_options["gear"], {"groups": ["delve"], "show_all": True})
+        self.app.open_gear_advisor()  # a szűrők megmaradnak
+        window = self.app.gear_advisor_window
+        self.assertEqual([gid for gid, var in window.group_vars.items() if var.get()], ["delve"])
+
+    def test_gear_advisor_data_transfer(self):
+        advisor = self.gui.gear_advisor
+        folder = self.path.parent
+        live = folder / "live.csv"
+        live.write_text(
+            "mythic_level,runs,players,avg_item_level,median_item_level,p25_item_level,min_item_level,max_item_level\n"
+            "4,3571,17222,290.8,291.4,284.0,250.0,344.0\n",
+            encoding="utf-8",
+        )
+        self.app.open_gear_advisor()
+        window = self.app.gear_advisor_window
+        with mock.patch.object(advisor.filedialog, "askopenfilenames", return_value=(str(live),)), mock.patch.object(
+            self.gui.messagebox, "askyesno", return_value=True
+        ) as ask:
+            window.import_csv()
+        self.assertIn("• Mythic+ 4: 291,5 → 291,4", ask.call_args.args[1])
+        self.assertEqual(load_data(self.path).gear_entry_min, {"Mythic+ 4": 291.4})
+        self.assertEqual(window.source_var.get(), "Belépési ilvl-ek: 1 sor a statisztikákból frissítve, a többi az alapérték.")
+        with mock.patch.object(advisor.filedialog, "askopenfilenames", return_value=(str(live),)), mock.patch.object(
+            self.gui.messagebox, "showinfo"
+        ) as info:
+            window.import_csv()  # ugyanaz újra: már naprakész
+        self.assertIn("már megegyeznek", info.call_args.args[1])
+
+        # A Mythic+ statisztika eredményéből (a mediánokból)
+        self.app.open_mplus_stats()
+        mythic = self.app.mplus_stats_window
+        self.assertIn("disabled", mythic.transfer_button.state())  # eredmény nélkül nem használható
+        mythic._show_rows([(10, 5, 25, 309.5, 309.0, 303.0, 250.0, 348.0)])
+        mythic._set_buttons()
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            mythic.transfer_button.invoke()
+        self.assertEqual(self.app.data.gear_entry_min["Mythic+ 10"], 309.0)
+        self.assertEqual(mythic.status_var.get(), "Átvive a gear ajánlóba: 1 belépési ilvl.")
+
+        # A raid statisztika eredményéből (a „raid átlag / kill” mediánjai, az „Összes boss” nélkül)
+        self.app.open_raid_stats()
+        raid = self.app.raid_stats_window
+        stats_row = {"mean": 318.0, "median": 320.04, "p25": 317.0, "min": 250.0, "max": 325.0}
+        raid.result = {
+            "zone": {"name": "Teszt"},
+            "kills": 1,
+            "per_difficulty": {4: 1},
+            "sections": [("raid átlag / kill", {4: [("Sszorak", (1,), stats_row), ("Összes boss", (1,), stats_row)]})],
+        }
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False):
+            raid.transfer()  # nemet mondunk: nem változik
+        self.assertNotIn("Raid - Sszorak Heroic", self.app.data.gear_entry_min)
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True) as ask:
+            raid.transfer()
+        self.assertIn("• Raid - Sszorak Heroic: 319,8 → 320", ask.call_args.args[1])
+        self.assertEqual(self.app.data.gear_entry_min["Raid - Sszorak Heroic"], 320.0)
+        self.assertIn("3 sor a statisztikákból frissítve", window.source_var.get())  # a nyitott ajánló is frissül
+
+        # A HTML-oldal a mostani adatokkal; minden más marad.
+        out = folder / "ajanlo.html"
+        with mock.patch.object(advisor.filedialog, "asksaveasfilename", return_value=str(out)), mock.patch.object(
+            advisor.messagebox, "showinfo"
+        ):
+            window.export_html()
+        html = out.read_text(encoding="utf-8")
+        template = self.gui.gearing.HTML_TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn('{ name: "Mythic+ 10", entryMin: 309,    dropMax: 311, vaultMax: 318 },', html)
+        self.assertIn('{ name: "Raid - Sszorak Heroic",                 entryMin: 320, dropMax: 311', html)
+        changed = [(a, b) for a, b in zip(template.splitlines(), html.splitlines()) if a != b]
+        self.assertEqual(len(changed), 3)
+
+        with mock.patch.object(advisor.messagebox, "askyesno", return_value=True):
+            window.reset_entry_mins()
+        self.assertEqual(load_data(self.path).gear_entry_min, {})
+        self.assertIn("az alapértékek", window.source_var.get())
+
     def test_region_setting_is_saved(self):
         self.assertEqual(self.app.region_var.get(), "EU")
         self.app.region_var.set("KR")
