@@ -124,18 +124,53 @@ class GuiTests(unittest.TestCase):
     def test_main_window_buttons(self):
         self.assertIsNotNone(self.find_button(self.root, "Karakterlista"))
         self.assertIsNone(self.find_button(self.root, "Karakterlista megnyitása…"))
+        buttons = self.find_button(self.root, "Gear").master.winfo_children()
+        self.assertEqual([button.cget("text") for button in buttons], ["Karakterlista", "Gear", "Mythic+"])
         self.find_button(self.root, "Karakterlista").invoke()
         self.assertIsNotNone(self.app.list_window)
 
     def test_double_click_opens_the_editor_in_both_windows(self):
         self.add("Thrall", "Jaina")
         jaina = self.app.data.characters[1]
-        for open_window in (self.app.open_list, self.app.open_gear):
+        for open_window in (self.app.open_list, self.app.open_gear, self.app.open_mythic):
             open_window()
-        for window in (self.app.list_window, self.app.gear_window):
+        for window in (self.app.list_window, self.app.gear_window, self.app.mythic_window):
             with self.subTest(window=window.TITLE):
                 self.assertEqual(self.double_click(window, jaina), 1)
                 self.assertEqual(window.tree.selection(), (jaina.uid,))
+
+    def test_mythic_plus_button_opens_a_copy_of_the_gear_window(self):
+        self.app.target_item_level_var.set("330")
+        self.add("Thrall", item_level="320")
+        self.add("Jaina", item_level="325")
+        self.add("Arthas", item_level="331")  # elérte a célitemlevelt
+        self.find_button(self.root, "Mythic+").invoke()
+        mythic = self.app.mythic_window
+        self.assertIsInstance(mythic, self.gui.MythicPlusWindow)
+        self.assertIsInstance(mythic, self.gui.GearWindow)  # a Gear ablak másolata
+        self.assertEqual(mythic.title(), f"Mythic+ – {self.gui.APP_TITLE}")
+        self.assertIsNone(self.app.gear_window)  # külön ablak
+        self.app.open_mythic()  # a már nyitott ablakot csak előtérbe hozza
+        self.assertIs(self.app.mythic_window, mythic)
+
+        self.app.open_gear()
+        gear = self.app.gear_window
+        self.assertEqual(mythic.COLUMNS, gear.COLUMNS)
+        self.assertEqual(self.rows(mythic), self.rows(gear))  # ugyanazt mutatja
+        self.assertEqual(self.names(mythic), ["Thrall", "Jaina"])  # eltérés szerint; Arthas lekerült
+        self.assertEqual(mythic.gear_info_var.get(), gear.gear_info_var.get())
+        mythic.sort_by("name")  # saját rendezése van
+        self.assertEqual((self.names(mythic), self.names(gear)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
+        self.assertEqual((self.app.mythic_sort, self.app.gear_sort), (("name", False), self.gui.GEAR_ORDER))
+
+        jaina = self.app.data.characters[1]
+        self.select_in(mythic, jaina)  # az itemlevel itt is módosítható, és minden ablakban látszik
+        mythic.value_var.set("330")
+        mythic.apply_value()
+        self.assertEqual((self.names(mythic), self.names(gear)), (["Thrall"], ["Thrall"]))
+        mythic.close()
+        self.assertIsNone(self.app.mythic_window)
+        self.assertIs(self.app.gear_window, gear)
 
     def test_gear_button_opens_a_separate_copy_of_the_list(self):
         self.add("Thrall", "Jaina")

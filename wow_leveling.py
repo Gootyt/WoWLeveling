@@ -1067,8 +1067,18 @@ class GearWindow(CharacterListWindow):
             self.gear_info_label.configure(style="Strong.TLabel")
 
 
+class MythicPlusWindow(GearWindow):
+    """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel.
+    Egyelőre ugyanazt mutatja, mint a Gear ablak."""
+
+    TITLE = "Mythic+"
+    WINDOW_ATTRIBUTE = "mythic_window"
+    SORT_ATTRIBUTE = "mythic_sort"
+
+
 class App:
-    """A főablak: beállítások, új karakter felvétele, a karakterlista és a Gear ablak megnyitása."""
+    """A főablak: beállítások, új karakter felvétele, a karakterlista, a Gear és a Mythic+ ablak
+    megnyitása."""
 
     def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None) -> None:
         self.root = root
@@ -1080,8 +1090,10 @@ class App:
         self.score_status_var = tk.StringVar()
         self.list_window: CharacterListWindow | None = None
         self.gear_window: GearWindow | None = None
+        self.mythic_window: MythicPlusWindow | None = None
         self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
+        self.mythic_sort = GEAR_ORDER  # a Mythic+ ablak rendezése
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
         self._today = date.today()
         self._save_error_shown = False
@@ -1313,10 +1325,14 @@ class App:
         footer = ttk.Frame(body)
         footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
-        ttk.Button(footer, text="Gear", command=self.open_gear).pack(side="right", anchor="n")
-        ttk.Button(footer, text="Karakterlista", command=self.open_list).pack(
-            side="right", anchor="n", padx=(0, 6)
-        )
+        window_buttons = ttk.Frame(footer)
+        window_buttons.pack(side="right", anchor="n")
+        for text, command in (
+            ("Karakterlista", self.open_list),
+            ("Gear", self.open_gear),
+            ("Mythic+", self.open_mythic),
+        ):
+            ttk.Button(window_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
 
     def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
         """A beállítások mezőiből beolvasott értékek és a hibák, a Settings mezőnevei szerint."""
@@ -1504,6 +1520,9 @@ class App:
     def open_gear(self) -> None:
         self._open_window(GearWindow)
 
+    def open_mythic(self) -> None:
+        self._open_window(MythicPlusWindow)
+
     def _open_window(self, window_class: type[CharacterListWindow]) -> None:
         """Megnyitja a listaablakot; ha már nyitva van, csak előtérbe hozza."""
         window = getattr(self, window_class.WINDOW_ATTRIBUTE)
@@ -1517,8 +1536,9 @@ class App:
         self.refresh_spec_scores()  # ha a tárolt adat már régebbi 8 óránál
 
     def open_windows(self) -> list[CharacterListWindow]:
-        """A nyitott listaablakok (karakterlista, Gear)."""
-        return [window for window in (self.list_window, self.gear_window) if window is not None]
+        """A nyitott listaablakok (karakterlista, Gear, Mythic+)."""
+        windows = (self.list_window, self.gear_window, self.mythic_window)
+        return [window for window in windows if window is not None]
 
     def can_fetch_scores(self) -> bool:
         return self._fetch_scores is not None and not self._score_fetch_running
