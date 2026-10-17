@@ -1,7 +1,8 @@
 """A gear ajánló ablaka – a „WoW Gearing Ajánló” HTML-oldal a programban: melyik tartalom ad
 még fejlesztést a megadott (vagy egy karakter) itemleveléhez. Az adatok és a logika a
-gearing.py-ban vannak; a Mythic+ és a raid sorok belépési ilvl-je a statisztikákból frissül
-(a statisztikai ablakok „Átvitel a gear ajánlóba” gombjával vagy itt, CSV-ből).
+gearing.py-ban vannak; a Mythic+ és a raid sorok belépési ilvl-je a statisztikákból frissül:
+magától, a beállított időközönként (lásd App.update_gear_stats), a statisztikai ablakok „Átvitel a
+gear ajánlóba” gombjával, vagy itt, CSV-ből.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 import gearing
-from leveling import format_item_level
+from leveling import GEAR_AUTO_MAX_DAYS, format_item_level
 
 MANUAL = "– kézi megadás –"
 OPTIONS_KEY = "gear"  # az adatfájlban (stats_options) ezen a kulcson vannak a szűrők
@@ -22,9 +23,9 @@ ILVL_ERROR = (
 HINT = (
     "Add meg az itemlevelt (vagy válassz karaktert), és a táblázat megmutatja, melyik tartalom ad még "
     "fejlesztést: dropból, csak a Great Vaultból, túl alacsony hozzá az itemlevel, vagy már kinőtted. A "
-    "Mythic+ és a raid sorok belépési ilvl-je a statisztikákból frissíthető (a kulcsszintek játékosainak, "
-    "illetve a bossok kill-jeinek medián itemlevele): a statisztikai ablakok „Átvitel a gear ajánlóba” "
-    "gombjával, vagy itt a statisztikák CSV-jéből."
+    "Mythic+ és a raid sorok belépési ilvl-je a statisztikákból frissül (a kulcsszintek játékosainak, "
+    "illetve a bossok kill-jeinek medián itemlevele): magától, a lent beállított időközönként, a "
+    "statisztikai ablakok „Átvitel a gear ajánlóba” gombjával, vagy itt a statisztikák CSV-jéből."
 )
 # Az állapotok színei (háttér, szöveg) a táblázatban és a jelmagyarázatban
 STATUS_COLORS = {
@@ -108,6 +109,7 @@ class GearAdvisorWindow(tk.Toplevel):
         ):
             ttk.Button(footer, text=text, command=command).pack(side="left", padx=(0, 6))
         ttk.Button(footer, text="Bezárás", command=self.close).pack(side="right")
+        self._build_auto(body)
 
         ttk.Label(body, text=HINT, style="Hint.TLabel", wraplength=px(900), justify="left").pack(anchor="w")
         top = ttk.Frame(body)
@@ -174,6 +176,47 @@ class GearAdvisorWindow(tk.Toplevel):
         bar.pack(side="right", fill="y")
         ttk.Label(body, textvariable=self.summary_var).pack(anchor="w", pady=(6, 0))
         ttk.Label(body, textvariable=self.source_var, style="Hint.TLabel").pack(anchor="w")
+
+    def _build_auto(self, body: ttk.Frame) -> None:
+        """Az automatikus frissítés beállításai és állapota (az ablak alján, a gombok fölött)."""
+        app = self.app
+        auto = ttk.Frame(body)
+        auto.pack(side="bottom", fill="x", pady=(8, 0))
+        controls = ttk.Frame(auto)
+        controls.pack(fill="x")
+        self.auto_var = tk.BooleanVar(value=app.data.gear_auto)
+        ttk.Checkbutton(
+            controls,
+            text="A belépési ilvl-ek automatikus frissítése a statisztikákból,",
+            variable=self.auto_var,
+            command=lambda: app.set_gear_auto(enabled=self.auto_var.get()),
+        ).pack(side="left")
+        self.days_var = tk.StringVar(value=str(app.data.gear_auto_days))
+        self.days_box = ttk.Spinbox(
+            controls, from_=1, to=GEAR_AUTO_MAX_DAYS, width=4, textvariable=self.days_var, command=self._days_changed
+        )
+        self.days_box.pack(side="left", padx=(6, 4))
+        for sequence in ("<Return>", "<FocusOut>"):
+            self.days_box.bind(sequence, lambda _event: self._days_changed())
+        ttk.Label(controls, text="naponta").pack(side="left")
+        ttk.Button(controls, text="Frissítés most", command=lambda: app.update_gear_stats(force=True)).pack(
+            side="left", padx=(16, 0)
+        )
+        self.auto_status_label = ttk.Label(
+            auto, textvariable=app.gear_status_var, style=app.gear_status_style, wraplength=app.px(900), justify="left"
+        )
+        self.auto_status_label.pack(anchor="w", pady=(2, 0))
+
+    def _days_changed(self) -> None:
+        """A napok száma: érvényes értéknél elmenti, különben visszaírja a mostanit."""
+        try:
+            days = int(self.days_var.get().strip())
+        except ValueError:
+            days = 0
+        if not 1 <= days <= GEAR_AUTO_MAX_DAYS:
+            self.days_var.set(str(self.app.data.gear_auto_days))
+        elif days != self.app.data.gear_auto_days:
+            self.app.set_gear_auto(days=days)
 
     # -- itemlevel és karakter
     def refresh_characters(self) -> None:

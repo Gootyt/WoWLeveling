@@ -860,6 +860,9 @@ def _parallel_last_date(settings: Settings, characters: list[Character], first_d
 SPEC_SCORES_MAX_AGE = timedelta(hours=8)  # a Murlok.io is 8 óránként frissíti a rangsorait
 # Ablak megnyitásakor ennél régebbi Raider.io-adatoknál indul magától új lekérés.
 RAIDERIO_MAX_AGE = timedelta(minutes=30)
+# A gear ajánló belépési ilvl-jei alapból hetente frissülnek a statisztikákból (lásd LevelingData).
+GEAR_AUTO_DAYS = 7
+GEAR_AUTO_MAX_DAYS = 365
 
 
 @dataclass
@@ -1068,12 +1071,26 @@ class LevelingData:
     addon_imported: dict = field(default_factory=dict)
     # Az addon karakterei közül azok, amelyeket a felhasználó nem kért fel a listára.
     addon_skipped: list = field(default_factory=list)
+    # A gear ajánló belépési ilvl-jeinek automatikus frissítése a statisztikákból, és hány naponta.
+    gear_auto: bool = True
+    gear_auto_days: int = GEAR_AUTO_DAYS
+    # A statisztikák legutóbbi átvitele a gear ajánlóba, forrásonként ("mplus", "raid"; helyi idő).
+    gear_updated_at: dict = field(default_factory=dict)
 
     def raiderio_is_stale(self, now: datetime | None = None) -> bool:
         """Igaz, ha még nem volt Raider.io-lekérés, vagy a legutóbbi régebbi fél óránál."""
         now = now or datetime.now()
         fetched_at = self.raiderio_fetched_at
         return fetched_at is None or not timedelta(0) <= now - fetched_at < RAIDERIO_MAX_AGE
+
+    def gear_stats_due(self, source: str, now: datetime | None = None) -> bool:
+        """Igaz, ha az automatikus frissítés be van kapcsolva, és a forrás (pl. "mplus") statisztikája
+        még nem került át a gear ajánlóba, vagy a legutóbbi átvitel régebbi a beállított napoknál."""
+        if not self.gear_auto:
+            return False
+        now = now or datetime.now()
+        updated = self.gear_updated_at.get(source)
+        return updated is None or not timedelta(0) <= now - updated < timedelta(days=self.gear_auto_days)
 
     def to_dict(self) -> dict:
         fetched_at = self.raiderio_fetched_at
@@ -1087,6 +1104,13 @@ class LevelingData:
             "stats_options": self.stats_options,
             "gear_entry_min": self.gear_entry_min,
             "addon": {"path": self.addon_path, "imported": self.addon_imported, "skipped": self.addon_skipped},
+            "gear_auto": {
+                "enabled": self.gear_auto,
+                "days": self.gear_auto_days,
+                "updated": {
+                    source: updated.isoformat(timespec="seconds") for source, updated in self.gear_updated_at.items()
+                },
+            },
         }
 
     @classmethod
@@ -1114,6 +1138,16 @@ class LevelingData:
         addon_path = addon.get("path")
         imported = addon.get("imported")
         skipped = addon.get("skipped")
+        gear_auto = data.get("gear_auto")
+        gear_auto = gear_auto if isinstance(gear_auto, dict) else {}
+        enabled, days = gear_auto.get("enabled"), gear_auto.get("days")
+        gear_updated_at = {}
+        updated = gear_auto.get("updated")
+        for source, value in (updated.items() if isinstance(updated, dict) else ()):
+            try:
+                gear_updated_at[str(source)] = datetime.fromisoformat(value)
+            except (TypeError, ValueError):
+                pass  # a hibás időpont olyan, mintha még nem lett volna frissítés
         return cls(
             settings=settings,
             characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
@@ -1129,6 +1163,13 @@ class LevelingData:
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
             },
             addon_skipped=[str(key) for key in skipped] if isinstance(skipped, list) else [],
+            gear_auto=enabled if isinstance(enabled, bool) else True,
+            gear_auto_days=(
+                days
+                if isinstance(days, int) and not isinstance(days, bool) and 1 <= days <= GEAR_AUTO_MAX_DAYS
+                else GEAR_AUTO_DAYS
+            ),
+            gear_updated_at=gear_updated_at,
         )
 
 

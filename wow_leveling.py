@@ -101,6 +101,8 @@ ADDON_INSTALLED = (
     "a program ezeket olvassa be."
 )
 ADDON_LIST_LIMIT = 30  # ennél több változást (vagy nevet) nem sorol fel egyenként
+# A gear ajánlót frissítő statisztikák: forrás (a stats_options kulcsa) → (rövid név, az ablak osztálya).
+GEAR_STATS = {"mplus": ("M+", "MythicStatsWindow"), "raid": ("raid", "RaidStatsWindow")}
 
 
 HU_WEEKDAYS = ("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
@@ -1288,7 +1290,9 @@ class App:
     """A főablak: beállítások, új karakter felvétele, a karakterlista, a Gear és a Mythic+ ablak
     megnyitása."""
 
-    def __init__(self, root: tk.Tk, data_path: Path, fetch_scores=None, fetch_profile=None) -> None:
+    def __init__(
+        self, root: tk.Tk, data_path: Path, fetch_scores=None, fetch_profile=None, auto_stats: bool = False
+    ) -> None:
         self.root = root
         self.data_path = Path(data_path)
         # A Murlok.io-pontszámokat lekérő függvény (None: nincs lekérés, pl. a tesztekben).
@@ -1312,6 +1316,13 @@ class App:
         self.mplus_stats_window: stats_windows.MythicStatsWindow | None = None
         self.raid_stats_window: stats_windows.RaidStatsWindow | None = None
         self.gear_advisor_window: gear_advisor.GearAdvisorWindow | None = None
+        # A gear ajánló automatikus frissítése a statisztikákból (lásd update_gear_stats). A tesztekben
+        # ki van kapcsolva, mert hálózati lekérdezést indítana.
+        self._auto_stats = auto_stats
+        self._gear_notes: dict[str, tuple[str, bool]] = {}  # forrás → (a legutóbbi eredménye, gond-e)
+        self._gear_failed: set[str] = set()  # ezekkel ebben a futásban magától nem próbálkozik újra
+        self.gear_status_var = tk.StringVar()
+        self.gear_status_style = "Hint.TLabel"
         self.list_sort = LIST_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
         self.mythic_sort = MYTHIC_ORDER  # a Mythic+ ablak rendezése
@@ -1371,6 +1382,7 @@ class App:
         self._update_raiderio_status()
         self.refresh()
         self.import_addon(automatic=True)  # a játékban elmentett adatok beolvasása
+        self.update_gear_stats()
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
 
@@ -1605,6 +1617,10 @@ class App:
             ("Raid ilvl statisztika", self.open_raid_stats),
         ):
             ttk.Button(stats_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
+        self.gear_status_label = ttk.Label(
+            body, textvariable=self.gear_status_var, style="Hint.TLabel", wraplength=self.px(940), justify="left"
+        )
+        self.gear_status_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
         """A beállítások mezőiből beolvasott értékek és a hibák, a Settings mezőnevei szerint."""
@@ -1835,10 +1851,10 @@ class App:
             return
         self.gear_advisor_window = gear_advisor.GearAdvisorWindow(self, character)
 
-    def transfer_gear_targets(self, targets: dict, prefixes, source: str, parent: tk.Misc) -> int:
+    def transfer_gear_targets(self, targets: dict, prefixes, source: str, parent: tk.Misc) -> int | None:
         """Statisztikai adatok átvitele a gear ajánlóba (mint az update.py): a Mythic+, illetve a
         raid sorok belépési ilvl-je a medián lesz. Előtte megmutatja, mi változik, és rákérdez.
-        Visszaadja az átírt sorok számát."""
+        Visszaadja az átírt sorok számát (None, ha a felhasználó nem kérte az átírást)."""
         title = "Átvitel a gear ajánlóba"
         plan = gearing.plan_transfer(targets, self.gear_groups(), prefixes)
         details = [f"Már naprakész: {len(plan.unchanged)} sor."]
@@ -1863,12 +1879,143 @@ class App:
             + "\n\nÁtírjam?"
         )
         if not messagebox.askyesno(title, question, detail="\n\n".join(details), parent=parent):
-            return 0
+            return None
+        self.apply_gear_targets(plan)
+        return len(plan.changed)
+
+    def apply_gear_targets(self, plan: gearing.TransferPlan) -> None:
+        """Az átvitel beírása a gear ajánló belépési ilvl-jeibe (mentéssel)."""
         self.data.gear_entry_min.update(plan.values())
         self.save()
         if self.gear_advisor_window is not None and self.gear_advisor_window.winfo_exists():
             self.gear_advisor_window.render()
-        return len(plan.changed)
+
+    def update_gear_stats(self, force: bool = False) -> None:
+        """A gear ajánló belépési ilvl-jeinek automatikus frissítése: azokat a statisztikákat,
+        amelyek legutóbbi átvitele régebbi a beállított napoknál (force: mindet), a háttérben
+        lefuttatja egy rejtett statisztikai ablakban, az ott elmentett beállításokkal, és az
+        eredményt kérdés nélkül átviszi a gear ajánlóba (lásd gear_stats_finished).
+
+        Indításkor és utána percenként fut le. A látható statisztikai ablakot nem zavarja (azt
+        csak a force indítja el, ha éppen nem fut benne lekérdezés); ami ebben a futásban nem
+        sikerült, azzal magától nem próbálkozik újra, csak a „Frissítés most” gombra.
+        """
+        if force:
+            self._gear_failed.clear()
+        if self._auto_stats and stats_windows is not None and (force or self.data.gear_auto):
+            for source, (_label, class_name) in GEAR_STATS.items():
+                if source in self._gear_failed or not (force or self.data.gear_stats_due(source)):
+                    continue
+                window = self._stats_window(class_name)
+                if window is None:
+                    # Rejtve marad akkor is, ha nem indul el: így a Tk-objektumait nem egy háttérszál
+                    # szemétgyűjtése takarítja el.
+                    window_class = getattr(stats_windows, class_name)
+                    window = window_class(self, hidden=True)
+                    setattr(self, window_class.WINDOW_ATTRIBUTE, window)
+                elif window.running or (not force and window.state() != "withdrawn"):
+                    continue  # éppen lekérdez, vagy nyitva van: a felhasználó használja
+                problem = window.start_automatic()
+                if problem == stats_windows.BUSY:
+                    continue  # egy korábbi lekérdezés még leáll: a következő ellenőrzéskor újra
+                if problem == stats_windows.NO_KEY:  # nem hiba: aki nem kéri, annak nem kell kulcs
+                    self._gear_failed.add(source)
+                    self._gear_notes[source] = (problem, False)
+                elif problem is not None:
+                    self._gear_failed.add(source)
+                    self._gear_notes[source] = (f"nem indult – {self._gear_note(problem)}", True)
+                else:
+                    self._gear_notes.pop(source, None)
+        self._update_gear_status()
+
+    def _stats_window(self, class_name: str):
+        """A statisztikai ablak (a rejtett is), ha van."""
+        window = getattr(self, getattr(stats_windows, class_name).WINDOW_ATTRIBUTE)
+        return window if window is not None and window.winfo_exists() else None
+
+    def gear_stats_finished(self, window, outcome: str, text: str) -> None:
+        """Egy automatikus statisztikai lekérdezés vége (lásd update_gear_stats). outcome: "done",
+        "stopped" vagy "failed"; text: a lekérdezés végének szövege. Ha rendben lefutott, az
+        eredményt kérdés nélkül átviszi a gear ajánlóba."""
+        source = window.OPTIONS_KEY
+        if outcome == "done" and window.has_results():
+            targets, prefix = window.gear_targets()
+            plan = gearing.plan_transfer(targets, self.gear_groups(), [prefix])
+            self.apply_gear_targets(plan)
+            self.gear_stats_transferred(source)
+            count = len(plan.changed)
+            changed = f"{count} belépési ilvl változott" if count else "nem változott semmi"
+            updated = self.data.gear_updated_at[source]
+            self._gear_notes[source] = (f"frissítve {updated:%Y-%m-%d %H:%M} ({changed})", False)
+            window.status_var.set(f"{text} Átvive a gear ajánlóba: {count} belépési ilvl.")
+        else:
+            self._gear_failed.add(source)
+            if outcome == "stopped":
+                self._gear_notes[source] = ("leállítva", False)
+            elif outcome == "done":
+                self._gear_notes[source] = ("nem jött adat (nézd meg a statisztika beállításait)", True)
+            else:
+                self._gear_notes[source] = (self._gear_note(text), True)
+        self._update_gear_status()
+
+    @staticmethod
+    def _gear_note(text: str) -> str:
+        """Egy üzenet az állapotsor közepére: kisbetűvel kezdve, a záró pont nélkül."""
+        text = text.strip().rstrip(".")
+        return text[:1].lower() + text[1:]
+
+    def gear_stats_transferred(self, source: str) -> None:
+        """A forrás statisztikája átkerült a gear ajánlóba: ehhez igazodik az automatikus frissítés."""
+        self.data.gear_updated_at[source] = datetime.now()
+        self._gear_failed.discard(source)
+        self._gear_notes.pop(source, None)
+        self.save()
+        self._update_gear_status()
+
+    def set_gear_auto(self, enabled: bool | None = None, days: int | None = None) -> None:
+        """Az automatikus frissítés be- vagy kikapcsolása, illetve hány naponta legyen (a gear
+        ajánló ablakából). Ha így esedékessé vált egy statisztika, rögtön elindul."""
+        if enabled is not None:
+            self.data.gear_auto = enabled
+        if days is not None:
+            self.data.gear_auto_days = days
+        self.save()
+        self.update_gear_stats()
+
+    def _update_gear_status(self) -> None:
+        """Az automatikus frissítés állapota a főablakban és a gear ajánlóban."""
+        problem = False
+        if stats_windows is None:
+            text = (
+                f"Gear ajánló: az automatikus frissítés ezzel a Pythonnal nem használható ({STATS_IMPORT_ERROR})."
+            )
+        else:
+            data = self.data
+            parts = []
+            for source, (label, class_name) in GEAR_STATS.items():
+                window = self._stats_window(class_name)
+                if window is not None and window.automatic:
+                    state = "fut a háttérben…"
+                elif source in self._gear_notes:
+                    state, failed = self._gear_notes[source]
+                    problem = problem or failed
+                elif source in data.gear_updated_at:
+                    state = f"legutóbb {data.gear_updated_at[source]:%Y-%m-%d %H:%M}"
+                else:
+                    state = "még nem volt"
+                parts.append(f"{label}: {state}")
+            head = (
+                f"Gear ajánló – automatikus frissítés a statisztikákból {data.gear_auto_days} naponta"
+                if data.gear_auto
+                else "Gear ajánló – az automatikus frissítés a statisztikákból ki van kapcsolva"
+            )
+            text = f"{head}. {'; '.join(parts)}."
+        self.gear_status_var.set(text)
+        self.gear_status_style = "Error.TLabel" if problem else "Hint.TLabel"
+        self.gear_status_label.configure(style=self.gear_status_style)
+        advisor = self.gear_advisor_window
+        if advisor is not None and advisor.winfo_exists():
+            advisor.auto_status_label.configure(style=self.gear_status_style)
 
     def open_mplus_stats(self) -> None:
         self._open_stats_window("MythicStatsWindow")
@@ -2353,10 +2500,12 @@ class App:
             self.gear_advisor_window.refresh_characters()  # pl. megváltozott egy karakter itemlevele
 
     def _watch_date(self) -> None:
-        """Éjfél után frissíti a napi célokat, ha a program végig nyitva marad."""
+        """Éjfél után frissíti a napi célokat, ha a program végig nyitva marad; közben a gear
+        ajánló automatikus frissítését is elindítja, ha esedékessé vált."""
         if date.today() != self._today:
             self._today = date.today()
             self.refresh()
+        self.update_gear_stats()
         self.root.after(60_000, self._watch_date)
 
 
@@ -2384,7 +2533,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     _enable_windows_dpi_awareness()
     root = tk.Tk()
-    App(root, args.data_file, fetch_scores=murlok.fetch_spec_scores, fetch_profile=raiderio.fetch_profile)
+    App(
+        root,
+        args.data_file,
+        fetch_scores=murlok.fetch_spec_scores,
+        fetch_profile=raiderio.fetch_profile,
+        auto_stats=True,
+    )
     root.mainloop()
 
 

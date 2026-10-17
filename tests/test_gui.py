@@ -1,6 +1,7 @@
 """A grafikus felület tesztjei. Grafikus kijelző kell hozzájuk (Linuxon pl. xvfb-run);
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
+import gc
 import tempfile
 import threading
 import time
@@ -88,6 +89,10 @@ class GuiTests(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        # A lebontott ablakok Tk-objektumai itt, a fő szálon szűnjenek meg: ha a szemétgyűjtés egy
+        # későbbi teszt háttérszálában takarítaná el őket, a tkinter mindegyiknél kb. egy másodpercig
+        # várna a fő szálra (mainloop nélkül), és a háttérben futó lekérdezés kifutna az időből.
+        gc.collect()
         self.temp_dir.cleanup()
 
     def add(self, *names, level="", char_class="", spec="", race="", realm="", score="", item_level=""):
@@ -1127,6 +1132,7 @@ class GuiTests(unittest.TestCase):
             window.import_csv()
         self.assertIn("• Mythic+ 4: 291,5 → 291,4", ask.call_args.args[1])
         self.assertEqual(load_data(self.path).gear_entry_min, {"Mythic+ 4": 291.4})
+        self.assertEqual(self.app.data.gear_updated_at, {})  # a CSV régi is lehet: nem számít frissítésnek
         self.assertEqual(window.source_var.get(), "Belépési ilvl-ek: 1 sor a statisztikákból frissítve, a többi az alapérték.")
         with mock.patch.object(advisor.filedialog, "askopenfilenames", return_value=(str(live),)), mock.patch.object(
             self.gui.messagebox, "showinfo"
@@ -1144,6 +1150,7 @@ class GuiTests(unittest.TestCase):
             mythic.transfer_button.invoke()
         self.assertEqual(self.app.data.gear_entry_min["Mythic+ 10"], 309.0)
         self.assertEqual(mythic.status_var.get(), "Átvive a gear ajánlóba: 1 belépési ilvl.")
+        self.assertEqual(list(load_data(self.path).gear_updated_at), ["mplus"])  # ehhez igazodik az automatikus
 
         # A raid statisztika eredményéből (a „raid átlag / kill” mediánjai, az „Összes boss” nélkül)
         self.app.open_raid_stats()
@@ -1158,6 +1165,7 @@ class GuiTests(unittest.TestCase):
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False):
             raid.transfer()  # nemet mondunk: nem változik
         self.assertNotIn("Raid - Sszorak Heroic", self.app.data.gear_entry_min)
+        self.assertNotIn("raid", self.app.data.gear_updated_at)
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True) as ask:
             raid.transfer()
         self.assertIn("• Raid - Sszorak Heroic: 319,8 → 320", ask.call_args.args[1])
@@ -1181,6 +1189,222 @@ class GuiTests(unittest.TestCase):
             window.reset_entry_mins()
         self.assertEqual(load_data(self.path).gear_entry_min, {})
         self.assertIn("az alapértékek", window.source_var.get())
+
+    def fake_mplus_run(self, levels=((10, (309.0, 309.0)),)):
+        """A raiderio_ilvl_stats.run helyett: a megadott kulcsszintek itemlevelei, hálózat nélkül."""
+        mplus = self.gui.stats_windows.mplus
+
+        def run(args, seeds, make_view, info):
+            state, guild_queue = mplus.new_state(), mplus.GuildQueue()
+            view = make_view(state, guild_queue, "Raider.IO ilvl")
+            view.start()
+            for level, item_levels in levels:
+                state["runs"][level] += 1
+                for value in item_levels:
+                    mplus.add_ilvl(state, level, value)
+            view.stop("finished")
+            return None, state, guild_queue, "250-350"
+
+        return run
+
+    @staticmethod
+    def fake_raid_run(args, cache):
+        """A wcl_raid_ilvl_stats.run helyett: egy Heroic boss kill-jei, hálózat nélkül."""
+        stats_row = {"mean": 318.0, "median": 320.04, "p25": 317.0, "min": 250.0, "max": 325.0}
+        tables = {4: [("Sszorak", (1,), stats_row), ("Összes boss", (1,), stats_row)]}
+        sections = [("raid átlag / kill", tables)]
+        return {"zone": {"name": "Teszt"}, "kills": 1, "per_difficulty": {4: 1}, "sections": sections}
+
+    def start_auto_app(self, path, mplus_run=None, raid_run=None, while_running=None):
+        """Új főablak bekapcsolt automatikus frissítéssel; a statisztikák a megadott (vagy hamis)
+        futásokkal, megvárja a végüket (közben meghívja a while_running-et). Nem nyílhat kérdés."""
+        stats = self.gui.stats_windows
+        with mock.patch.object(stats.mplus, "run", mplus_run or self.fake_mplus_run()), mock.patch.object(
+            stats.wcl, "run", raid_run or self.fake_raid_run
+        ), mock.patch.object(stats.wcl, "Cache"), mock.patch.object(self.gui.messagebox, "askyesno") as ask:
+            app = self.gui.App(tk.Toplevel(self.root), path, auto_stats=True)
+            if while_running is not None:
+                while_running(app)
+            for window in (app.mplus_stats_window, app.raid_stats_window):
+                if window is not None:
+                    self.wait_until_finished(window)
+        ask.assert_not_called()
+        return app
+
+    def test_gear_entry_levels_are_updated_automatically(self):
+        stats = self.gui.stats_windows
+        path = Path(self.temp_dir.name) / "auto.json"
+        stats.save_api_keys(path.parent, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
+        self.assertEqual(  # a tesztek főablakában ki van kapcsolva
+            self.app.gear_status_var.get(),
+            "Gear ajánló – automatikus frissítés a statisztikákból 7 naponta. "
+            "M+: még nem volt; raid: még nem volt.",
+        )
+        release = threading.Event()
+
+        def slow_run(args, seeds, make_view, info):
+            release.wait(5)
+            return self.fake_mplus_run()(args, seeds, make_view, info)
+
+        def while_running(app):  # indításkor a rejtett ablakban fut, az állapotsor jelzi
+            self.assertEqual(app.mplus_stats_window.state(), "withdrawn")
+            self.assertIn("M+: fut a háttérben…", app.gear_status_var.get())
+            release.set()
+
+        app = self.start_auto_app(path, mplus_run=slow_run, while_running=while_running)
+        self.assertTrue(release.is_set())
+        self.assertEqual(app.data.gear_entry_min, {"Mythic+ 10": 309.0, "Raid - Sszorak Heroic": 320.0})
+        saved = load_data(path)
+        self.assertEqual(saved.gear_entry_min, app.data.gear_entry_min)
+        self.assertEqual(set(saved.gear_updated_at), {"mplus", "raid"})
+        self.assertRegex(
+            app.gear_status_var.get(),
+            r"^Gear ajánló – automatikus frissítés a statisztikákból 7 naponta\. M\+: frissítve "
+            r"\d{4}-\d\d-\d\d \d\d:\d\d \(1 belépési ilvl változott\); "
+            r"raid: frissítve .* \(1 belépési ilvl változott\)\.$",
+        )
+        self.assertEqual(app.gear_status_label.cget("style"), "Hint.TLabel")
+        self.assertEqual(stats.load_api_keys(path.parent)["wcl_client_id"], "azonosito")  # a kulcsokhoz nem nyúlt
+
+        # Az ablak gombjával megnyitva az automatikus frissítés eredménye látszik.
+        mythic = app.mplus_stats_window
+        self.assertEqual(mythic.state(), "withdrawn")
+        self.assertEqual(mythic.status_var.get(), "Kész. Átvive a gear ajánlóba: 1 belépési ilvl.")
+        app.open_mplus_stats()
+        self.assertIs(app.mplus_stats_window, mythic)
+        self.assertNotEqual(mythic.state(), "withdrawn")
+        self.assertEqual(mythic.table.rows()[0][:5], ("10", "1", "2", "309,0", "309,0"))
+
+        # Újraindítva a hét napnál frissebb adatokhoz nem indul lekérdezés.
+        never = mock.Mock(side_effect=AssertionError("nem kellene lefutnia"))
+        again = self.start_auto_app(path, mplus_run=never, raid_run=never)
+        self.assertIsNone(again.mplus_stats_window)
+        self.assertIsNone(again.raid_stats_window)
+        self.assertIn("M+: legutóbb ", again.gear_status_var.get())
+
+    def test_gear_auto_update_problems_and_retry(self):
+        stats = self.gui.stats_windows
+        path = Path(self.temp_dir.name) / "auto.json"
+
+        def failing_run(args, seeds, make_view, info):
+            raise stats.mplus.StatsError("a Raider.io nem érhető el")
+
+        app = self.start_auto_app(path, mplus_run=failing_run)
+        raid = app.raid_stats_window  # API-kulcs nélkül el sem indul, az ablaka rejtve marad
+        self.assertEqual((raid.state(), raid.running), ("withdrawn", False))
+        self.assertEqual(
+            app.gear_status_var.get(),
+            "Gear ajánló – automatikus frissítés a statisztikákból 7 naponta. "
+            "M+: nem sikerült: a Raider.io nem érhető el; "
+            "raid: nincs Warcraft Logs API-kulcs (a Raid ilvl statisztika ablakában adható meg).",
+        )
+        self.assertEqual(app.gear_status_label.cget("style"), "Error.TLabel")  # az M+ hibája miatt
+        self.assertEqual((app.data.gear_entry_min, app.data.gear_updated_at), ({}, {}))
+
+        # A percenkénti ellenőrzés ebben a futásban nem próbálkozik újra, a „Frissítés most” igen.
+        never = mock.Mock(side_effect=AssertionError("nem kellene lefutnia"))
+        with mock.patch.object(stats.mplus, "run", never):
+            app._watch_date()
+        self.assertFalse(app.mplus_stats_window.running)
+        stats.save_api_keys(path.parent, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
+        app.data.stats_options["raid"] = {"refresh": True}  # a raid ablakban bejelölt „Minden újra letöltése”
+        with mock.patch.object(stats.mplus, "run", self.fake_mplus_run()), mock.patch.object(
+            stats.wcl, "run", self.fake_raid_run
+        ), mock.patch.object(stats.wcl, "Cache") as cache:
+            app.update_gear_stats(force=True)
+            for window in (app.mplus_stats_window, app.raid_stats_window):
+                self.wait_until_finished(window)
+        self.assertEqual(set(app.data.gear_updated_at), {"mplus", "raid"})
+        self.assertIs(cache.call_args.kwargs["refresh"], False)  # magától nem tölt le mindent újra
+        self.assertTrue(app.raid_stats_window.refresh_var.get())  # de a beállítás megmarad
+        self.assertEqual(app.gear_status_label.cget("style"), "Hint.TLabel")
+
+        # Kikapcsolva indításkor sem fut.
+        app.data.gear_auto = False
+        app.data.gear_updated_at.clear()
+        app.save()
+        again = self.start_auto_app(path, mplus_run=never, raid_run=never)
+        self.assertIsNone(again.mplus_stats_window)
+        self.assertIsNone(again.raid_stats_window)
+        self.assertTrue(again.gear_status_var.get().startswith("Gear ajánló – az automatikus frissítés"))
+
+    def test_automatic_run_can_be_watched_and_stopped(self):
+        stats = self.gui.stats_windows
+        mplus = stats.mplus
+        path = Path(self.temp_dir.name) / "auto.json"
+
+        def endless_run(args, seeds, make_view, info):
+            state, guild_queue = mplus.new_state(), mplus.GuildQueue()
+            view = make_view(state, guild_queue, "Raider.IO ilvl")
+            view.start()
+            state["runs"][7] += 1
+            mplus.add_ilvl(state, 7, 290.0)
+            view.changed()
+            while not mplus.STOP.wait(0.01):
+                pass
+            reason = "stopped - summarizing what was collected so far"
+            view.stop(f"finished - {reason}")
+            return reason, state, guild_queue, None
+
+        with mock.patch.object(mplus, "run", endless_run):
+            app = self.gui.App(tk.Toplevel(self.root), path, auto_stats=True)
+            window = app.mplus_stats_window
+            for _ in range(20):
+                self.root.update()
+                time.sleep(0.01)
+            self.assertTrue(window.running and window.automatic)
+            app.open_mplus_stats()  # a gombbal megnyitva látszik a futó frissítés
+            self.assertEqual(window.state(), "normal")
+            self.assertEqual(window.status_var.get(), "Automatikus frissítés folyamatban (a gear ajánlóhoz)…")
+            self.assertIn("disabled", window.start_button.state())
+            window.close()  # bezárva a háttérben fut tovább
+            self.assertEqual(window.state(), "withdrawn")
+            self.assertTrue(window.running)
+            self.assertIs(app.mplus_stats_window, window)
+            app.open_mplus_stats()
+            window.stop_button.invoke()
+            self.wait_until_finished(window)
+        self.assertIn("M+: leállítva; raid: nincs Warcraft Logs API-kulcs", app.gear_status_var.get())
+        self.assertEqual(app.gear_status_label.cget("style"), "Hint.TLabel")  # egyik sem hiba
+        self.assertEqual(app.data.gear_entry_min, {})  # a leállított frissítés eredménye nem kerül át magától
+        self.assertEqual(window.state(), "normal")  # a látható ablak nyitva marad
+        with mock.patch.object(self.gui.messagebox, "askyesno", return_value=True):
+            window.transfer_button.invoke()  # kézzel átvihető
+        self.assertIn("Mythic+ 7", app.data.gear_entry_min)
+        self.assertIn("M+: legutóbb ", app.gear_status_var.get())
+        window.close()
+        self.assertIsNone(app.mplus_stats_window)
+
+    def test_gear_advisor_auto_update_settings(self):
+        self.app.open_gear_advisor()
+        window = self.app.gear_advisor_window
+        self.assertEqual(str(window.auto_status_label.cget("textvariable")), str(self.app.gear_status_var))
+        checkbox = next(
+            child
+            for child in window.auto_status_label.master.winfo_children()[0].winfo_children()
+            if isinstance(child, ttk.Checkbutton)
+        )
+        with mock.patch.object(self.app, "update_gear_stats", wraps=self.app.update_gear_stats) as update:
+            checkbox.invoke()  # kikapcsolás
+            self.assertFalse(self.app.data.gear_auto)
+            self.assertIn("ki van kapcsolva", self.app.gear_status_var.get())
+            checkbox.invoke()
+            window.days_var.set("3")
+            window._days_changed()
+            self.assertEqual(update.call_count, 3)  # minden változás után megnézi, esedékes-e a frissítés
+        saved = load_data(self.path)
+        self.assertEqual((saved.gear_auto, saved.gear_auto_days), (True, 3))
+        self.assertIn("a statisztikákból 3 naponta", self.app.gear_status_var.get())
+        for wrong in ("0", "abc", "366"):
+            window.days_var.set(wrong)
+            window._days_changed()
+            self.assertEqual(window.days_var.get(), "3")
+        with mock.patch.object(self.app, "update_gear_stats") as update:
+            self.find_button(window, "Frissítés most").invoke()
+        update.assert_called_once_with(force=True)
+        with mock.patch.object(self.app, "update_gear_stats") as update:
+            self.app._watch_date()  # percenként megnézi, esedékes-e
+        update.assert_called_once_with()
 
     def addon_folder(self, text=ADDON_SAVE):
         """Egy World of Warcraft mappa, benne az addon mentésével."""

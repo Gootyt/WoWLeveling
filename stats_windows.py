@@ -9,6 +9,10 @@ A lekérdezés a háttérben fut, közben a program használható; a „Leállí
 összegyűjtött adatokkal zárja le (mint parancssorban a Ctrl+C). A beállítások az adatfájlba
 kerülnek, az API-kulcsok – ha kéred – külön fájlba (api_kulcsok.json) az adatfájl mellé.
 A letöltött adatok gyorsítótára is ott van, így egy újabb lekérdezés csak az újakat kéri le.
+
+A gear ajánló automatikus frissítéséhez (App.update_gear_stats) a program egy rejtett ablakban
+indítja el a lekérdezést (start_automatic) az elmentett beállításokkal; az ablak gombjával
+megnyitva ugyanez látszik, és a végén az eredmény magától a gear ajánlóba kerül.
 """
 
 from __future__ import annotations
@@ -39,6 +43,16 @@ WCL_REGIONS = ("mind", "eu", "us", "kr", "tw", "cn")
 
 # A háttérszálak modulonként: egy lekérdezés futhat egyszerre (a modulok globális állapota miatt).
 _workers: dict[str, threading.Thread] = {}
+BUSY = "Még fut (vagy most áll le) egy lekérdezés."  # a start_automatic válasza, ha most nem indítható
+NO_KEY = "nincs Warcraft Logs API-kulcs (a Raid ilvl statisztika ablakában adható meg)"  # és ha kulcs kellene
+AUTO_HINT = (
+    "A gear ajánló belépési ilvl-jeihez a program ezt a lekérdezést az itt beállított értékekkel "
+    "magától is lefuttatja, és az eredményt átviszi (lásd a gear ajánló ablakát)."
+)
+
+
+class MissingApiKey(ValueError):
+    """A lekérdezéshez API-kulcs kellene (a raid statisztikához a Warcraft Logs kulcsa)."""
 
 
 def load_api_keys(folder: Path) -> dict[str, str]:
@@ -205,9 +219,12 @@ class StatsWindow(tk.Toplevel):
     CSV_NAME = ""
     module = None  # a statisztikai program modulja (STOP)
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, hidden: bool = False) -> None:
         super().__init__(app.root)
+        if hidden:  # az automatikus frissítés ablaka: csak az ablak gombjával megnyitva látszik
+            self.withdraw()
         self.app = app
+        self.automatic = False  # a gear ajánló automatikus frissítése fut-e benne (lásd start_automatic)
         self.title(f"{self.TITLE} – {app.root.title()}")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Escape>", lambda _event: self.close())
@@ -225,10 +242,11 @@ class StatsWindow(tk.Toplevel):
         footer = ttk.Frame(body)
         footer.pack(side="bottom", fill="x", pady=(8, 0))
         ttk.Button(footer, text="Bezárás", command=self.close).pack(side="right")
-        ttk.Label(body, text=self.HINT, style="Hint.TLabel", wraplength=px(900), justify="left").pack(
-            anchor="w", pady=(0, 8)
-        )
+        ttk.Label(
+            body, text=f"{self.HINT} {AUTO_HINT}", style="Hint.TLabel", wraplength=px(900), justify="left"
+        ).pack(anchor="w", pady=(0, 8))
         self._build_options(body)
+        self._load_keys()
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(8, 4))
         self.start_button = ttk.Button(buttons, text="Indítás", command=self.start)
@@ -259,8 +277,13 @@ class StatsWindow(tk.Toplevel):
     def _build_results(self, parent: tk.Misc) -> None:
         raise NotImplementedError
 
-    def _prepare(self):
-        """A mezőkből a lekérdezés (a háttérszálnak); hibás mezőnél ValueError."""
+    def _load_keys(self) -> None:
+        """A mentett (vagy környezeti változóban megadott) API-kulcsok a mezőkbe."""
+
+    def _prepare(self, automatic: bool = False):
+        """A mezőkből a lekérdezés (a háttérszálnak); hibás mezőnél ValueError. automatic: a gear
+        ajánló automatikus frissítéséhez – ilyenkor a kulcsokat nem menti (és nem is törli) a
+        „Megjegyzés” jelölőnégyzet szerint, és a gyorsítótárat sem tölti le újra."""
         raise NotImplementedError
 
     def _work(self, job) -> None:
@@ -314,8 +337,7 @@ class StatsWindow(tk.Toplevel):
         return self._running
 
     def start(self) -> None:
-        previous = _workers.get(self.OPTIONS_KEY)
-        if previous is not None and previous.is_alive():
+        if self._busy():
             messagebox.showinfo(
                 self.TITLE, "Az előző lekérdezés még leáll – próbáld újra pár másodperc múlva.", parent=self
             )
@@ -326,12 +348,41 @@ class StatsWindow(tk.Toplevel):
             messagebox.showwarning(self.TITLE, str(exc), parent=self)
             return
         self._save_options()
+        self._launch(job, "Lekérdezés folyamatban…")
+
+    def start_automatic(self) -> str | None:
+        """Indítás a gear ajánló automatikus frissítéséhez (lásd App.update_gear_stats): a mezők
+        (az elmentett beállítások) szerint, üzenetablakok és a kulcsok mentése nélkül; a végén az
+        App.gear_stats_finished viszi át az eredményt. None, ha elindult, különben az oka (BUSY:
+        egy korábbi lekérdezés még fut vagy most áll le; NO_KEY: nincs megadva API-kulcs)."""
+        if self._busy():
+            return BUSY
+        if self.state() == "withdrawn":  # a rejtett ablak a legutóbb elmentett beállításokkal fusson
+            self.keys = load_api_keys(self.folder)
+            self._load_keys()
+            self._load_options()
+        try:
+            job = self._prepare(automatic=True)
+        except MissingApiKey:
+            return NO_KEY
+        except ValueError as exc:
+            return str(exc)
+        self.automatic = True
+        self._launch(job, "Automatikus frissítés folyamatban (a gear ajánlóhoz)…")
+        return None
+
+    def _busy(self) -> bool:
+        """Fut-e még (vagy áll-e még le) lekérdezés ezzel a statisztikai programmal."""
+        previous = _workers.get(self.OPTIONS_KEY)
+        return previous is not None and previous.is_alive()
+
+    def _launch(self, job, status: str) -> None:
         self.module.STOP.clear()
         self._messages = queue.Queue()
         self._running = True
         self.log.clear()
         self._set_buttons()
-        self.status_var.set("Lekérdezés folyamatban…")
+        self.status_var.set(status)
         self.status_label.configure(style="TLabel")
         thread = threading.Thread(target=self._run_work, args=(job,), daemon=True)
         _workers[self.OPTIONS_KEY] = thread
@@ -375,6 +426,10 @@ class StatsWindow(tk.Toplevel):
         self.status_var.set(text)
         self.status_label.configure(style="Error.TLabel" if problem else "Ok.TLabel")
         self._set_buttons()
+        if self.automatic:
+            self.automatic = False
+            outcome = "failed" if problem else "stopped" if self.module.STOP.is_set() else "done"
+            self.app.gear_stats_finished(self, outcome, text)
 
     def _set_buttons(self) -> None:
         self.start_button.state(["disabled" if self._running else "!disabled"])
@@ -386,14 +441,16 @@ class StatsWindow(tk.Toplevel):
     def has_results(self) -> bool:
         raise NotImplementedError
 
-    def _gear_targets(self) -> tuple[dict, str]:
+    def gear_targets(self) -> tuple[dict, str]:
         """Az eredményből a gear ajánló sorainak új belépési ilvl-je és a sorok névkezdete."""
         raise NotImplementedError
 
     def transfer(self) -> None:
         """Az eredmény (medián itemlevelek) átvitele a gear ajánló belépési ilvl-jeibe."""
-        targets, prefix = self._gear_targets()
+        targets, prefix = self.gear_targets()
         changed = self.app.transfer_gear_targets(targets, [prefix], self.TITLE, parent=self)
+        if changed is not None:  # átvitte, vagy már egyezett: ehhez igazodik az automatikus frissítés
+            self.app.gear_stats_transferred(self.OPTIONS_KEY)
         if changed:
             self.status_var.set(f"Átvive a gear ajánlóba: {changed} belépési ilvl.")
             self.status_label.configure(style="Ok.TLabel")
@@ -418,6 +475,9 @@ class StatsWindow(tk.Toplevel):
         self.status_label.configure(style="Ok.TLabel")
 
     def close(self) -> None:
+        if self._running and self.automatic:
+            self.withdraw()  # az automatikus frissítés a háttérben fut tovább
+            return
         if self._running:
             self.module.STOP.set()  # a háttérszál a következő kérésnél leáll
         if self._poll_job is not None:
@@ -508,9 +568,9 @@ class MythicStatsWindow(StatsWindow):
         ("max", "Max", 6),
     )
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, hidden: bool = False) -> None:
         self.result_rows: list[tuple] = []  # a legutóbbi eredmény (a CSV-hez)
-        super().__init__(app)
+        super().__init__(app, hidden)
 
     def _build_options(self, parent: tk.Misc) -> None:
         region = self.app.data.settings.region
@@ -535,7 +595,7 @@ class MythicStatsWindow(StatsWindow):
         self.pages_var = self.option("pages", "5")
         self.each_dungeon_var = self.option("each_dungeon", False, tk.BooleanVar)
         self.affixes_var = self.option("affixes", "all")
-        self.api_key_var = tk.StringVar(value=self.keys.get("raiderio_api_key") or os.environ.get("RAIDERIO_API_KEY", ""))
+        self.api_key_var = tk.StringVar()
         self.remember_key_var = tk.BooleanVar(value=True)
 
         box = ttk.LabelFrame(parent, text="Lekérdezés", padding=8)
@@ -610,6 +670,9 @@ class MythicStatsWindow(StatsWindow):
         )
         self.field(box, 7, "Raider.io API-kulcs:", key, "nem kötelező (nagyobb lekérési keret)")
 
+    def _load_keys(self) -> None:
+        self.api_key_var.set(self.keys.get("raiderio_api_key") or os.environ.get("RAIDERIO_API_KEY", ""))
+
     def _source_changed(self) -> None:
         self.follow_var.set(self.follow_by_source[self.source_var.get()].get())
 
@@ -630,7 +693,7 @@ class MythicStatsWindow(StatsWindow):
     def has_results(self) -> bool:
         return bool(self.result_rows)
 
-    def _prepare(self):
+    def _prepare(self, automatic: bool = False):
         region = self.region_var.get()
         guild_mode = self.source_var.get() == "guild"
         args = mplus.build_parser().parse_args([])
@@ -657,7 +720,8 @@ class MythicStatsWindow(StatsWindow):
         args.cache = str(self.folder / MPLUS_CACHE_NAME)
         args.no_live = True
         seeds = mplus.prepare_args(args)
-        save_api_keys(self.folder, {"raiderio_api_key": args.api_key if self.remember_key_var.get() else ""})
+        if not automatic:
+            save_api_keys(self.folder, {"raiderio_api_key": args.api_key if self.remember_key_var.get() else ""})
         return args, seeds
 
     def _work(self, job) -> None:
@@ -707,7 +771,7 @@ class MythicStatsWindow(StatsWindow):
     def _write_csv(self, path: str) -> None:
         mplus.write_csv(path, self.result_rows)
 
-    def _gear_targets(self) -> tuple[dict, str]:
+    def gear_targets(self) -> tuple[dict, str]:
         return gearing.mplus_targets(self.result_rows), gearing.MPLUS_PREFIX
 
 
@@ -739,15 +803,13 @@ class RaidStatsWindow(StatsWindow):
         ("max", "Max", 7),
     )
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, hidden: bool = False) -> None:
         self.result: dict | None = None  # a legutóbbi eredmény (wcl_raid_ilvl_stats.run)
-        super().__init__(app)
+        super().__init__(app, hidden)
 
     def _build_options(self, parent: tk.Misc) -> None:
-        self.client_id_var = tk.StringVar(value=self.keys.get("wcl_client_id") or os.environ.get("WCL_CLIENT_ID", ""))
-        self.client_secret_var = tk.StringVar(
-            value=self.keys.get("wcl_client_secret") or os.environ.get("WCL_CLIENT_SECRET", "")
-        )
+        self.client_id_var = tk.StringVar()
+        self.client_secret_var = tk.StringVar()
         self.remember_var = tk.BooleanVar(value=True)
         self.zone_var = self.option("zone", "")
         self.days_var = self.option("days", "7")
@@ -809,6 +871,10 @@ class RaidStatsWindow(StatsWindow):
             box, text="Minden újra letöltése (a gyorsítótárban lévő adatok helyett)", variable=self.refresh_var
         ).grid(row=4, column=1, columnspan=2, sticky="w", pady=2)
 
+    def _load_keys(self) -> None:
+        self.client_id_var.set(self.keys.get("wcl_client_id") or os.environ.get("WCL_CLIENT_ID", ""))
+        self.client_secret_var.set(self.keys.get("wcl_client_secret") or os.environ.get("WCL_CLIENT_SECRET", ""))
+
     def _build_results(self, parent: tk.Misc) -> None:
         self.info_var = tk.StringVar()
         ttk.Label(parent, textvariable=self.info_var, style="Strong.TLabel", wraplength=self.app.px(900), justify="left").pack(
@@ -836,11 +902,11 @@ class RaidStatsWindow(StatsWindow):
     def has_results(self) -> bool:
         return bool(self.result and self.result.get("sections"))
 
-    def _prepare(self):
+    def _prepare(self, automatic: bool = False):
         client_id = self.client_id_var.get().strip()
         client_secret = self.client_secret_var.get().strip()
         if not (client_id and client_secret):
-            raise ValueError(
+            raise MissingApiKey(
                 "Add meg a Warcraft Logs API-kulcsot (Client ID és Client Secret). Igénylése: "
                 "https://www.warcraftlogs.com/api/clients → „Create Client”."
             )
@@ -855,13 +921,12 @@ class RaidStatsWindow(StatsWindow):
         args.region = None if region == "mind" else region
         args.exclude = self.exclude_var.get()
         args.players = parse_number(self.players_var.get(), "Játékosok", empty=0)
-        args.refresh = self.refresh_var.get()
+        args.refresh = self.refresh_var.get() and not automatic  # hetente ne töltsön le mindent újra
         args.cache = str(self.folder / WCL_CACHE_NAME)
-        remember = self.remember_var.get()
-        save_api_keys(
-            self.folder,
-            {"wcl_client_id": client_id if remember else "", "wcl_client_secret": client_secret if remember else ""},
-        )
+        if not automatic:
+            remember = self.remember_var.get()
+            keys = {"wcl_client_id": client_id, "wcl_client_secret": client_secret}
+            save_api_keys(self.folder, {name: value if remember else "" for name, value in keys.items()})
         return args
 
     def _work(self, args) -> None:
@@ -922,5 +987,5 @@ class RaidStatsWindow(StatsWindow):
     def _write_csv(self, path: str) -> None:
         wcl.write_csv(path, self.result["sections"])
 
-    def _gear_targets(self) -> tuple[dict, str]:
+    def gear_targets(self) -> tuple[dict, str]:
         return gearing.raid_targets(self.result["sections"]), gearing.RAID_PREFIX

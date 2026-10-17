@@ -898,6 +898,40 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual((loaded.addon_path, loaded.addon_imported, loaded.addon_skipped), ("", {}, []))
 
+    def test_gear_auto_update_settings_are_saved(self):
+        data = LevelingData(make_settings())
+        self.assertEqual((data.gear_auto, data.gear_auto_days, data.gear_updated_at), (True, 7, {}))  # alapból hetente
+        data.gear_auto, data.gear_auto_days = False, 3
+        data.gear_updated_at = {"mplus": datetime(2026, 10, 17, 12, 3, 4)}
+        save_data(self.path, data)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["gear_auto"], {"enabled": False, "days": 3, "updated": {"mplus": "2026-10-17T12:03:04"}})
+        loaded = load_data(self.path)
+        self.assertEqual(
+            (loaded.gear_auto, loaded.gear_auto_days, loaded.gear_updated_at),
+            (False, 3, {"mplus": datetime(2026, 10, 17, 12, 3, 4)}),
+        )
+        raw["gear_auto"] = {"enabled": "igen", "days": 0, "updated": {"mplus": "tegnap", "raid": 5}}
+        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        loaded = load_data(self.path)
+        self.assertEqual((loaded.gear_auto, loaded.gear_auto_days, loaded.gear_updated_at), (True, 7, {}))
+
+    def test_gear_statistics_are_due_after_the_set_days(self):
+        data = LevelingData(make_settings())
+        now = datetime(2026, 10, 17, 12, 0)
+        self.assertTrue(data.gear_stats_due("mplus", now))  # még nem volt frissítés
+        data.gear_updated_at["mplus"] = datetime(2026, 10, 10, 12, 1)
+        self.assertFalse(data.gear_stats_due("mplus", now))
+        self.assertTrue(data.gear_stats_due("raid", now))  # forrásonként külön
+        data.gear_updated_at["mplus"] = datetime(2026, 10, 10, 12, 0)
+        self.assertTrue(data.gear_stats_due("mplus", now))  # pont egy hete
+        data.gear_auto_days = 8
+        self.assertFalse(data.gear_stats_due("mplus", now))
+        data.gear_updated_at["mplus"] = datetime(2026, 10, 18, 9, 0)  # a jövőben (pl. átállított óra)
+        self.assertTrue(data.gear_stats_due("mplus", now))
+        data.gear_auto = False
+        self.assertFalse(data.gear_stats_due("raid", now))  # kikapcsolva soha
+
     def test_look_ahead_switch_is_saved(self):
         save_data(self.path, LevelingData(make_settings(), look_ahead=False))
         self.assertFalse(load_data(self.path).look_ahead)

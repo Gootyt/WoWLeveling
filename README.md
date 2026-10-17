@@ -64,8 +64,9 @@ megtervezéséhez és követéséhez.
 - **Gear ajánló:** egy itemlevelhez (vagy egy karakteréhez) megmutatja, melyik
   tartalom (dungeon, Mythic+, delve, prey, raid, daily) ad még fejlesztést dropból
   vagy a Great Vaultból, melyikhez túl alacsony, és melyiket nőtted már ki. A
-  Mythic+ és a raid sorok belépési ilvl-jét a statisztikákból frissíti (lásd lent,
-  „Gear ajánló”).
+  Mythic+ és a raid sorok belépési ilvl-jét a statisztikákból **magától frissíti**:
+  alapból hetente lefuttatja a háttérben a két statisztikát, és átviszi az
+  eredményüket (lásd lent, „Gear ajánló”).
 - **WoW addon:** a mellékelt WoWLeveling addon a játékban elmenti a karakterek
   szintjét (a tapasztalattal együtt), itemlevelét, Mythic+ pontszámát, faját,
   kasztját és specjét. A program a játék mappájának megadása után ezeket **minden
@@ -177,7 +178,9 @@ python wow_leveling.py masik_terv.json
    (lásd lent). Az „Átvitel a gear ajánlóba” az eredmény mediánjait a gear ajánló
    belépési ilvl-jeibe írja.
 10. **Gear ajánló**: a főablak „Gear ajánló” gombjával, vagy a Gear ablakban a
-    kijelölt karakterhez a „Gear ajánló…” gombbal (lásd lent).
+    kijelölt karakterhez a „Gear ajánló…” gombbal (lásd lent). A Mythic+ és a raid
+    sorok belépési ilvl-jei a statisztikákból magától frissülnek; ennek állapota a
+    főablak alján látszik.
 11. **WoW addon**: a főablak „WoW addon” keretében add meg a World of Warcraft
     mappáját (beírva vagy a „Tallózás…” gombbal), és telepítsd az addont az
     „Addon telepítése…” gombbal. A program ezután minden indításkor beolvassa a
@@ -404,7 +407,9 @@ parancssori Ctrl+C helyett a „Leállítás” gomb állítja meg őket. Mindke
 gyorsítótárat használ (a program mappájában, lásd „Adatok”), így egy újabb
 lekérdezés csak azt tölti le, ami még nincs meg. Az ablakok mezői megmaradnak a
 következő megnyitásra; az API-kulcsokat a „Megjegyzés ezen a gépen” bejelölésével
-az `api_kulcsok.json` fájlba menti a program (titkosítás nélkül).
+az `api_kulcsok.json` fájlba menti a program (titkosítás nélkül). A gear ajánló
+automatikus frissítése is az ablakokban beállított értékekkel, és az elmentett
+kulcsokkal futtatja a lekérdezéseket (lásd „Gear ajánló”).
 
 **M+ ilvl statisztika (Raider.io).** Kulcsszintenként: hány futás és hány
 játékos adata került bele, valamint a játékosok itemlevelének átlaga, mediánja,
@@ -489,18 +494,38 @@ látszik („Minden Delve/Prey tier mutatása”). Itemlevel nélkül minden sor
 **A belépési ilvl-ek frissítése (adatátvitel).** A Mythic+ sorok belépési ilvl-je
 a kulcsszint játékosainak medián itemlevele (M+ ilvl statisztika), a raid soroké a
 boss kill-jeinek medián itemlevele az adott nehézségen (Raid ilvl statisztika, a
-„raid átlag / kill” mérőszám). Átvinni lehet:
+„raid átlag / kill” mérőszám). Ahol nincs adat (a statisztikában nem szereplő
+kulcsszint, még meg nem ölt boss), ott a belépési ilvl marad; az „Összes boss” sor
+nem számít. A frissített értékek az adatfájlba kerülnek, az „Alapértékek
+visszaállítása” gomb törli őket.
+
+**Automatikus frissítés.** A program indításkor (és amíg nyitva van, percenként
+ellenőrizve) a háttérben lefuttatja azt a statisztikát, amelynek az eredménye a
+beállított napoknál (alapból 7) régebben került át a gear ajánlóba, és az
+eredményt **kérdés nélkül** átviszi. A lekérdezés az adott statisztikai ablakban
+utoljára beállított értékekkel fut (ha még nem nyitottad meg, az alapértékekkel:
+M+ – a régió ranglistájának 5 oldala; raid – az utolsó 7 nap), a raidhez a
+Warcraft Logs API-kulcs kell (az ablakban a „Megjegyzés ezen a gépen”
+bejelölésével elmentve). Közben nyugodtan dolgozhatsz:
+
+- Az állapota a főablak alján és a gear ajánló alján látszik (fut, mikor frissült
+  és hány belépési ilvl változott, vagy mi volt a gond).
+- A statisztikai ablak gombjával megnyitva a futó frissítés (utána az eredménye)
+  látszik, a „Leállítás” megállítja; bezárva az ablakot a háttérben fut tovább.
+- Ami nem sikerült (vagy leállítottad), azzal a program a következő indításig nem
+  próbálkozik újra magától; a gear ajánló „Frissítés most” gombja bármikor
+  elindítja mindkét statisztikát.
+- A gear ajánló alján kapcsolható ki, és ott állítható, hány naponta fusson.
+
+Kézzel is át lehet vinni:
 
 - a statisztikai ablakokból, az „Átvitel a gear ajánlóba” gombbal, a lekérdezés
-  után;
+  után (ez is számít frissítésnek, ehhez igazodik az automatikus);
 - a gear ajánlóban az „Importálás CSV-ből…” gombbal a statisztikák CSV-jéből
   (`live.csv`, `stat.csv` – a parancssori programok `--csv` kimenete, vagy a
   „CSV mentése…” gombé). Egyszerre több fájl is választható.
 
-Átírás előtt a program megmutatja, mi változik, és rákérdez. Ahol nincs adat (a
-statisztikában nem szereplő kulcsszint, még meg nem ölt boss), ott a belépési ilvl
-marad; az „Összes boss” sor nem számít. A frissített értékek az adatfájlba
-kerülnek, az „Alapértékek visszaállítása” gomb törli őket.
+Kézi átvitelnél átírás előtt a program megmutatja, mi változik, és rákérdez.
 
 **HTML mentése.** A „HTML mentése…” gomb elmenti a „WoW Gearing Ajánló”
 HTML-oldalt a program mostani adataival (böngészőben is használható). A
@@ -586,7 +611,9 @@ API-kulcsok).
 
 Az addon mentéseinek beolvasásához a program az adatfájlban megjegyzi a WoW
 mappáját, karakterenként a legutóbb felhasznált mentés idejét, és azokat a
-karaktereket, amelyeket nem kértél fel a listára.
+karaktereket, amelyeket nem kértél fel a listára. A gear ajánló automatikus
+frissítéséhez a beállításait és azt, hogy a két statisztika eredménye mikor került
+át utoljára.
 
 ## Fájlok
 
