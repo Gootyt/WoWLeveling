@@ -292,10 +292,10 @@ class GuiTests(unittest.TestCase):
         self.app.mode_var.set(SEQUENTIAL)  # a „Kezdés” oszlop egymás utáni ütemezésnél sem jelenik meg
         self.assertNotIn("start", gear.tree["displaycolumns"])
         self.assertIn("start", window.tree["displaycolumns"])
-        self.assertEqual((self.app.gear_sort, self.app.list_sort), (self.gui.GEAR_ORDER, self.gui.PLAN_ORDER))
+        self.assertEqual((self.app.gear_sort, self.app.list_sort), (self.gui.GEAR_ORDER, self.gui.LIST_ORDER))
         gear.sort_by("name")  # saját rendezése van
         self.assertEqual((self.names(gear), self.names(window)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
-        self.assertEqual((self.app.gear_sort, self.app.list_sort), (("name", False), self.gui.PLAN_ORDER))
+        self.assertEqual((self.app.gear_sort, self.app.list_sort), (("name", False), self.gui.LIST_ORDER))
 
         self.add("Arthas")  # minden változás mindkét ablakban azonnal látszik
         self.assertEqual(self.names(gear), ["Arthas", "Jaina", "Thrall"])
@@ -658,8 +658,11 @@ class GuiTests(unittest.TestCase):
         expected = ["Uther", "Khadgar", "Jaina", "Illidan"]
         self.assertEqual([c.name for c in self.app.data.characters], expected)
         self.assertEqual([c.name for c in load_data(self.path).characters], expected)
-        self.assertEqual(self.app.list_sort, self.gui.PLAN_ORDER)  # az új sorrend látszik
-        self.assertEqual(self.names(), expected)
+        # A nézet rendezése nem változik (itt a név szerinti); az új sorrend a # oszlopban látszik.
+        self.assertEqual(self.app.list_sort, ("name", False))
+        self.assertEqual(self.names(), ["Illidan", "Jaina", "Khadgar", "Uther"])
+        positions = {row["name"]: row["position"] for row in self.rows()}
+        self.assertEqual(positions, {"Uther": "1", "Khadgar": "2", "Jaina": "3", "Illidan": "4"})
 
         with mock.patch.object(self.gui.messagebox, "showinfo") as info:
             window.order_by_murlok()
@@ -892,14 +895,16 @@ class GuiTests(unittest.TestCase):
         window = self.app.list_window
         tree = window.tree
 
-        self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
-        self.assertEqual(tree.heading("position", "text"), "# ▲")
-        window.sort_by("deviation")
+        # Alapból a szinteltérés szerint növekvő sorrendben: elöl a leginkább lemaradt karakter.
+        self.assertEqual(self.app.list_sort, self.gui.LIST_ORDER)
         self.assertEqual(self.names(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
         self.assertEqual([row["deviation"] for row in self.rows()], ["−4,90", "−2,96", "−2,86", "+43,77"])
         self.assertEqual((tree.heading("deviation", "text"), tree.heading("position", "text")), ("Szinteltérés ▲", "#"))
-        window.sort_by("deviation")
+        self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
+        window.sort_by("deviation")  # újabb kattintásra megfordul
         self.assertEqual(self.names(), ["Jaina", "Arthas", "Sylvanas", "Thrall"])
+        self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
+        self.app.open_list()  # a már nyitott ablakot csak előtérbe hozza, a rendezése marad
         self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
 
         # Rendezett nézetben nem lehet átrendezni, a karakterek sorrendje (és a céldátumok) nem változik.
@@ -921,11 +926,12 @@ class GuiTests(unittest.TestCase):
             window.delete_selected()
         self.assertEqual(window.selected_var.get(), "Thrall")
 
-        # A rendezés az ablak újranyitása után is megmarad.
+        # Újranyitáskor mindig a szinteltérés szerinti növekvő sorrend látszik.
         window.close()
         self.app.open_list()
         window = self.app.list_window
-        self.assertEqual(self.names(), ["Sylvanas", "Arthas", "Thrall"])  # 3 karakterrel: −2,96 / −3,45 / −4,90
+        self.assertEqual(self.names(), ["Thrall", "Arthas", "Sylvanas"])  # 3 karakterrel: −4,90 / −3,45 / −2,96
+        self.assertEqual(window.tree.heading("deviation", "text"), "Szinteltérés ▲")
 
         # A # oszlop visszaállítja az eredeti sorrendet, és újra lehet átrendezni.
         window.sort_by("position")
@@ -960,6 +966,7 @@ class GuiTests(unittest.TestCase):
         window.apply_value()
         self.assertEqual(thrall.level, D("95.00"))
 
+        window.sort_by("position")  # átrendezni a # szerinti nézetben lehet
         window.move_selected(1)
         self.assertEqual([c.name for c in self.app.data.characters], ["Jaina", "Thrall", "Arthas"])
         self.assertEqual(self.names(), ["Jaina", "Thrall", "Arthas"])

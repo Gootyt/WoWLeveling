@@ -46,8 +46,9 @@ megtervezéséhez és követéséhez.
   tovább. A lista tetején lévő jelölőnégyzettel ki- és bekapcsolható.
 - A lista oszlopai **automatikusan** olyan szélesek, amennyit a tartalmuk kíván;
   ha a tartalom szélesebb lesz, az ablak is nő (legfeljebb a képernyő szélességéig).
-- A lista bármelyik oszlop szerint **rendezhető** a fejlécre kattintva (pl. a
-  szinteltérés szerint, hogy elöl legyenek a leginkább lemaradt karakterek).
+- A karakterlista mindig a **szinteltérés szerint rendezve** nyílik meg, így elöl
+  vannak a leginkább lemaradt karakterek. A fejlécre kattintva bármelyik oszlop
+  szerint átrendezhető.
 - A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a
   [Murlok.io](https://murlok.io) Mythic+ rangsorából (a program magától lekéri).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
@@ -111,22 +112,27 @@ python wow_leveling.py masik_terv.json
    Raider.io pontszám („+1 pont”) állítható; ezek üresre is törölhetők. Minden
    ablakban dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden
    adata módosítható.
-5. **Rendezés**: kattints egy oszlop fejlécére; újabb kattintásra megfordul az
-   irány (a fejlécben ▲ = növekvő, ▼ = csökkenő). A rendezés csak a nézetet
-   változtatja meg, a karakterek sorrendjét nem. A # oszlopra kattintva visszakapod
-   az eredeti sorrendet. Az üres értékek (pl. a kész karakterek mai célja) mindig a
+5. **Rendezés**: a karakterlista mindig a szinteltérés szerint növekvő sorrendben
+   nyílik meg (elöl a leginkább lemaradt karakter). Kattints egy oszlop fejlécére
+   a más szerinti rendezéshez; újabb kattintásra megfordul az irány (a fejlécben
+   ▲ = növekvő, ▼ = csökkenő). Ez csak addig tart, amíg az ablak nyitva van: újra
+   megnyitva ismét a szinteltérés szerint rendez (a Gear és a Mythic+ ablak a
+   saját rendezését megtartja). A rendezés csak a nézetet változtatja meg, a
+   karakterek sorrendjét nem. A # oszlopra kattintva visszakapod az eredeti
+   sorrendet. Az üres értékek (pl. a kész karakterek mai célja) mindig a
    lista végére kerülnek, a „Kaszt” szerinti rendezés kaszton belül spec szerint
    rendez, az „Állapot” szerinti pedig a legsürgősebbel kezd.
-6. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal (csak a # szerinti
-   nézetben). A sorrend határozza meg, melyik karakternek kell elsőként, melyiknek
-   utoljára elérnie a célszintet.
+6. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal, a # szerinti nézetben (a #
+   oszlop fejlécére kattintva). A sorrend határozza meg, melyik karakternek kell
+   elsőként, melyiknek utoljára elérnie a célszintet.
 7. **Murlok.io szerinti sorrend**: ez a gomb az összes karakter sorrendjét
    beállítja a Murlok.io-pontszámok alapján, körönként. Az első körbe minden
    class/specből egy karakter kerül (a legmagasabb szintű), a körön belül a
    magasabb pontszámú spec van elöl; a második körbe ugyanígy a következő karakter
    minden class/specből, és így tovább. Akinek nincs pontszáma (nincs megadva vagy
    ismeretlen a class/spec), a lista végére kerül. A program átrendezés előtt
-   rákérdez, utána a lista a # szerinti nézetre vált.
+   rákérdez. A nézet rendezése utána sem változik (a karakterlistában marad a
+   szinteltérés szerinti); az új sorrend a # oszlopban látszik.
 
 ## Hogyan számol a program?
 
