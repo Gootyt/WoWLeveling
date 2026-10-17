@@ -2,9 +2,10 @@
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
 import tempfile
+import threading
 import time
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -15,7 +16,16 @@ try:
 except ImportError:
     tk = ttk = None
 
-from leveling import SEQUENTIAL, SpecScores, format_date, load_data
+from leveling import (
+    SEQUENTIAL,
+    Character,
+    LevelingData,
+    Settings,
+    SpecScores,
+    format_date,
+    load_data,
+    save_data,
+)
 
 D = Decimal
 
@@ -559,9 +569,14 @@ class GuiTests(unittest.TestCase):
         )
         self.assertNotIn("disabled", app.list_window.score_button.state())  # újra lehet próbálni
 
-    def raiderio_app(self, fetch):
-        """Egy második főablak, amely a megadott függvénnyel „kéri le” a Raider.io-adatokat."""
-        return self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "raiderio.json", fetch_profile=fetch)
+    def raiderio_app(self, fetch, characters=(), fetched_at=None):
+        """Egy második főablak a megadott karakterekkel, amely a `fetch` függvénnyel „kéri le” a
+        Raider.io-adatokat (fetched_at: a legutóbbi lekérés ideje)."""
+        path = Path(self.temp_dir.name) / "raiderio.json"
+        data = LevelingData(Settings.default(), list(characters))
+        data.raiderio_fetched_at = fetched_at
+        save_data(path, data)
+        return self.gui.App(tk.Toplevel(self.root), path, fetch_profile=fetch)
 
     def wait_for_raiderio(self, app):
         for _ in range(300):
@@ -572,11 +587,9 @@ class GuiTests(unittest.TestCase):
         self.fail("a Raider.io-lekérés nem fejeződött be")
 
     @staticmethod
-    def add_to(app, name, realm="", item_level="", score=""):
+    def add_to(app, name, realm=""):
         app.name_var.set(name)
         app.realm_var.set(realm)
-        app.item_level_var.set(item_level)
-        app.raiderio_var.set(score)
         app.add_character()
 
     def test_raiderio_button_fetches_item_levels_and_scores(self):
@@ -585,7 +598,7 @@ class GuiTests(unittest.TestCase):
 
         Profile = self.gui.raiderio.Profile
         profiles = {
-            "Thrall": Profile(D("331.25"), D("2543.7")),  # eddig üres: átíródik
+            "Thrall": Profile(D("331.25"), D("2543.7"), "Orc", "Shaman", "Enhancement"),  # eddig üres: beíródik
             "Jaina": Profile(D("320.00"), D("2600.0")),  # az itemlevel kisebb (kérdés), a pontszám nagyobb
             "Arthas": Profile(D("333.00"), None),  # csak egész itemlevel: a pontosabb 333,56 marad
         }
@@ -597,16 +610,18 @@ class GuiTests(unittest.TestCase):
                 raise self.gui.raiderio.CharacterNotFound("nem található a Raider.io-n")
             return profiles[name]
 
-        app = self.raiderio_app(fetch)
-        self.add_to(app, "Thrall", "Draenor")
-        self.add_to(app, "Jaina", "Ragnaros", item_level="325,5", score="2500")
-        self.add_to(app, "Arthas", "Draenor", item_level="333,56")
-        self.add_to(app, "Valaki", "Draenor")
-        self.add_to(app, "Illidan")  # realm nélkül nem lehet lekérni
+        characters = [
+            Character("Thrall", realm="Draenor"),
+            Character("Jaina", realm="Ragnaros", item_level=D("325.50"), raiderio_score=D("2500.0")),
+            Character("Arthas", realm="Draenor", item_level=D("333.56")),
+            Character("Valaki", realm="Draenor"),
+            Character("Illidan"),  # realm nélkül nem lehet lekérni
+        ]
+        app = self.raiderio_app(fetch, characters, fetched_at=datetime.now())
         thrall, jaina, arthas = app.data.characters[:3]
-        app.open_list()
+        app.open_list()  # friss az adat, ezért most nem indul magától lekérés
         window = app.list_window
-        self.assertEqual(app.raiderio_status_var.get(), "Raider.io-adatok: még nincsenek lekérve")
+        self.assertEqual(calls, [])
         with mock.patch.object(self.gui.messagebox, "askyesno", return_value=False) as ask:
             window.raiderio_button.invoke()
             self.assertIn("lekérés folyamatban", app.raiderio_status_var.get())
@@ -614,7 +629,10 @@ class GuiTests(unittest.TestCase):
             self.wait_for_raiderio(app)
         self.assertEqual([call[2] for call in calls], ["Thrall", "Jaina", "Arthas", "Valaki"])
         self.assertEqual(calls[1], ("eu", "Ragnaros", "Jaina"))
-        self.assertEqual((thrall.item_level, thrall.raiderio_score), (D("331.25"), D("2543.7")))
+        self.assertEqual(
+            (thrall.item_level, thrall.raiderio_score, thrall.race, thrall.char_class, thrall.spec),
+            (D("331.25"), D("2543.7"), "Orc", "Shaman", "Enhancement"),
+        )
         self.assertEqual((jaina.item_level, jaina.raiderio_score), (D("325.50"), D("2600.0")))  # nemet mondtunk
         self.assertEqual(arthas.item_level, D("333.56"))
         question, detail = ask.call_args.args[1], ask.call_args.kwargs["detail"]
@@ -623,11 +641,14 @@ class GuiTests(unittest.TestCase):
         self.assertIn("2 karakter adata frissült", detail)
         self.assertIn("• Valaki (Draenor): nem található a Raider.io-n", detail)
         self.assertIn("Realm nélkül kimaradt: Illidan", detail)
-        self.assertRegex(app.raiderio_status_var.get(), r"^Raider\.io-adatok: \d{4}-\d\d-\d\d \d\d:\d\d – 2 karakter")
+        self.assertRegex(
+            app.raiderio_status_var.get(),
+            r"^Raider\.io-adatok: \d{4}-\d\d-\d\d \d\d:\d\d – 2 karakter adata frissült, 1 karakter nem található, "
+            r"1 kisebb értéket nem írtam át$",
+        )
         self.assertEqual(window.tree.set(thrall.uid, "item_level"), "331,25")  # a táblázat is frissült
         saved = load_data(app.data_path)
-        self.assertEqual(saved.characters[0].raiderio_score, D("2543.7"))
-        self.assertIsNotNone(saved.raiderio_fetched_at)
+        self.assertEqual((saved.characters[0].raiderio_score, saved.characters[0].spec), (D("2543.7"), "Enhancement"))
 
         # Újra: a régió a beállításokból jön, és igen válaszra a csökkenés is átíródik.
         app.region_var.set("US")
@@ -637,7 +658,113 @@ class GuiTests(unittest.TestCase):
             self.wait_for_raiderio(app)
         self.assertEqual({call[0] for call in calls}, {"us"})
         self.assertEqual(jaina.item_level, D("320.00"))
-        self.assertIn("1 karakter adata frissült", app.raiderio_status_var.get())
+        self.assertIn("– 1 karakter adata frissült, 1 karakter nem található", app.raiderio_status_var.get())
+
+    def test_raiderio_data_is_fetched_automatically(self):
+        Profile = self.gui.raiderio.Profile
+        profiles = {
+            "Thrall": Profile(D("331.25"), D("2543.7"), "Orc", "Shaman", "Enhancement"),
+            "Jaina": Profile(D("320.00"), D("2600.0"), "Human", "Mage", "Frost"),
+            "Valira": Profile(D("328.00"), D("1500.0"), "Night Elf", "Rogue", "Outlaw"),
+        }
+        calls = []
+
+        def fetch(region, realm, name):
+            calls.append(name)
+            if name not in profiles:
+                raise self.gui.raiderio.CharacterNotFound("nem található a Raider.io-n")
+            return profiles[name]
+
+        app = self.raiderio_app(fetch, [Character("Jaina", "Mage", realm="Ragnaros", item_level=D("325.50"))])
+
+        # Új karakter hozzáadásakor az övé magától lekérődik, és kitölti az üres mezőit.
+        self.add_to(app, "Thrall", "Draenor")
+        self.wait_for_raiderio(app)
+        thrall = app.data.characters[1]
+        self.assertEqual(calls, ["Thrall"])
+        self.assertEqual(
+            (thrall.race, thrall.char_class, thrall.spec, thrall.item_level, thrall.raiderio_score),
+            ("Orc", "Shaman", "Enhancement", D("331.25"), D("2543.7")),
+        )
+        self.assertEqual(
+            app.feedback_var.get(),
+            "✔ Thrall adatai a Raider.io-ról: faj Orc, kaszt Shaman, spec Enhancement, itemlevel 331,25, "
+            "Raider.io 2543,7.",
+        )
+        self.assertIsNone(app.data.raiderio_fetched_at)  # csak egy karakteré jött meg
+        self.add_to(app, "Valaki", "Draenor")  # elírt név
+        self.wait_for_raiderio(app)
+        self.assertEqual(
+            app.feedback_var.get(),
+            "⚠ Valaki (Draenor, EU): nem található a Raider.io-n – ellenőrizd a nevét, a realmjét és a régiót.",
+        )
+        self.assertEqual(str(app.feedback_label.cget("style")), "Error.TLabel")
+        self.add_to(app, "Illidan")  # realm nélkül nincs mit lekérni
+        self.assertEqual(calls, ["Thrall", "Valaki"])
+
+        # Ablak megnyitásakor mindenkiét lekéri, kérdés és üzenetablak nélkül: a kisebb értéket nem írja át.
+        calls.clear()
+        with mock.patch.object(self.gui.messagebox, "askyesno") as ask, mock.patch.object(
+            self.gui.messagebox, "showinfo"
+        ) as info:
+            app.open_mythic()
+            self.assertIn("lekérés folyamatban", app.raiderio_status_var.get())
+            self.wait_for_raiderio(app)
+        ask.assert_not_called()
+        info.assert_not_called()
+        self.assertEqual(calls, ["Jaina", "Thrall", "Valaki"])
+        jaina = app.data.characters[0]
+        self.assertEqual(
+            (jaina.item_level, jaina.raiderio_score, jaina.race, jaina.char_class, jaina.spec),
+            (D("325.50"), D("2600.0"), "Human", "Mage", "Frost"),
+        )
+        self.assertTrue(
+            app.raiderio_status_var.get().endswith(
+                "– 1 karakter adata frissült, 1 karakter nem található, 1 kisebb értéket nem írtam át"
+            )
+        )
+        self.assertIsNotNone(app.data.raiderio_fetched_at)
+
+        # Fél órán belül egy másik ablak megnyitásakor nincs újabb lekérés.
+        app.open_gear()
+        self.assertTrue(app.can_fetch_raiderio())
+        self.assertEqual(len(calls), 3)
+
+        # Ha a szerkesztésnél javítjuk a nevet, az övé újra lekérődik.
+        window = app.mythic_window
+        valaki = app.data.characters[2]
+        self.select_in(window, valaki)
+
+        def fix_name():
+            dialog = next(child for child in window.winfo_children() if isinstance(child, self.gui.CharacterDialog))
+            dialog.name_var.set("Valira")
+            dialog.accept()
+
+        self.root.after(100, fix_name)
+        window.edit_selected()
+        self.wait_for_raiderio(app)
+        self.assertEqual(calls[-1], "Valira")
+        self.assertEqual((valaki.name, valaki.char_class, valaki.item_level), ("Valira", "Rogue", D("328.00")))
+
+    def test_new_character_waits_for_the_running_raiderio_fetch(self):
+        release = threading.Event()
+        calls = []
+
+        def fetch(region, realm, name):
+            calls.append(name)
+            if name == "Jaina":
+                release.wait(5)
+            return self.gui.raiderio.Profile(D("330.00"), D("2000.0"))
+
+        app = self.raiderio_app(fetch, [Character("Jaina", realm="Ragnaros")])
+        app.open_list()  # magától elindul a lekérés (Jainánál várakozik)
+        self.add_to(app, "Thrall", "Draenor")  # közben új karakter: utána kerül sorra
+        self.assertFalse(app.can_fetch_raiderio())
+        release.set()
+        self.wait_for_raiderio(app)
+        self.assertEqual(calls, ["Jaina", "Thrall"])
+        self.assertEqual([c.item_level for c in app.data.characters], [D("330.00"), D("330.00")])
+        self.assertTrue(app.feedback_var.get().startswith("✔ Thrall adatai a Raider.io-ról: itemlevel 330,00"))
 
     def test_raiderio_fetch_problems_are_reported(self):
         calls = []
@@ -646,17 +773,24 @@ class GuiTests(unittest.TestCase):
             calls.append(name)
             raise self.gui.raiderio.RaiderioError("a Raider.io nem érhető el (teszt).")
 
-        app = self.raiderio_app(fetch)
-        self.add_to(app, "Thrall")
-        app.open_gear()
+        app = self.raiderio_app(fetch, [Character("Thrall")])
+        app.open_gear()  # magától indulna a lekérés, de egyik karakternek sincs realmje
         window = app.gear_window
+        self.assertTrue(app.can_fetch_raiderio())
         with mock.patch.object(self.gui.messagebox, "showinfo") as info:
-            window.raiderio_button.invoke()  # egyik karakternek sincs realmje
+            window.raiderio_button.invoke()
         self.assertIn("add meg a karakterek realmjét", info.call_args.args[1])
         self.assertEqual(calls, [])
 
-        self.add_to(app, "Jaina", "Draenor")
+        self.add_to(app, "Jaina", "Draenor")  # az új karakteré magától lekérődne
+        self.wait_for_raiderio(app)
+        self.assertEqual(
+            app.feedback_var.get(),
+            "⚠ Jaina: a Raider.io-adatok lekérése nem sikerült – a Raider.io nem érhető el (teszt).",
+        )
         self.add_to(app, "Arthas", "Draenor")
+        self.wait_for_raiderio(app)
+        calls.clear()
         with mock.patch.object(self.gui.messagebox, "showinfo") as info:
             window.raiderio_button.invoke()
             self.wait_for_raiderio(app)

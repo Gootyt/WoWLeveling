@@ -28,8 +28,17 @@ def gear(reported, mainhand=331, offhand=None, others=333, **extra_slots):
     return {"item_level_equipped": reported, "item_level_total": 0, "source": "s3", "items": items}
 
 
-def profile_data(gear_part=None, score=4186.2):
-    data = {"name": "Ayijeqt", "realm": "Twisting Nether", "region": "eu", "class": "Paladin"}
+def profile_data(gear_part=None, score=4186.2, **fields):
+    data = {
+        "name": "Ayijeqt",
+        "race": "Dwarf",
+        "class": "Paladin",
+        "active_spec_name": "Holy",
+        "active_spec_role": "HEALING",
+        "region": "eu",
+        "realm": "Twisting Nether",
+        **fields,
+    }
     if gear_part is not None:
         data["gear"] = gear_part
     if score is not None:
@@ -43,7 +52,7 @@ class ParseProfileTests(unittest.TestCase):
     def test_item_level_is_computed_from_the_items(self):
         # A Raider.io lefelé kerekítve 333-at ad; a 16 hely átlaga (14 × 333 + 331 + 339) / 16 = 333,25.
         profile = raiderio.parse_profile(profile_data(gear(333, mainhand=331, offhand=339)))
-        self.assertEqual(profile, raiderio.Profile(item_level=D("333.25"), score=D("4186.2")))
+        self.assertEqual(profile, raiderio.Profile(D("333.25"), D("4186.2"), "Dwarf", "Paladin", "Holy"))
 
     def test_two_handed_weapon_counts_twice(self):
         # Nincs mellékkéz: a fegyver kétszer számít (14 × 333 + 2 × 334) / 16 = 333,125 → 333,13.
@@ -59,8 +68,19 @@ class ParseProfileTests(unittest.TestCase):
         del missing["items"]["back"]  # hiányzó tárgy
         self.assertEqual(raiderio.parse_profile(profile_data(missing)).item_level, D("331.00"))
 
+    def test_race_class_and_spec_get_the_programs_names(self):
+        profile = raiderio.parse_profile(
+            profile_data(race="Mag’har orc", **{"class": "death knight", "active_spec_name": "UNHOLY"})
+        )
+        self.assertEqual((profile.race, profile.char_class, profile.spec), ("Mag'har Orc", "Death Knight", "Unholy"))
+        # Amit a program nem ismer, az úgy marad, ahogy a Raider.io-n van.
+        profile = raiderio.parse_profile(profile_data(race="Ogre", **{"class": "Tinker", "active_spec_name": "Gadget"}))
+        self.assertEqual((profile.race, profile.char_class, profile.spec), ("Ogre", "Tinker", "Gadget"))
+
     def test_missing_data(self):
         self.assertEqual(raiderio.parse_profile({}), raiderio.Profile(item_level=None, score=None))
+        empty = raiderio.parse_profile(profile_data(race=" ", **{"class": None, "active_spec_name": 5}))
+        self.assertEqual((empty.race, empty.char_class, empty.spec), (None, None, None))
         self.assertIsNone(raiderio.parse_profile(profile_data(gear(0))).item_level)  # nincs adat a felszerelésről
         self.assertIsNone(raiderio.parse_profile(profile_data({"item_level_equipped": "sok"})).item_level)
         self.assertIsNone(raiderio.parse_profile({"mythic_plus_scores_by_season": []}).score)
@@ -81,7 +101,7 @@ class FetchProfileTests(unittest.TestCase):
         response.__enter__.return_value.read.return_value = body
         with mock.patch.object(raiderio.urllib.request, "urlopen", return_value=response) as urlopen:
             profile = raiderio.fetch_profile("eu", "Twisting Nether", "Ayijeqt")
-        self.assertEqual(profile, raiderio.Profile(D("333.25"), D("4186.2")))
+        self.assertEqual(profile, raiderio.Profile(D("333.25"), D("4186.2"), "Dwarf", "Paladin", "Holy"))
         request = urlopen.call_args.args[0]
         self.assertIn("realm=Twisting%20Nether&name=Ayijeqt", request.full_url)
         self.assertTrue(request.get_header("User-agent"))
@@ -156,6 +176,20 @@ class ProfileChangesTests(unittest.TestCase):
         self.assertEqual(self.changes(arthas, D("333.00")), ([], []))
         self.assertEqual(self.changes(arthas, D("334.00")), (["Arthas: itemlevel 333,56 → 334,00"], []))
         self.assertEqual(self.changes(arthas, D("332.00")), ([], ["Arthas: itemlevel 333,56 → 332,00"]))
+
+    def test_empty_race_class_and_spec_are_filled_in(self):
+        profile = raiderio.Profile(None, None, "Orc", "Shaman", "Enhancement")
+        rises, drops = raiderio.profile_changes(Character("Thrall"), profile)
+        self.assertEqual([change.summary() for change in rises], ["faj Orc", "kaszt Shaman", "spec Enhancement"])
+        self.assertEqual(rises[2].describe(), "Thrall: spec – → Enhancement")
+        self.assertEqual(drops, [])
+        # A már megadott adat marad; a spec csak ugyanannál a kasztnál kerül be.
+        filled = Character("Thrall", "shaman", "Elemental", race="Troll")
+        self.assertEqual(raiderio.profile_changes(filled, profile), ([], []))
+        rises, _drops = raiderio.profile_changes(Character("Thrall", "shaman", race="Orc"), profile)
+        self.assertEqual([change.summary() for change in rises], ["spec Enhancement"])
+        rises, _drops = raiderio.profile_changes(Character("Thrall", "Mage"), profile)
+        self.assertEqual([change.summary() for change in rises], ["faj Orc"])
 
     def test_apply(self):
         thrall = Character("Thrall")

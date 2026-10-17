@@ -857,6 +857,8 @@ def _parallel_last_date(settings: Settings, characters: list[Character], first_d
 
 
 SPEC_SCORES_MAX_AGE = timedelta(hours=8)  # a Murlok.io is 8 óránként frissíti a rangsorait
+# Ablak megnyitásakor ennél régebbi Raider.io-adatoknál indul magától új lekérés.
+RAIDERIO_MAX_AGE = timedelta(minutes=30)
 
 
 @dataclass
@@ -1053,7 +1055,14 @@ class LevelingData:
     spec_scores: SpecScores = field(default_factory=SpecScores)  # a Murlok.io-ról lekért adatok
     # A lista a következő nap céljait mutassa, ha a mai célt minden karakter teljesítette.
     look_ahead: bool = True
-    raiderio_fetched_at: datetime | None = None  # a legutóbbi Raider.io-lekérés ideje (helyi idő)
+    # A legutóbbi olyan Raider.io-lekérés ideje (helyi idő), amely minden karakterre kiterjedt.
+    raiderio_fetched_at: datetime | None = None
+
+    def raiderio_is_stale(self, now: datetime | None = None) -> bool:
+        """Igaz, ha még nem volt Raider.io-lekérés, vagy a legutóbbi régebbi fél óránál."""
+        now = now or datetime.now()
+        fetched_at = self.raiderio_fetched_at
+        return fetched_at is None or not timedelta(0) <= now - fetched_at < RAIDERIO_MAX_AGE
 
     def to_dict(self) -> dict:
         fetched_at = self.raiderio_fetched_at

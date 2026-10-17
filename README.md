@@ -51,9 +51,11 @@ megtervezéséhez és követéséhez.
   karakterek. A fejlécre kattintva bármelyik oszlop szerint átrendezhető.
 - A **Murlok.io** oszlopban a karakter specjének pontszáma látszik a
   [Murlok.io](https://murlok.io) Mythic+ rangsorából (a program magától lekéri).
-- A listaablakok **„Frissítés a Raider.io-ról”** gombja a
-  [Raider.io](https://raider.io)-ról lekéri a karakterek itemlevelét és Mythic+
-  pontszámát a nevük, a realmjük és a beállított régió alapján (lásd lent).
+- A program a [Raider.io](https://raider.io)-ról lekéri a karakterek itemlevelét
+  és Mythic+ pontszámát a nevük, a realmjük és a beállított régió alapján, az üres
+  faj-, kaszt- és specmezőket pedig kitölti. Ez magától történik a listaablakok
+  megnyitásakor és új karakter hozzáadásakor, vagy bármikor a **„Frissítés a
+  Raider.io-ról”** gombbal (lásd lent).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -98,7 +100,10 @@ python wow_leveling.py masik_terv.json
    nem tartozik az új kaszthoz, a spec mező kiürül. Az itemlevel két
    tizedesjegyig (pl. `327` vagy `326,55`), a Raider.io pontszám egy
    tizedesjegyig adható meg (pl. `2543,7`); a weboldalról ezres elválasztóval
-   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül. A
+   másolt alak (`2,543.7`) is jó. Az új karakter a lista végére kerül. Ha a
+   realmje meg van adva, a program rögtön lekéri a Raider.io-ról az adatait, és
+   kitölti az üresen hagyott mezőket (itemlevel, pontszám, faj, kaszt, spec); az
+   eredményt a mezők alatt írja ki (pl. ha a karakter nem található). A
    „Combó ajánlása…” gomb megkérdezi, hogy Alliance vagy Horde karaktert
    ajánljon, majd javasol egy combót (lásd lent), és kérésre kitölti vele a faj, a
    kaszt és a spec mezőt.
@@ -139,10 +144,13 @@ python wow_leveling.py masik_terv.json
    ismeretlen a class/spec), a lista végére kerül. A program átrendezés előtt
    rákérdez. A nézet rendezése utána sem változik (a karakterlistában marad az
    állapot szerinti); az új sorrend a # oszlopban látszik.
-8. **Frissítés a Raider.io-ról**: a listaablakok tetején lévő gomb minden olyan
-   karakter itemlevelét és Raider.io pontszámát lekéri, amelynél meg van adva a
-   realm (lásd lent). A lekérés a háttérben fut, az állapota a gomb mellett
-   látszik.
+8. **Raider.io-adatok**: a listaablakok (karakterlista, Gear, Mythic+)
+   megnyitásakor a program magától lekéri minden olyan karakter adatait,
+   amelynél meg van adva a realm, ha a legutóbbi ilyen lekérés régebbi fél
+   óránál. Ugyanígy lekéri egy karakterét, ha a szerkesztésnél megváltozik a
+   neve vagy a realmje. A listaablakok tetején lévő „Frissítés a Raider.io-ról”
+   gombbal bármikor újra lekérheted (lásd lent). A lekérés a háttérben fut, az
+   állapota és az eredménye a gomb mellett látszik.
 
 ## Hogyan számol a program?
 
@@ -305,7 +313,7 @@ pontszámhoz, de nem pontosan ugyanaz.
 
 **Raider.io-lekérés.** A program karakterenként egy kérést küld a Raider.io
 nyilvános API-jának (`https://raider.io/api/v1/characters/profile`) a karakter
-nevével, realmjével és a beállított régióval, és két adatot ír be a válaszból:
+nevével, realmjével és a beállított régióval, és ezeket írja be a válaszból:
 
 - **Itemlevel**: a felvett tárgyak átlagos itemlevele. A Raider.io ezt sokszor
   lefelé kerekítve, egész számként adja meg, ezért a program a tárgyak
@@ -314,15 +322,25 @@ nevével, realmjével és a beállított régióval, és két adatot ír be a v�
   hiányzik egy tárgy), a Raider.io egész értékét veszi; ilyenkor a kézzel beírt,
   ugyanilyen egész részű pontosabb érték (pl. 333,56 a 333 helyett) megmarad.
 - **Raider.io pontszám**: az aktuális szezon összesített Mythic+ pontszáma.
+- **Faj, kaszt és spec**: csak akkor, ha a mező üres. A spec a karakter
+  Raider.io-n látható aktív specje, és csak akkor kerül be, ha a karakter
+  kasztja ugyanaz, mint a Raider.io-n.
 
 - A nagyobb értékeket (és az eddig üreseket) a program magától beírja. Ha a
-  Raider.io kisebb értéket mutat, mint ami be van írva, előbb rákérdez: a
-  Raider.io a karaktereket időnként frissíti a játékból, így az adata néhány
+  Raider.io kisebb itemlevelt vagy pontszámot mutat, mint ami be van írva, azt
+  csak a gombbal indított lekérésnél írja át, és akkor is csak rákérdezés után:
+  a Raider.io a karaktereket időnként frissíti a játékból, így az adata néhány
   órával régebbi is lehet a kézzel beírtnál.
+- A magától induló lekérés nem kérdez és nem nyit ablakot: az eredménye (pl. „2
+  karakter adata frissült, 1 karakter nem található, 1 kisebb értéket nem írtam
+  át”) a gomb mellett látszik, új karakternél pedig a hozzáadás mezői alatt. A
+  gombbal indított lekérés végén a program felsorolja, kit nem talált, és kinél
+  hiányzik a realm.
 - A realm nélküli karaktereket kihagyja. Akit a Raider.io nem ismer (elírt név
-  vagy realm), azt a lekérés végén felsorolja; a többi karakter adata ettől még
-  frissül. Ha a Raider.io nem érhető el, a lekérés leáll, és a hiba a gomb
-  mellett is látszik.
+  vagy realm), annak az adatai nem változnak, a többieké ettől még frissül. Ha a
+  Raider.io nem érhető el, a lekérés leáll, és a hiba a gomb mellett is látszik.
+- Ha lekérés közben adsz hozzá új karaktert, az övé a futó lekérés után
+  következik.
 - Internetkapcsolat kell hozzá. A karakterek nevén, realmjén és a régión kívül a
   program nem küld semmit. A legutóbbi lekérés ideje az adatfájlba is bekerül.
 

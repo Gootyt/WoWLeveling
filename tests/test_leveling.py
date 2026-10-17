@@ -861,6 +861,17 @@ class PersistenceTests(unittest.TestCase):
         loaded = load_data(self.path)
         self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("us", data.raiderio_fetched_at))
 
+    def test_raiderio_data_gets_stale_after_half_an_hour(self):
+        data = LevelingData(make_settings())
+        now = datetime(2026, 10, 17, 14, 0)
+        self.assertTrue(data.raiderio_is_stale(now))  # még nem volt lekérés
+        data.raiderio_fetched_at = datetime(2026, 10, 17, 13, 31)
+        self.assertFalse(data.raiderio_is_stale(now))
+        data.raiderio_fetched_at = datetime(2026, 10, 17, 13, 30)
+        self.assertTrue(data.raiderio_is_stale(now))
+        data.raiderio_fetched_at = datetime(2026, 10, 17, 15, 0)  # a jövőben (pl. átállított óra)
+        self.assertTrue(data.raiderio_is_stale(now))
+
     def test_look_ahead_switch_is_saved(self):
         save_data(self.path, LevelingData(make_settings(), look_ahead=False))
         self.assertFalse(load_data(self.path).look_ahead)

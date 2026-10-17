@@ -5,7 +5,7 @@ A Raider.io nyilvános API-ja kulcs nélkül is használható; karakterenként e
     https://raider.io/api/v1/characters/profile?region=eu&realm=Draenor&name=Thrall
         &fields=gear,mythic_plus_scores_by_season:current
 
-A válaszból két adat kell:
+A válaszból ezek az adatok kellenek:
 
 * az itemlevel: a felvett tárgyak átlagos itemlevele (gear.item_level_equipped). Ezt a
   Raider.io sokszor lefelé kerekítve, egész számként adja meg, ezért a program a tárgyak
@@ -13,7 +13,9 @@ A válaszból két adat kell:
   kétszer számít). Ha ez nem egyezik a Raider.io értékével (pl. hiányzik egy tárgy),
   a Raider.io értéke marad;
 * a pontszám: az aktuális szezon összesített Mythic+ pontszáma
-  (mythic_plus_scores_by_season[0].scores.all).
+  (mythic_plus_scores_by_season[0].scores.all);
+* a faj, a kaszt és az aktív spec (race, class, active_spec_name): ezek csak az üres
+  mezőkbe kerülnek be.
 
 A Raider.io a karakterek adatait időnként frissíti a játékból, így az adat néhány órával
 (ritkán napokkal) régebbi is lehet a játékbelinél. Ezért a program a csökkenő értékeket
@@ -40,6 +42,7 @@ from leveling import (
     format_item_level,
     format_raiderio_score,
 )
+from wow_data import find_class, find_race, find_spec
 
 PROFILE_URL = "https://raider.io/api/v1/characters/profile"
 FIELDS = "gear,mythic_plus_scores_by_season:current"
@@ -59,10 +62,14 @@ class CharacterNotFound(RaiderioError):
 
 @dataclass(frozen=True)
 class Profile:
-    """Egy karakter Raider.io-ról lekért adatai (None: nincs ilyen adat)."""
+    """Egy karakter Raider.io-ról lekért adatai (None: nincs ilyen adat). A faj, a kaszt és a
+    spec a program saját elnevezésével, ha ismeri (pl. „Death Knight”)."""
 
     item_level: Decimal | None
     score: Decimal | None
+    race: str | None = None
+    char_class: str | None = None
+    spec: str | None = None  # a karakter aktív specje
 
 
 def profile_url(region: str, realm: str, name: str) -> str:
@@ -152,30 +159,54 @@ def _score(seasons: object) -> Decimal | None:
     return None if score is None else score.quantize(RAIDERIO_STEP, rounding=ROUND_HALF_UP)
 
 
+def _text(value: object) -> str | None:
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
 def parse_profile(data: dict) -> Profile:
-    """A Raider.io válaszából az itemlevel és az aktuális szezon pontszáma."""
-    return Profile(item_level=_item_level(data.get("gear")), score=_score(data.get("mythic_plus_scores_by_season")))
+    """A Raider.io válaszából az itemlevel, az aktuális szezon pontszáma, a faj, a kaszt és a spec."""
+    race, char_class, spec = _text(data.get("race")), _text(data.get("class")), _text(data.get("active_spec_name"))
+    known_class = find_class(char_class) if char_class else None
+    return Profile(
+        item_level=_item_level(data.get("gear")),
+        score=_score(data.get("mythic_plus_scores_by_season")),
+        race=(find_race(race) or race) if race else None,
+        char_class=known_class or char_class,
+        spec=((find_spec(known_class, spec) if known_class else None) or spec) if spec else None,
+    )
+
+
+# A Raider.io-ról beírható adatok: a Character mezője → (megnevezés, formázás).
+_FIELDS = {
+    "item_level": ("itemlevel", format_item_level),
+    "raiderio_score": ("Raider.io", format_raiderio_score),
+    "race": ("faj", str),
+    "char_class": ("kaszt", str),
+    "spec": ("spec", str),
+}
 
 
 @dataclass(frozen=True)
 class Change:
-    """A Raider.io szerint egy karakter egyik értéke ennyire változna."""
+    """A Raider.io szerint egy karakter egyik adata erre változna."""
 
     character: Character
-    attribute: str  # "item_level" vagy "raiderio_score"
-    old: Decimal | None
-    new: Decimal
+    attribute: str  # a Character mezője, lásd _FIELDS
+    old: Decimal | str | None  # None vagy "": eddig üres
+    new: Decimal | str
 
     def apply(self) -> None:
         setattr(self.character, self.attribute, self.new)
 
+    def summary(self) -> str:
+        """Az új érték, pl. „itemlevel 329,63” vagy „kaszt Shaman”."""
+        label, form = _FIELDS[self.attribute]
+        return f"{label} {form(self.new)}"
+
     def describe(self) -> str:
         """Pl. „Thrall: itemlevel 331,25 → 329,63”."""
-        if self.attribute == "item_level":
-            label, form = "itemlevel", format_item_level
-        else:
-            label, form = "Raider.io", format_raiderio_score
-        old = "–" if self.old is None else form(self.old)
+        label, form = _FIELDS[self.attribute]
+        old = "–" if self.old is None or self.old == "" else form(self.old)
         return f"{self.character.name}: {label} {old} → {form(self.new)}"
 
 
@@ -185,9 +216,18 @@ def profile_changes(character: Character, profile: Profile) -> tuple[list[Change
     A növekedések (és az eddig üres értékek) magától átírhatók. A csökkenéseknél lehet,
     hogy csak a Raider.io adata régebbi a kézzel beírtnál, ezért ezekről előbb kérdezni kell.
     Ha a Raider.io csak egész itemlevelet ad, a beírt, ugyanilyen egész részű, pontosabb
-    érték marad.
+    érték marad. A faj, a kaszt és a spec csak az üres mezőbe kerül be; a spec csak akkor,
+    ha a karakter kasztja ugyanaz, mint a Raider.io-n.
     """
     rises, drops = [], []
+    if profile.race and not character.race:
+        rises.append(Change(character, "race", "", profile.race))
+    if profile.char_class and not character.char_class:
+        rises.append(Change(character, "char_class", "", profile.char_class))
+    char_class = character.char_class or profile.char_class
+    same_class = char_class is not None and (find_class(char_class) or char_class) == profile.char_class
+    if profile.spec and not character.spec and same_class:
+        rises.append(Change(character, "spec", "", profile.spec))
     for attribute, new in (("item_level", profile.item_level), ("raiderio_score", profile.score)):
         old = getattr(character, attribute)
         if new is None or new == old:
