@@ -91,7 +91,8 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
-LIST_ORDER = ("deviation", False)  # a karakterlista mindig a szinteltérés szerint nyílik meg (elöl a lemaradók)
+# A karakterlista mindig az állapot szerint nyílik meg: elöl a legsürgősebbek, a célszintet elértek a végén.
+LIST_ORDER = ("status", False)
 GEAR_ORDER = ("item_level_deviation", False)  # a Gear ablak alapból az itemlevel-eltérés szerint rendez
 MYTHIC_ORDER = ("raiderio_deviation", False)  # a Mythic+ ablak alapból a Raider.io-különbözet szerint
 
@@ -533,8 +534,8 @@ class CharacterListWindow(tk.Toplevel):
 
     TITLE = "Karakterek listája"
     # Az App ezekben az attribútumaiban tartja nyilván az ablakot és a nézet rendezését. A Gear és
-    # a Mythic+ ablak rendezése a bezárás után is megmarad, a karakterlista viszont mindig a
-    # szinteltérés szerint nyílik meg (lásd App.open_list).
+    # a Mythic+ ablak rendezése a bezárás után is megmarad, a karakterlista viszont mindig az
+    # állapot szerint nyílik meg (lásd App.open_list).
     WINDOW_ATTRIBUTE = "list_window"
     SORT_ATTRIBUTE = "list_sort"
     EDITED_FIELD = LEVEL_FIELD  # ezt lehet módosítani az ablak alján a kijelölt karakternél
@@ -543,8 +544,9 @@ class CharacterListWindow(tk.Toplevel):
         "A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor a következő "
         "napé), a „Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
         "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ rangsorában. "
-        "A lista mindig a szinteltérés szerint rendezve nyílik meg (elöl a leginkább lemaradt karakter); "
-        "a fejlécekre kattintva másképp is rendezheted, a # oszlop az eredeti sorrend."
+        "A lista mindig az „Állapot” szerint rendezve nyílik meg: elöl a legsürgősebbek, a végén a "
+        "célszintet elért karakterek. A fejlécekre kattintva másképp is rendezheted; a # oszlop az eredeti "
+        "sorrend."
     )
 
     # azonosító, fejléc, igazítás, nyúlhat-e; a szélesség a tartalomhoz igazodik
@@ -952,7 +954,7 @@ class CharacterListWindow(tk.Toplevel):
         if not messagebox.askyesno(title, question, parent=self):
             return
         data.characters[:] = new_order
-        # A nézet rendezése marad (a karakterlistában a szinteltérés); az új sorrend a # oszlopban látszik.
+        # A nézet rendezése marad (a karakterlistában az állapot szerinti); az új sorrend a # oszlopban látszik.
         self.app.data_changed(select=self._selected_character())
 
     def move_selected(self, offset: int) -> None:
@@ -1592,7 +1594,7 @@ class App:
 
     def open_list(self) -> None:
         if self.list_window is None or not self.list_window.winfo_exists():
-            self.list_sort = LIST_ORDER  # megnyitáskor mindig a szinteltérés szerint
+            self.list_sort = LIST_ORDER  # megnyitáskor mindig az állapot szerint
         self._open_window(CharacterListWindow)
 
     def open_gear(self) -> None:

@@ -895,12 +895,14 @@ class GuiTests(unittest.TestCase):
         window = self.app.list_window
         tree = window.tree
 
-        # Alapból a szinteltérés szerint növekvő sorrendben: elöl a leginkább lemaradt karakter.
+        # Alapból az állapot szerint rendez (lásd lent); a fejlécre kattintva a szinteltérés szerint.
         self.assertEqual(self.app.list_sort, self.gui.LIST_ORDER)
+        self.assertEqual((tree.heading("status", "text"), tree.heading("position", "text")), ("Állapot ▲", "#"))
+        self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
+        window.sort_by("deviation")
         self.assertEqual(self.names(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
         self.assertEqual([row["deviation"] for row in self.rows()], ["−4,90", "−2,96", "−2,86", "+43,77"])
-        self.assertEqual((tree.heading("deviation", "text"), tree.heading("position", "text")), ("Szinteltérés ▲", "#"))
-        self.assertTrue(str(tree.heading("deviation", "command")))  # a fejléc kattintható
+        self.assertEqual((tree.heading("deviation", "text"), tree.heading("status", "text")), ("Szinteltérés ▲", "Állapot"))
         window.sort_by("deviation")  # újabb kattintásra megfordul
         self.assertEqual(self.names(), ["Jaina", "Arthas", "Sylvanas", "Thrall"])
         self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
@@ -926,12 +928,13 @@ class GuiTests(unittest.TestCase):
             window.delete_selected()
         self.assertEqual(window.selected_var.get(), "Thrall")
 
-        # Újranyitáskor mindig a szinteltérés szerinti növekvő sorrend látszik.
+        # Újranyitáskor ismét az állapot szerinti sorrend látszik (mindenki ütemben: a szinteltérés dönt).
         window.close()
         self.app.open_list()
         window = self.app.list_window
         self.assertEqual(self.names(), ["Thrall", "Arthas", "Sylvanas"])  # 3 karakterrel: −4,90 / −3,45 / −2,96
-        self.assertEqual(window.tree.heading("deviation", "text"), "Szinteltérés ▲")
+        self.assertEqual(window.tree.heading("status", "text"), "Állapot ▲")
+        self.assertEqual(window.tree.heading("deviation", "text"), "Szinteltérés")
 
         # A # oszlop visszaállítja az eredeti sorrendet, és újra lehet átrendezni.
         window.sort_by("position")
@@ -940,6 +943,26 @@ class GuiTests(unittest.TestCase):
         self.select(self.app.data.characters[1])
         self.assertNotIn("disabled", window._order_widgets[0].state())
         self.assertEqual(window.order_hint_var.get(), "")
+
+    def test_list_opens_sorted_by_status_with_finished_characters_last(self):
+        today = date.today()
+        self.app.start_var.set(format_date(today - timedelta(days=10)))
+        self.app.first_var.set(format_date(today - timedelta(days=1)))
+        self.app.last_var.set(format_date(today + timedelta(days=10)))
+        self.add("Thrall", level="90")  # célszinten: kész (a céldátuma már lejárt, a szinteltérése 0,00)
+        self.add("Jaina", level="80")  # előrébb jár: +9,08
+        self.add("Arthas", level="30")  # lemaradásban: −28,58
+        self.add("Sylvanas", level="60")  # előrébb jár: +12,39
+        self.app.open_list()
+        window = self.app.list_window
+
+        # Elöl a legsürgősebb, azonos állapotban a szinteltérés dönt; a célszintet elért karakter a végén.
+        self.assertEqual(self.app.list_sort, ("status", False))
+        self.assertEqual(self.names(), ["Arthas", "Jaina", "Sylvanas", "Thrall"])
+        self.assertEqual(self.rows()[-1]["status"], "Kész – elérte a célszintet")
+        self.assertEqual(window.tree.heading("status", "text"), "Állapot ▲")
+        window.sort_by("deviation")  # a szinteltérés szerint a kész karakter (0,00) középre kerülne
+        self.assertEqual(self.names(), ["Arthas", "Thrall", "Jaina", "Sylvanas"])
 
     def test_level_changes_reordering_and_deletion(self):
         self.add("Thrall", "Jaina", "Arthas")
