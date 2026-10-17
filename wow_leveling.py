@@ -92,6 +92,7 @@ OTHER_MONTH_COLOR = "#9aa0a6"
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
 PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
 GEAR_ORDER = ("item_level_deviation", False)  # a Gear ablak alapból az itemlevel-eltérés szerint rendez
+MYTHIC_ORDER = ("raiderio_deviation", False)  # a Mythic+ ablak alapból a Raider.io-különbözet szerint
 
 BEHIND_COLOR = "#b35c00"
 
@@ -1036,14 +1037,16 @@ GEAR_HINT = (
     "első karakterénél a célitemlevel − X, minden következőnél újabb X-szel kevesebb. Az "
     "„Itemlevel-eltérés” a valós és a tervezett itemlevel különbsége (+: a terv felett, −: alatta); a "
     "táblázat alapból eszerint van rendezve. X-et a program úgy állítja be, hogy a 2. sorban 0 legyen az "
-    "eltérés, így az 1. sorban negatív. Aki elérte a célitemlevelt, lekerül a listáról, és a többiekkel "
-    "számol tovább."
+    "eltérés, így az 1. sorban negatív."
 )
 RAIDERIO_HINT = (
-    "A „Tervezett Raider.io” ugyanebben a sorrendben a karakter specjének Murlok.io-pontszáma × "
-    "(100% − k·x), ahol k a karakter helye; a „Raider.io-különbözet” a valós és a tervezett pontszám "
-    "különbsége. x-et a program úgy állítja be, hogy a 2. karakternél 0 legyen a különbözet."
+    "A „Tervezett Raider.io” a Murlok.io szerinti sorrendben (mint a „Murlok.io szerinti sorrend” "
+    "gombnál) a karakter specjének Murlok.io-pontszáma × (100% − k·x), ahol k a karakter helye. A "
+    "„Raider.io-különbözet” a valós és a tervezett pontszám különbsége (+: a terv felett, −: alatta); a "
+    "táblázat alapból eszerint van rendezve. x-et a program úgy állítja be, hogy a 2. karakternél 0 "
+    "legyen a különbözet."
 )
+REACHED_HINT = "Aki elérte a célitemlevelt, lekerül a listáról, és a többiekkel számol tovább."
 SORT_HINT = "A fejlécekre kattintva más oszlop szerint is rendezheted."
 RAIDERIO_COLUMNS = (
     ("planned_raiderio", "Tervezett Raider.io", "center", False),
@@ -1067,13 +1070,13 @@ class GearWindow(CharacterListWindow):
         if base[0] not in GEAR_HIDDEN_COLUMNS
         for column in ((base, *GEAR_COLUMNS) if base[0] == "item_level" else (base,))
     )
-    HINT_TEXT = f"{GEAR_HINT} {SORT_HINT}"
+    HINT_TEXT = f"{GEAR_HINT} {REACHED_HINT} {SORT_HINT}"
 
     def _build(self) -> None:
         super()._build()
-        self.gear_info_var = tk.StringVar()
-        self.gear_info_label = ttk.Label(self.table_frame.master, textvariable=self.gear_info_var)
-        self.gear_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
+        self.info_var = tk.StringVar()  # a terv összefoglalója a táblázat fölött
+        self.info_label = ttk.Label(self.table_frame.master, textvariable=self.info_var)
+        self.info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
 
     def _row_tags(self, plan: CharacterPlan) -> tuple[str, ...]:
         return ()  # az „Állapot” oszlop nélkül a szintezési állapot színe sem kell
@@ -1090,57 +1093,60 @@ class GearWindow(CharacterListWindow):
 
     def refresh(self, select: Character | None = None) -> None:
         super().refresh(select)
+        self._update_info()
+
+    def _show_info(self, text: str, problem: bool = False) -> None:
+        target = self.app.data.settings.target_item_level
+        reached = sum(1 for character in self.app.data.characters if reached_target_item_level(character, target))
+        if reached:
+            text += f"   ·   Célitemlevelen (nem látszik a listán): {reached} karakter"
+        self.info_var.set(text)
+        self.info_label.configure(style="Late.TLabel" if problem else "Strong.TLabel")
+
+    def _update_info(self) -> None:
+        """A tervezett itemlevel összefoglalója a táblázat fölött."""
         data = self.app.data
         target = data.settings.target_item_level
         item_levels = plan_item_levels(data.characters, data.spec_scores, target)
-        reached = len(item_levels.reached)
-        reached_text = f"   ·   Célitemlevelen (nem látszik a listán): {reached} karakter" if reached else ""
         if item_levels.step is None:
-            self.gear_info_var.set(f"Tervezett itemlevel: {item_levels.problem}{reached_text}")
-            self.gear_info_label.configure(style="Late.TLabel")
+            self._show_info(f"Tervezett itemlevel: {item_levels.problem}", problem=True)
         else:
-            self.gear_info_var.set(
+            self._show_info(
                 f"Célitemlevel: {format_item_level(target)}   ·   X = {item_level_step_text(item_levels.step)} "
-                f"(ennyivel csökken a tervezett itemlevel karakterenként){reached_text}"
+                "(ennyivel csökken a tervezett itemlevel karakterenként)"
             )
-            self.gear_info_label.configure(style="Strong.TLabel")
 
 
 class MythicPlusWindow(GearWindow):
-    """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel. A Raider.io
-    után a tervezett Raider.io pontszámot és a különbözetet is mutatja, alul pedig a kijelölt
-    karakter Raider.io pontszáma állítható."""
+    """A Gear ablak másolata a Mythic+ követéséhez, saját ablakban és saját rendezéssel. A tervezett
+    itemlevel helyett a tervezett Raider.io pontszámot és a különbözetet mutatja (alapból e szerint
+    rendez), alul pedig a kijelölt karakter Raider.io pontszáma állítható."""
 
     TITLE = "Mythic+"
     WINDOW_ATTRIBUTE = "mythic_window"
     SORT_ATTRIBUTE = "mythic_sort"
     EDITED_FIELD = RAIDERIO_FIELD
+    # A Gear ablak oszlopai a tervezett itemlevel és az eltérés nélkül; a Raider.io után a
+    # tervezett Raider.io és a különbözet.
     COLUMNS = tuple(
         column
         for base in GearWindow.COLUMNS
+        if base not in GEAR_COLUMNS
         for column in ((base, *RAIDERIO_COLUMNS) if base[0] == "raiderio" else (base,))
     )
-    HINT_TEXT = f"{GEAR_HINT} {RAIDERIO_HINT} {SORT_HINT}"
+    HINT_TEXT = f"{RAIDERIO_HINT} {REACHED_HINT} {SORT_HINT}"
 
-    def _build(self) -> None:
-        super()._build()
-        self.raiderio_info_var = tk.StringVar()
-        self.raiderio_info_label = ttk.Label(self.table_frame.master, textvariable=self.raiderio_info_var)
-        self.raiderio_info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)
-
-    def refresh(self, select: Character | None = None) -> None:
-        super().refresh(select)
+    def _update_info(self) -> None:
+        """A tervezett Raider.io összefoglalója a táblázat fölött."""
         data = self.app.data
         raiderio = plan_raiderio_scores(data.characters, data.spec_scores, data.settings.target_item_level)
         if raiderio.step is None:
-            self.raiderio_info_var.set(f"Tervezett Raider.io: {raiderio.problem}")
-            self.raiderio_info_label.configure(style="Late.TLabel")
+            self._show_info(f"Tervezett Raider.io: {raiderio.problem}", problem=True)
         else:
-            self.raiderio_info_var.set(
+            self._show_info(
                 f"Tervezett Raider.io: x = {percent_step_text(raiderio.step)} (ennyivel kisebb a Murlok.io-"
                 "pontszámhoz mért arány karakterenként; a 2. karakternél 0 a különbözet)"
             )
-            self.raiderio_info_label.configure(style="Strong.TLabel")
 
 
 class App:
@@ -1160,7 +1166,7 @@ class App:
         self.mythic_window: MythicPlusWindow | None = None
         self.list_sort = PLAN_ORDER  # a lista nézetének rendezése (oszlop, csökkenő-e)
         self.gear_sort = GEAR_ORDER  # a Gear ablak rendezése
-        self.mythic_sort = GEAR_ORDER  # a Mythic+ ablak rendezése
+        self.mythic_sort = MYTHIC_ORDER  # a Mythic+ ablak rendezése
         self._scale = max(1.0, root.winfo_fpixels("1i") / 96)
         self._today = date.today()
         self._save_error_shown = False

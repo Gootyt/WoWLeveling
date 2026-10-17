@@ -27,10 +27,11 @@ megtervezéséhez és követéséhez.
   alapból az eltérés szerint rendezve (lásd lent), és a sorok nincsenek színezve. A
   kijelölt karakternek itt az itemlevele módosítható, és aki elérte a
   célitemlevelt, lekerül a listáról.
-- A főablak **Mythic+** gombja a Gear ablak másolatát nyitja meg külön ablakban,
-  saját rendezéssel. Ebben a Raider.io oszlop után a **tervezett Raider.io** és a
-  **Raider.io-különbözet** is látszik (lásd lent), alul pedig a kijelölt karakter
-  Raider.io pontszáma állítható.
+- A főablak **Mythic+** gombja a Gear ablak változatát nyitja meg külön ablakban,
+  saját rendezéssel. Ebben a tervezett itemlevel és az itemlevel-eltérés helyett a
+  Raider.io oszlop után a **tervezett Raider.io** és a **Raider.io-különbözet**
+  látszik (lásd lent), alapból a különbözet szerint rendezve; alul pedig a kijelölt
+  karakter Raider.io pontszáma állítható.
 - A karakterek listája **külön ablakban** nyílik meg. Karakterenként látszik a
   céldátum, a **mai cél** (amilyen szintet a mai nap végéig el kell érni), a
   **szinteltérés** (hány szinttel jár a terv előtt vagy mögött), a hátralévő napok,
@@ -101,8 +102,8 @@ python wow_leveling.py masik_terv.json
    egy másik ablakban: a rendezése független a karakterlistáétól, a szintezéssel
    kapcsolatos oszlopok helyett a tervezett itemlevel oszlopai vannak benne, és a
    célitemlevelt elért karakterek nem látszanak. A **Mythic+** gomb a Gear ablak
-   másolatát nyitja meg (saját rendezéssel), amelyben alul a Raider.io pontszám
-   állítható.
+   változatát nyitja meg (saját rendezéssel): ebben a tervezett itemlevel helyett a
+   tervezett Raider.io oszlopai vannak, és alul a Raider.io pontszám állítható.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
    gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
@@ -217,10 +218,10 @@ sorrendben, mint a tervezett itemlevelnél, a k-adik karakter tervezett Raider.i
 pontszáma a specje Murlok.io-pontszámának (100% − k·x)-szerese: az elsőé
 (100% − x)-szerese, a másodiké (100% − 2x)-szerese, és így tovább (0-nál nem
 kevesebb). A **Raider.io-különbözet** a valós és a tervezett pontszám különbsége
-(+: a terv felett). x-et a program magától állítja be úgy, hogy a második
-karakternél 0 legyen a különbözet: ha a második karakter Raider.io pontszáma R, a
-specjéé a Murlok.io-n M, akkor x = (1 − R/M) / 2. Az x értéke a táblázat fölött
-látszik.
+(+: a terv felett), a Mythic+ ablak alapból eszerint rendez növekvő sorrendben.
+x-et a program magától állítja be úgy, hogy a második karakternél 0 legyen a
+különbözet: ha a második karakter Raider.io pontszáma R, a specjéé a Murlok.io-n
+M, akkor x = (1 − R/M) / 2. Az x értéke a táblázat fölött látszik.
 
 - Ha a második karakternek nincs Raider.io vagy Murlok.io pontszáma, a sorrendben
   következő olyan karakter különbözete lesz 0, akinek mindkettő megvan.

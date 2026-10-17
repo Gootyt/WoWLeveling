@@ -155,13 +155,23 @@ class GuiTests(unittest.TestCase):
 
         self.app.open_gear()
         gear = self.app.gear_window
-        # A Gear ablak oszlopai ugyanabban a sorrendben, ugyanazzal a tartalommal (plusz a Raider.io-terv).
+        # A Gear ablak oszlopai a tervezett itemlevel és az eltérés nélkül, ugyanabban a sorrendben, ugyanazzal
+        # a tartalommal; helyettük a Raider.io-terv oszlopai vannak benne.
         gear_columns = [column[0] for column in gear.COLUMNS]
         mythic_columns = [column[0] for column in mythic.COLUMNS]
-        self.assertEqual([key for key in mythic_columns if key in gear_columns], gear_columns)
-        self.assertEqual([{key: row[key] for key in gear_columns} for row in self.rows(mythic)], self.rows(gear))
-        self.assertEqual(self.names(mythic), ["Thrall", "Jaina"])  # eltérés szerint; Arthas lekerült
-        self.assertEqual(mythic.gear_info_var.get(), gear.gear_info_var.get())
+        common = [key for key in gear_columns if key in mythic_columns]
+        self.assertEqual(set(gear_columns) - set(common), {"planned_item_level", "item_level_deviation"})
+        self.assertEqual([key for key in mythic_columns if key in gear_columns], common)
+        self.assertEqual(
+            [{key: row[key] for key in common} for row in self.rows(mythic)],
+            [{key: row[key] for key in common} for row in self.rows(gear)],
+        )
+        self.assertEqual(self.names(mythic), ["Thrall", "Jaina"])  # Arthas lekerült
+        self.assertEqual(self.app.mythic_sort, self.gui.MYTHIC_ORDER)  # alapból a Raider.io-különbözet szerint
+        self.assertEqual(mythic.tree.heading("raiderio_deviation", "text"), "Raider.io-különbözet ▲")
+        info = mythic.info_var.get()  # a táblázat fölött a Raider.io-terv, nem az itemlevelé
+        self.assertTrue(info.startswith("Tervezett Raider.io: "))
+        self.assertTrue(info.endswith("Célitemlevelen (nem látszik a listán): 1 karakter"))
         mythic.sort_by("name")  # saját rendezése van
         self.assertEqual((self.names(mythic), self.names(gear)), (["Jaina", "Thrall"], ["Thrall", "Jaina"]))
         self.assertEqual((self.app.mythic_sort, self.app.gear_sort), (("name", False), self.gui.GEAR_ORDER))
@@ -213,7 +223,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(columns[start : start + 4], ["raiderio", "planned_raiderio", "raiderio_deviation", "murlok"])
         self.assertEqual(
             (mythic.tree.heading("planned_raiderio", "text"), mythic.tree.heading("raiderio_deviation", "text")),
-            ("Tervezett Raider.io", "Raider.io-különbözet"),
+            ("Tervezett Raider.io", "Raider.io-különbözet ▲"),  # alapból eszerint rendez
         )
         # Murlok.io-sorrend: Uther, Jaina, Varian; Jaina a 2.: 3600 · (1 − 2x) = 3000, x = 8,33%.
         rows = {row["name"]: (row["planned_raiderio"], row["raiderio_deviation"]) for row in self.rows(mythic)}
@@ -227,12 +237,15 @@ class GuiTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            mythic.raiderio_info_var.get(),
+            mythic.info_var.get(),
             "Tervezett Raider.io: x = kb. 8,33% (ennyivel kisebb a Murlok.io-pontszámhoz mért arány "
             "karakterenként; a 2. karakternél 0 a különbözet)",
         )
-        mythic.sort_by("raiderio_deviation")
+        # Alapból a Raider.io-különbözet szerint növekvő sorrendben; újabb kattintásra megfordul.
         self.assertEqual(self.names(mythic), ["Uther", "Jaina", "Varian", "Anduin"])
+        mythic.sort_by("raiderio_deviation")
+        self.assertEqual(self.names(mythic), ["Varian", "Jaina", "Uther", "Anduin"])
+        mythic.sort_by("raiderio_deviation")
 
         # A Raider.io pontszám módosítása után újraszámol (Jaina továbbra is 0-n áll).
         uther = self.app.data.characters[1]
@@ -244,7 +257,7 @@ class GuiTests(unittest.TestCase):
 
         self.app.data.spec_scores = SpecScores()  # pontszámok nélkül nincs terv
         self.app.data_changed()
-        self.assertIn("még nincsenek Murlok.io-pontszámok", mythic.raiderio_info_var.get())
+        self.assertIn("még nincsenek Murlok.io-pontszámok", mythic.info_var.get())
         self.app.open_gear()  # a Gear ablakban nincsenek ilyen oszlopok
         self.assertNotIn("planned_raiderio", [column[0] for column in self.app.gear_window.COLUMNS])
 
@@ -322,7 +335,7 @@ class GuiTests(unittest.TestCase):
         )
         self.assertEqual(gear.tree.heading("item_level_deviation", "text"), "Itemlevel-eltérés ▲")
         self.assertEqual(
-            gear.gear_info_var.get(),
+            gear.info_var.get(),
             "Célitemlevel: 330,00   ·   X = 5,00 (ennyivel csökken a tervezett itemlevel karakterenként)",
         )
 
@@ -342,8 +355,8 @@ class GuiTests(unittest.TestCase):
             [(row["planned_item_level"], row["item_level_deviation"]) for row in self.rows(gear)],
             [("312,00", "−2,00"), ("321,00", "0,00"), ("303,00", "–")],
         )
-        self.assertIn("Célitemlevelen (nem látszik a listán): 1 karakter", gear.gear_info_var.get())
-        self.assertIn("X = 9,00", gear.gear_info_var.get())
+        self.assertIn("Célitemlevelen (nem látszik a listán): 1 karakter", gear.info_var.get())
+        self.assertIn("X = 9,00", gear.info_var.get())
         anduin = self.app.data.characters[3]
         self.select_in(gear, anduin)
         self.assertEqual(gear.value_var.get(), "")  # még nincs itemlevele
@@ -363,13 +376,13 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(
             gear.summary_var.get(), "Minden karakter elérte a célitemlevelt, ezért egyik sem látszik a listán."
         )
-        self.assertIn("minden karakter elérte a célitemlevelt", gear.gear_info_var.get())
+        self.assertIn("minden karakter elérte a célitemlevelt", gear.info_var.get())
 
         self.app.target_item_level_var.set("")  # célitemlevel nélkül nincs terv
         self.assertEqual({row["planned_item_level"] for row in self.rows(gear)}, {"–"})
         self.assertEqual(len(self.rows(gear)), 4)  # célitemlevel nélkül senki sem kerül le
         self.assertEqual(
-            gear.gear_info_var.get(), "Tervezett itemlevel: nincs megadva célitemlevel (a főablakban adhatod meg)."
+            gear.info_var.get(), "Tervezett itemlevel: nincs megadva célitemlevel (a főablakban adhatod meg)."
         )
         self.app.open_list()  # a karakterlistában nincsenek ilyen oszlopok
         self.assertNotIn("planned_item_level", [column[0] for column in self.app.list_window.COLUMNS])
