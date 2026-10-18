@@ -2,12 +2,16 @@
 --
 -- Minden karakterről, amellyel belépsz, elmenti a nevét, a realmjét, a régióját, a faját,
 -- a kasztját, az aktív specjét, a szintjét két tizedesre (a tapasztalattal együtt, pl. 85.29),
--- a felvett tárgyak átlagos itemlevelét és a Mythic+ pontszámát. A játék ezeket kilépéskor,
--- kijelentkezéskor és /reload után írja ki a fiók mappájába:
+-- a felvett tárgyak átlagos itemlevelét és a Mythic+ pontszámát. Az adatokat játék közben
+-- folyamatosan frissíti (tapasztalat, szintlépés, felszerelés, spec, Mythic+), de a fájlba a
+-- játék csak kilépéskor, kijelentkezéskor és /reload után írja ki őket (máskor egy addon sem
+-- tudja kiíratni), a fiók mappájába:
 --
 --   World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
 --
--- A program (wow_leveling.py) innen olvassa be őket: indításkor magától, és a főablak
+-- Azonnal a /wowleveling mentés paranccsal vagy az ablak Mentés gombjával lehet kiíratni őket:
+-- ezek újratöltik a felületet (/reload). A program (wow_leveling.py) innen olvassa be őket:
+-- indításkor, futás közben pedig magától, amint a játék kiírta őket, és a főablak
 -- „Importálás most” gombjával.
 --
 -- Egy kis ablakban azt is mutatja, melyik karakter van a legnagyobb lemaradásban szintben,
@@ -17,7 +21,8 @@
 --
 -- Parancsok: /wowleveling (vagy /wowlvl): a karakter elmentett adatai;
 --            /wowleveling lista: az összes elmentett karakter;
---            /wowleveling ablak: a lemaradás ablakának be- és kikapcsolása.
+--            /wowleveling ablak: a lemaradás ablakának be- és kikapcsolása;
+--            /wowleveling mentés: az adatok kiíratása most (a felület újratöltésével).
 
 local ADDON_NAME, ns = ...
 local Plan = ns.Plan
@@ -198,6 +203,38 @@ local function SaveSoon(delay)
 	else
 		Save()
 	end
+end
+
+-- Az adatok kiíratása most: a játék csak kilépéskor, kijelentkezéskor és a felület újratöltésekor
+-- írja ki a mentett adatokat, ezért ez újratölti a felületet (előtte a PLAYER_LOGOUT eseménynél
+-- még ment). A játék csak a játékos kattintására vagy parancsára engedi.
+local function SaveNow()
+	local reload = C_UI and C_UI.Reload or ReloadUI
+	if reload then
+		reload()
+	end
+end
+
+-- Az ablak Mentés gombja előbb megkérdezi, mert az újratöltés egy rövid töltőképernyővel jár.
+local function ConfirmSaveNow()
+	if not (StaticPopupDialogs and StaticPopup_Show) then
+		SaveNow()
+		return
+	end
+	StaticPopupDialogs.WOWLEVELING_SAVE_NOW = StaticPopupDialogs.WOWLEVELING_SAVE_NOW or {
+		text = "WoWLeveling: a játék csak a felület újratöltésekor (/reload) írja ki az adatokat, "
+			.. "a futó program ezután magától beolvassa az új mentést. Újratöltsem most a felületet?",
+		button1 = "Igen",
+		button2 = "Nem",
+		OnAccept = function()
+			SaveNow()
+		end,
+		timeout = 0,
+		whileDead = true,
+		hideOnEscape = true,
+		preferredIndex = 3,
+	}
+	StaticPopup_Show("WOWLEVELING_SAVE_NOW")
 end
 
 local function Number(value, digits)
@@ -443,6 +480,25 @@ local function CreateWindow()
 	close:SetScript("OnClick", function()
 		ns.ShowWindow(false)
 	end)
+	local save = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	save:SetSize(62, 18)
+	save:SetPoint("TOPRIGHT", -30, -6)
+	save:SetText("Mentés")
+	save:SetScript("OnClick", ConfirmSaveNow)
+	save:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Mentés most")
+		GameTooltip:AddLine(
+			"A játék csak kilépéskor, kijelentkezéskor és /reload után írja ki az adatokat. "
+				.. "Ez a gomb újratölti a felületet, és a futó program magától beolvassa az új mentést.",
+			1, 1, 1, true
+		)
+		GameTooltip:Show()
+	end)
+	save:SetScript("OnLeave", function()
+		GameTooltip:Hide()
+	end)
+	frame.saveButton = save
 
 	frame.rows = {}
 	for index, row in ipairs(ROWS) do
@@ -499,6 +555,10 @@ SlashCmdList.WOWLEVELING = function(message)
 		ns.ShowWindow(not (window and window:IsShown()))
 		return
 	end
+	if command == "mentés" or command == "mentes" or command == "save" then
+		SaveNow()
+		return
+	end
 	if command == "lista" or command == "list" then
 		local keys = {}
 		for key, entry in pairs(WoWLevelingDB.characters) do
@@ -519,7 +579,7 @@ SlashCmdList.WOWLEVELING = function(message)
 	if WoWLevelingDB.lastError then
 		Print("hiba: " .. WoWLevelingDB.lastError)
 	end
-	Print("A program a kilépés, a kijelentkezés vagy a /reload után látja az új adatokat.")
+	Print("A játék kilépéskor, kijelentkezéskor és /reload után írja ki az adatokat; most rögtön: /wowleveling mentés")
 	Print("A lemaradás ablaka: /wowleveling ablak")
 end
 
@@ -532,10 +592,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		end
 	elseif event == "PLAYER_LOGOUT" then
 		Save() -- az utolsó esemény, mielőtt a játék kiírja a mentett adatokat
-	elseif event == "PLAYER_XP_UPDATE" then
-		if tracking then
-			RefreshSoon()
-		end
 	elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
 		if arg1 == nil or arg1 == "player" then
 			SaveSoon(1)
@@ -545,7 +601,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		if tracking and C_Timer and C_Timer.After then
 			C_Timer.After(6, RefreshWindow)
 		end
-	else
+	else -- belépés, szintlépés, tapasztalat, felszerelés: az adatok mindig frissek, bármikor írja ki őket a játék
 		SaveSoon(2)
 		if event == "PLAYER_ENTERING_WORLD" and not started then
 			started = true

@@ -1,6 +1,7 @@
 """A WoWLeveling addon mentéseinek beolvasása, megkeresése és importálása (wow_addon.py), valamint
 maga az addon (addon/WoWLeveling), ha van Lua-értelmező a gépen."""
 
+import os
 import random
 import re
 import shutil
@@ -284,6 +285,21 @@ class FilesTests(unittest.TestCase):
         empty.mkdir()
         with self.assertRaisesRegex(AddonError, "Még nincs mentett adat"):
             wow_addon.find_saved_variables(empty)
+
+    def test_state_of_the_saved_variables_shows_new_saves(self):
+        self.assertIsNone(wow_addon.saved_variables_state(self.root))  # még nincs mentés
+        self.assertIsNone(wow_addon.saved_variables_state(self.root / "nincs"))
+        first, second = self.save("111#1"), self.save("222#2")
+        state = wow_addon.saved_variables_state(self.root)
+        self.assertEqual(
+            state,
+            tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in (first, second)),
+        )
+        self.assertEqual(wow_addon.saved_variables_state(self.root), state)  # amíg nem változik, ugyanaz
+        stamp = first.stat().st_mtime_ns + 10**9
+        os.utime(first, ns=(stamp, stamp))  # a játék újra kiírta (ugyanazzal a mérettel)
+        self.assertNotEqual(wow_addon.saved_variables_state(self.root), state)
+        self.assertEqual(wow_addon.saved_variables_state(second), state[1:])
 
     def test_game_folder(self):
         path = self.save("111#1")
@@ -709,14 +725,24 @@ class AddonTests(unittest.TestCase):
         self.assertIn('["level"] = 86.28,', output.read_text(encoding="utf-8"))
         data = wow_addon.load_addon_data(output)
         self.assertIn("Zôltan (Twisting Nether): szint 85,29, itemlevel 301,56, M+ pontszám 1234", chat)
-        # A belépés és a felszerelés cseréje után csak egyszer mentett (és megnyitotta az ablakot),
-        # szintlépéskor és a saját spec váltásakor mentett; a terv nélküli ablak nem frissül magától.
-        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "0", "1", "1", "0"])
+        # A belépés és a felszerelés cseréje után csak egyszer mentett (és megnyitotta az ablakot), a
+        # tapasztalatnál, szintlépéskor és a saját spec váltásakor is mentett (a memóriában, hogy bármikor
+        # írja ki a játék, friss legyen); a terv nélküli ablak nem frissül magától.
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "1", "1", "1", "1"])
         login = self.windows(chat)["login"]
         self.assertTrue(login["shown"])
         self.assertEqual(
             [login["level"][0], login["itemLevel"][0]],
             ["Még nincs szinkronizált terv.", "A programban: Szinkronizálás, majd /reload."],
+        )
+        # Kiíratás most: a parancs rögtön, az ablak gombja kérdés után tölti újra a felületet (/reload),
+        # mert a játék csak ekkor (és kilépéskor, kijelentkezéskor) írja ki a mentett adatokat.
+        self.assertEqual(re.findall(r"^C_UI\.Reload$", chat, re.M), ["C_UI.Reload"] * 2)
+        self.assertIn(
+            "\nC_UI.Reload\ntooltip: Mentés most\nbutton: Mentés\npopup: WoWLeveling: a játék csak a felület "
+            "újratöltésekor (/reload) írja ki az adatokat, a futó program ezután magától beolvassa az új mentést. "
+            "Újratöltsem most a felületet? [Igen/Nem]\nC_UI.Reload\n",
+            chat,
         )
         self.assertIn("2 karakter adatai vannak elmentve:", chat)
         self.assertIn("Zôltan (Twisting Nether): szint 86,05, itemlevel 301,56", chat)  # a titkos érték nem kell
@@ -797,7 +823,7 @@ class AddonTests(unittest.TestCase):
         stamp = datetime.fromtimestamp(payload["generated"]).strftime("%Y-%m-%d %H:%M")
         self.assertEqual(login["footer"], f"Szinkronizálva: {stamp} · automatikus frissítés: Zôltan")
         # A listán van, így a tapasztalattól magától frissül; szintlépéskor kiesik a listából.
-        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "1", "2", "1", "0"])
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "2", "2", "1", "1"])
         xp = self.window_rows(self.plan_data(Zôltan=("85.40", "301.56", 1234), **live), today)
         self.assertEqual(windows["xp"]["level"], xp["level"])
         self.assertEqual(xp["level"], ["Zôltan", "cél: 85,45", "hiányzik: 0,05"])  # Thrall-lal egyenlő: az első

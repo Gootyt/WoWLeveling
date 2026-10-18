@@ -91,17 +91,19 @@ INTRO_TEXT = (
     "pontossággal adhatod meg (pl. 83,45)."
 )
 ADDON_HINT = (
-    "Add meg a World of Warcraft mappáját: a program indításkor (és az „Importálás most” gombbal) "
-    "beolvassa a WoWLeveling addon mentéseit, és átadja neki a tervet a lemaradás ablakához. Az addont "
-    "az „Addon telepítése…” gomb másolja a játékba."
+    "Add meg a World of Warcraft mappáját: a program beolvassa a WoWLeveling addon mentéseit (indításkor, "
+    "futás közben pedig magától, amint a játék újakat ír ki; és az „Importálás most” gombbal), és átadja "
+    "neki a tervet a lemaradás ablakához. Az addont az „Addon telepítése…” gomb másolja a játékba."
 )
 ADDON_INSTALLED = (
     "Az addon a helyén van. Ha a játék fut, írd be a chatbe: /reload (különben a következő "
     "indításkor töltődik be); a karakterválasztó „AddOns” gombjával ellenőrizheted, hogy be van-e "
-    "kapcsolva.\n\nA játék kilépéskor, kijelentkezéskor és /reload után menti a karakterek adatait, "
-    "a program ezeket olvassa be."
+    "kapcsolva.\n\nA játék kilépéskor, kijelentkezéskor és /reload után menti a karakterek adatait "
+    "(játék közben azonnal: /wowleveling mentés, vagy a lemaradás ablakának Mentés gombja); a futó "
+    "program ezeket magától beolvassa."
 )
 ADDON_LIST_LIMIT = 30  # ennél több változást (vagy nevet) nem sorol fel egyenként
+ADDON_WATCH_MS = 2000  # ilyen gyakran nézi meg futás közben, kiírt-e új mentést a játék
 # A gear ajánlót frissítő statisztikák: forrás (a stats_options kulcsa) → (rövid név, az ablak osztálya).
 GEAR_STATS = {"mplus": ("M+", "MythicStatsWindow"), "raid": ("raid", "RaidStatsWindow")}
 
@@ -1369,6 +1371,11 @@ class App:
         self._sync_job: str | None = None
         self._synced_plan: dict | None = None
         self._sync_note: tuple[str, bool] | None = None
+        # Az addon mentéseinek figyelése (lásd _check_addon_saves): a fájlok állapota a legutóbbi
+        # beolvasáskor, egy azóta látott új állapot (amíg a játék írhatja), és hogy éppen beolvas-e.
+        self._addon_state: tuple | None = None
+        self._addon_pending: tuple | None = None
+        self._addon_importing = False
 
         self._build()
         settings_vars = (
@@ -1393,6 +1400,7 @@ class App:
         self.update_gear_stats()
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
+        root.after(ADDON_WATCH_MS, self._watch_addon)  # a játék új mentéseit futás közben is beolvassa
 
     def px(self, value: int) -> int:
         """Képpontméret a kijelző felbontásához (DPI) igazítva."""
@@ -2315,9 +2323,17 @@ class App:
         """A WoWLeveling addon mentéseinek beolvasása (lásd wow_addon.py): a listán lévő karakterek
         adatainak frissítése, a gombbal indított importálásnál pedig az új karakterek felvétele.
 
-        automatic: indításkor; ilyenkor nem kérdez és nem nyit ablakot, csak a WoW addon keretben
-        írja ki az eredményt. Ha nincs megadva a WoW mappája, a szokásos helyeken keresi.
+        automatic: indításkor és futás közben, ha a játék új mentést írt ki (lásd _check_addon_saves);
+        ilyenkor nem kérdez és nem nyit ablakot, csak a WoW addon keretben írja ki az eredményt. Ha
+        nincs megadva a WoW mappája, a szokásos helyeken keresi.
         """
+        self._addon_importing = True  # amíg kérdez, a mentések figyelése ne kezdjen újabb beolvasásba
+        try:
+            self._import_addon(automatic)
+        finally:
+            self._addon_importing = False
+
+    def _import_addon(self, automatic: bool) -> None:
         self._store_addon_path()
         if not self.data.addon_path and automatic:
             self._find_addon_path()
@@ -2327,6 +2343,8 @@ class App:
             if not automatic:
                 messagebox.showinfo(ADDON_TITLE, ADDON_HINT, parent=self.root)
             return
+        # A fájlok állapota a beolvasás előtt: ha közben változnak, a figyelés újra beolvassa őket.
+        self._addon_state, self._addon_pending = wow_addon.saved_variables_state(path), None
         try:
             addon_data = wow_addon.load_addon_data(path)
         except wow_addon.AddonError as exc:
@@ -2358,6 +2376,30 @@ class App:
         )
         if not automatic and not plan.new:
             self._report_addon_import(addon_data, plan)
+
+    def _watch_addon(self) -> None:
+        """Futás közben két másodpercenként megnézi, kiírt-e új mentést a játék (lásd _check_addon_saves)."""
+        if not self.root.winfo_exists():
+            return
+        try:
+            self._check_addon_saves()
+        finally:
+            self.root.after(ADDON_WATCH_MS, self._watch_addon)
+
+    def _check_addon_saves(self) -> None:
+        """Ha a játék új mentést írt ki (kilépéskor, kijelentkezéskor – pl. karakterváltáskor – vagy
+        /reload után), magától beolvassa: amikor a fájlok két nézés között már nem változtak (a játék
+        befejezte az írásukat)."""
+        path = self.data.addon_path
+        if not path or self._addon_importing or self.addon_path_var.get().strip() != path:
+            return  # nincs mit figyelni, éppen beolvas, vagy most írják át a WoW mappáját
+        state = wow_addon.saved_variables_state(path)
+        if state is None or state == self._addon_state:
+            self._addon_pending = None
+        elif state != self._addon_pending:
+            self._addon_pending = state  # a következő nézéskor olvassa be, ha addig nem változik
+        else:
+            self.import_addon(automatic=True)
 
     def _find_addon_path(self) -> None:
         """A WoW szokásos telepítési helyein keresi az addon mentéseit; ha megvannak, megjegyzi a helyét."""

@@ -5,7 +5,8 @@
 -- Utánozza a játék addonoknak szóló függvényeit, betölti az addon fájljait a .toc szerint,
 -- lejátszik egy belépést, néhány eseményt és a /wowleveling parancsot, közben kiírja a
 -- lemaradás ablakának tartalmát, végül úgy írja ki a WoWLevelingDB táblát, ahogy a játék a
--- SavedVariables mappába. A chatüzenetek és az ablak sorai a kimenetre kerülnek.
+-- SavedVariables mappába. A chatüzenetek, az ablak sorai és a felület újratöltései a kimenetre
+-- kerülnek.
 
 local addonDir, outputPath = arg[1], arg[2]
 
@@ -84,6 +85,7 @@ function Widget:GetPoint()
 	return "TOPLEFT", UIParent, "TOPLEFT", 100, -50
 end
 UIParent = NewWidget()
+GameTooltip = NewWidget()
 local frames = {}
 function CreateFrame(_, name)
 	local frame = NewWidget()
@@ -93,6 +95,21 @@ function CreateFrame(_, name)
 	end
 	return frame
 end
+
+-- A felület újratöltése (/reload) és a megerősítő ablak: a játékos az első gombra kattint.
+C_UI = {
+	Reload = function()
+		print("C_UI.Reload")
+	end,
+}
+StaticPopupDialogs = {}
+function StaticPopup_Show(which)
+	local dialog = StaticPopupDialogs[which]
+	print(string.format("popup: %s [%s/%s]", dialog.text, dialog.button1, dialog.button2))
+	dialog.OnAccept()
+	return dialog
+end
+
 local function Fire(event, ...)
 	for _, frame in ipairs(frames) do
 		if frame.events[event] then
@@ -246,6 +263,15 @@ DumpWindow("off")
 SlashCmdList.WOWLEVELING(" Ablak ")
 DumpWindow("on")
 WoWLevelingWindow.scripts.OnDragStop(WoWLevelingWindow)
+
+-- Az adatok kiíratása most: a parancs rögtön újratölti a felületet, az ablak gombja előbb kérdez.
+SlashCmdList.WOWLEVELING(" Mentés ")
+local saveButton = WoWLevelingWindow.saveButton
+saveButton.scripts.OnEnter(saveButton)
+print("tooltip: " .. rawget(GameTooltip, "text"))
+saveButton.scripts.OnLeave(saveButton)
+print("button: " .. rawget(saveButton, "text"))
+saveButton.scripts.OnClick(saveButton, "LeftButton", false)
 
 -- Egy váratlan hiba nem akasztja meg a játékot, a program jelezheti (lastError).
 player.levelError = true

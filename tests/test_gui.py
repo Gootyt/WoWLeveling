@@ -2,6 +2,7 @@
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
 import gc
+import os
 import tempfile
 import threading
 import time
@@ -88,6 +89,10 @@ class GuiTests(unittest.TestCase):
         self.app = wow_leveling.App(self.root, self.path)
 
     def tearDown(self):
+        # A még várakozó időzített hívások (pl. a mentések figyelése) ne egy későbbi teszt alatt fussanak
+        # le, amikor már nincs meg az ablakuk. (A parancsaikat az ablakaik lebontása törli.)
+        for job in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+            self.root.tk.call("after", "cancel", job)
         self.root.destroy()
         # A lebontott ablakok Tk-objektumai itt, a fő szálon szűnjenek meg: ha a szemétgyűjtés egy
         # későbbi teszt háttérszálában takarítaná el őket, a tkinter mindegyiknél kb. egy másodpercig
@@ -1529,6 +1534,82 @@ class GuiTests(unittest.TestCase):
         self.app.import_addon(automatic=True)
         self.assertTrue(self.app.addon_status_var.get().endswith("Gond: az addon hibát jelzett: hopp"))
         self.assertEqual(self.app.addon_status_label.cget("style"), "Error.TLabel")
+
+    def test_new_addon_saves_are_imported_while_running(self):
+        self.add("Thrall", realm="Draenor")
+        thrall = self.app.data.characters[0]
+        folder = Path(self.temp_dir.name) / "World of Warcraft"
+        (folder / "_retail_" / "WTF").mkdir(parents=True)
+        self.app.addon_path_var.set(str(folder))
+        self.app.import_addon(automatic=True)
+        self.assertIn("Még nincs mentett adat", self.app.addon_status_var.get())
+
+        def loads():
+            return mock.patch.object(self.gui.wow_addon, "load_addon_data", wraps=wow_addon.load_addon_data)
+
+        # Az első mentés: amint a játék kiírta (és a fájl két nézés között már nem változott), beolvassa.
+        with loads() as load:
+            self.app._check_addon_saves()  # még mindig nincs mentés
+            saved = next(self.addon_folder().glob("_retail_/WTF/Account/*/SavedVariables/WoWLeveling.lua"))
+            self.app._check_addon_saves()  # a játék még írhatja
+            load.assert_not_called()
+            self.app._check_addon_saves()
+            load.assert_called_once_with(str(folder))
+        self.assertEqual(thrall.level, D("85.29"))
+        self.assertEqual(load_data(self.path).characters[0].level, D("85.29"))  # mentette is
+        written = saved.stat().st_mtime_ns
+
+        def game_writes(level, seconds):
+            """A játék új mentést ír ki (a módosítás idejét kézzel lépteti, hogy biztosan más legyen)."""
+            stamp = str(1760700000 + seconds)
+            saved.write_text(ADDON_SAVE.replace('["level"] = 85', f'["level"] = {level}').replace("1760700000", stamp))
+            os.utime(saved, ns=(written + seconds * 10**9,) * 2)
+
+        # Egy újabb mentés (pl. karakterváltáskor vagy /reload után): amíg változik, vár.
+        with loads() as load:
+            self.app._check_addon_saves()  # nem változott semmi
+            game_writes(86, 10)
+            self.app._check_addon_saves()
+            game_writes(87, 20)
+            self.app._check_addon_saves()
+            load.assert_not_called()
+            self.app._check_addon_saves()
+            self.app._check_addon_saves()  # egyszer olvassa be
+            load.assert_called_once()
+        self.assertEqual(thrall.level, D("87.29"))
+        self.assertIn(". 1 karakter adata frissült. ", self.app.addon_status_var.get())
+        self.assertEqual(self.app.addon_status_label.cget("style"), "Ok.TLabel")
+
+        # Amíg a gombbal indított importálás kérdez, nem kezd újabb beolvasásba; utána beolvassa.
+        def dialog(_found, _intro):
+            game_writes(88, 30)
+            for _ in range(3):
+                self.app._check_addon_saves()
+            return None  # Mégse
+
+        with loads() as load, mock.patch.object(self.app, "_choose_new_characters", side_effect=dialog):
+            self.app.import_addon()
+            load.assert_called_once()
+            self.assertEqual(thrall.level, D("87.29"))
+            self.app._check_addon_saves()
+            self.app._check_addon_saves()
+            self.assertEqual(load.call_count, 2)
+        self.assertEqual(thrall.level, D("88.29"))
+
+        # Amíg a WoW mappáját írják át, nem figyel (és a félig beírt útvonalat sem jegyzi meg).
+        self.app.addon_path_var.set(str(folder)[:-3])
+        game_writes(89, 40)
+        with loads() as load:
+            for _ in range(3):
+                self.app._check_addon_saves()
+        load.assert_not_called()
+        self.assertEqual(self.app.data.addon_path, str(folder))
+
+        # Két másodpercenként néz rá.
+        with mock.patch.object(self.app, "_check_addon_saves") as check, mock.patch.object(self.root, "after") as after:
+            self.app._watch_addon()
+        check.assert_called_once_with()
+        after.assert_called_once_with(self.gui.ADDON_WATCH_MS, self.app._watch_addon)
 
     def test_wow_folder_can_be_browsed_and_the_addon_installed(self):
         folder = self.addon_folder()

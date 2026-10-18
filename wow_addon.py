@@ -519,6 +519,23 @@ def find_saved_variables(path: str | os.PathLike) -> list[Path]:
     )
 
 
+def saved_variables_state(path: str | os.PathLike) -> tuple[tuple[str, int, int], ...] | None:
+    """A mentések fájljainak állapota (útvonal, módosítás ideje, méret): ha megváltozik, a játék új
+    mentést írt ki. None, ha nincs mentés (vagy nem érhető el)."""
+    try:
+        files = find_saved_variables(path)
+    except (AddonError, OSError):
+        return None
+    state = []
+    for file in files:
+        try:
+            info = file.stat()
+        except OSError:
+            continue
+        state.append((str(file), info.st_mtime_ns, info.st_size))
+    return tuple(state) or None
+
+
 @dataclass
 class AddonData:
     """Az addon beolvasott mentései."""

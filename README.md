@@ -70,11 +70,11 @@ megtervezéséhez és követéséhez.
 - **WoW addon:** a mellékelt WoWLeveling addon a játékban elmenti a karakterek
   szintjét (a tapasztalattal együtt), itemlevelét, Mythic+ pontszámát, faját,
   kasztját és specjét. A program a játék mappájának megadása után ezeket **minden
-  indításkor magától**, és bármikor az „Importálás most” gombbal beolvassa. Az
-  addon egy kis ablakban azt is mutatja, melyik karakter van a **legnagyobb
-  lemaradásban** szintben, itemlevelben és Mythic+ pontszámban, mennyit kell
-  elérnie, és mennyi hiányzik; a tervet a program szinkronizálja neki (lásd lent,
-  „WoW addon”).
+  indításkor**, futás közben pedig **amint a játék kiírja őket** magától (és
+  bármikor az „Importálás most” gombbal) beolvassa. Az addon egy kis ablakban azt
+  is mutatja, melyik karakter van a **legnagyobb lemaradásban** szintben,
+  itemlevelben és Mythic+ pontszámban, mennyit kell elérnie, és mennyi hiányzik; a
+  tervet a program szinkronizálja neki (lásd lent, „WoW addon”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -187,7 +187,8 @@ python wow_leveling.py masik_terv.json
 11. **WoW addon**: a főablak „WoW addon” keretében add meg a World of Warcraft
     mappáját (beírva vagy a „Tallózás…” gombbal), és telepítsd az addont az
     „Addon telepítése…” gombbal. A program ezután minden indításkor beolvassa a
-    játékban elmentett adatokat, és bármikor az „Importálás most” gombbal (lásd lent).
+    játékban elmentett adatokat, futás közben pedig magától, amint a játék újakat
+    ír ki (és bármikor az „Importálás most” gombbal; lásd lent).
 
 ## Hogyan számol a program?
 
@@ -559,12 +560,20 @@ is választhatod), majd kattints az „Addon telepítése…” gombra: a progra
 fut, írd be a chatbe: `/reload`. A karakterválasztó „AddOns” gombjával
 ellenőrizheted, hogy be van-e kapcsolva.
 
-**Mentés.** A játék a mentett adatokat kilépéskor, kijelentkezéskor és `/reload`
-után írja ki, fiókonként ide:
+**Mentés.** Az addon játék közben folyamatosan frissíti az adatokat (a
+tapasztalatnál, szintlépéskor, a felszerelés vagy a spec cseréjekor és egy Mythic+
+kör után), de fájlba a játék csak kilépéskor, kijelentkezéskor (karakterváltáskor
+is) és `/reload` után írja ki őket – máskor egy addon sem tudja kiíratni –,
+fiókonként ide:
 
 ```
 World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
 ```
+
+Ha játék közben azonnal kell, a `/wowleveling mentés` parancs vagy a lemaradás
+ablakának „Mentés” gombja (ez előbb megkérdezi) újratölti a felületet, mintha
+`/reload`-ot írtál volna: ilyenkor egy pár másodperces töltőképernyő után a fájl
+már a friss adatokat tartalmazza.
 
 Az addon régebbi (1.2 előtti) változata az egész szintet és mellette a
 tapasztalatot mentette; a program az ilyen mentéseket is beolvassa, a telepített
@@ -572,10 +581,14 @@ addont pedig a következő szinkronizáláskor frissíti (lásd lent).
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
 elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a
-`/wowleveling ablak` pedig be- és kikapcsolja a lemaradás ablakát (lásd lent).
+`/wowleveling ablak` be- és kikapcsolja a lemaradás ablakát (lásd lent), a
+`/wowleveling mentés` pedig most rögtön kiíratja az adatokat (lásd fent).
 
 **Importálás.** A program **minden indításkor magától** beolvassa a mentéseket,
-és bármikor az „Importálás most” gombbal. Útvonalként a World of Warcraft
+és bármikor az „Importálás most” gombbal. **Futás közben is figyeli** őket: amint
+a játék új mentést ír ki (kilépéskor, karakterváltáskor, `/reload` vagy a
+„Mentés” után), néhány másodpercen belül magától beolvassa – nem kell újraindítani
+a programot, és gombra sem kell kattintani. Útvonalként a World of Warcraft
 mappáját érdemes megadni, de jó a `_retail_`, a `WTF`, egy fiók mappája vagy maga
 a `WoWLeveling.lua` fájl is; több fiók mentéseit is beolvassa. Ha nincs megadva
 útvonal, indításkor a szokásos telepítési helyeken keresi (Windowson a Program
@@ -613,7 +626,8 @@ célitemlevel), az okát. Az ablak ugyanazt számolja, mint a program (a
 karakterlista, a Gear és a Mythic+ ablak), az előretekintéssel együtt: a mai
 napot a gép órájából veszi, így napok múlva is a napi célokkal számol. Bezárni a
 sarkában lévő X-szel, újra megnyitni a `/wowleveling ablak` paranccsal lehet; a
-helyét és azt, hogy látszik-e, megjegyzi.
+helyét és azt, hogy látszik-e, megjegyzi. Az X melletti „Mentés” gomb most rögtön
+kiíratja az adatokat a program számára (a felület újratöltésével, lásd fent).
 
 - **Szinkronizálás:** a program a terv adatait (a karaktereket a szintjükkel,
   itemlevelükkel, pontszámukkal és a terv beállításaival) a telepített addon
