@@ -186,6 +186,12 @@ class SnapshotTests(unittest.TestCase):
             ({"level": 0}, None),
             ({"level": "85"}, None),
             ({"level": 85, "xp": True, "xpMax": 10}, D("85.00")),
+            # Az addon 1.2-től már két tizedesre menti (a tapasztalat mellette csak tájékoztató).
+            ({"level": 85.29, "xp": 2999, "xpMax": 10000}, D("85.29")),
+            ({"level": 85.29}, D("85.29")),
+            ({"level": 85.5}, D("85.50")),
+            ({"level": 85.28999999999999, "xp": 2999, "xpMax": 10000}, D("85.29")),
+            ({"level": 0.5}, None),
         )
         for fields, level in cases:
             with self.subTest(fields=fields):
@@ -696,7 +702,11 @@ class AddonTests(unittest.TestCase):
         return dumps
 
     def test_addon_saves_the_characters(self):
-        chat, output, _db = self.run_addon(wow_addon.ADDON_SOURCE)
+        chat, output, db = self.run_addon(wow_addon.ADDON_SOURCE)
+        # A szintet két tizedesre menti, a tapasztalattal együtt (86-os szint, 3456 / 12000 = 28,8%).
+        zoltan_saved = db["characters"]["Zôltan-Twisting Nether"]
+        self.assertEqual((zoltan_saved["level"], zoltan_saved["xp"], zoltan_saved["xpMax"]), (86.28, 3456, 12000))
+        self.assertIn('["level"] = 86.28,', output.read_text(encoding="utf-8"))
         data = wow_addon.load_addon_data(output)
         self.assertIn("Zôltan (Twisting Nether): szint 85,29, itemlevel 301,56, M+ pontszám 1234", chat)
         # A belépés és a felszerelés cseréje után csak egyszer mentett (és megnyitotta az ablakot),

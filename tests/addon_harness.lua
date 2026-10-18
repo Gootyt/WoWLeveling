@@ -297,8 +297,12 @@ local function Write(out, value, indent)
 		out[#out + 1] = Quote(value)
 	elseif kind == "number" and value % 1 == 0 then
 		out[#out + 1] = string.format("%d", value)
-	elseif kind == "number" then
-		out[#out + 1] = string.format("%.17g", value)
+	elseif kind == "number" then -- a legrövidebb pontos alak, ahogy a játék is írja (pl. 86.28)
+		local digits = 15
+		while digits < 17 and tonumber(string.format("%." .. digits .. "g", value)) ~= value do
+			digits = digits + 1
+		end
+		out[#out + 1] = string.format("%." .. digits .. "g", value)
 	else
 		out[#out + 1] = tostring(value)
 	end

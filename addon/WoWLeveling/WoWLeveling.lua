@@ -1,8 +1,8 @@
 -- WoWLeveling: elmenti a karakterek adatait a WoW szintezés tervező programnak.
 --
 -- Minden karakterről, amellyel belépsz, elmenti a nevét, a realmjét, a régióját, a faját,
--- a kasztját, az aktív specjét, a szintjét (a tapasztalattal együtt), a felvett tárgyak
--- átlagos itemlevelét és a Mythic+ pontszámát. A játék ezeket kilépéskor,
+-- a kasztját, az aktív specjét, a szintjét két tizedesre (a tapasztalattal együtt, pl. 85.29),
+-- a felvett tárgyak átlagos itemlevelét és a Mythic+ pontszámát. A játék ezeket kilépéskor,
 -- kijelentkezéskor és /reload után írja ki a fiók mappájába:
 --
 --   World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
@@ -94,6 +94,23 @@ local function MythicPlusScore()
 	return nil
 end
 
+-- Szint századokban, a tapasztalattal együtt: 85-ös szint, a következőhöz szükséges tapasztalat
+-- 29,99%-a -> 8529 (a százalék lefelé kerekítve, mint a programban). A már két tizedesre mentett
+-- szintet (85.29) változatlanul hagyja.
+local function LevelValue(level, xp, xpMax)
+	if type(level) ~= "number" or level < 1 then
+		return nil
+	end
+	if level % 1 ~= 0 then
+		return math.floor(level * 100 + 0.5)
+	end
+	local value = level * 100
+	if type(xp) == "number" and type(xpMax) == "number" and xpMax > 0 and xp > 0 then
+		value = value + math.min(math.floor(xp * 100 / xpMax), 99)
+	end
+	return value
+end
+
 local function InitDB()
 	if type(WoWLevelingDB) ~= "table" then
 		WoWLevelingDB = {}
@@ -121,6 +138,8 @@ local function Snapshot()
 	local raceName, raceFile, raceID = UnitRace("player")
 	local className, classFile, classID = UnitClass("player")
 	local specID, specName = CurrentSpec()
+	local xp, xpMax = Plain(UnitXP("player")), Plain(UnitXPMax("player"))
+	local level = LevelValue(Plain(UnitLevel("player")), xp, xpMax)
 	local fresh = {
 		name = name,
 		realm = realm,
@@ -133,9 +152,9 @@ local function Snapshot()
 		classID = Plain(classID),
 		specID = specID,
 		spec = specName,
-		level = Plain(UnitLevel("player")),
-		xp = Plain(UnitXP("player")),
-		xpMax = Plain(UnitXPMax("player")),
+		level = level and level / 100, -- két tizedesre, a tapasztalattal együtt (pl. 85.29)
+		xp = xp,
+		xpMax = xpMax,
 		itemLevel = EquippedItemLevel(),
 		mythicPlusScore = MythicPlusScore(),
 		updated = time(),
@@ -187,12 +206,9 @@ end
 
 local function Describe(entry)
 	local parts = {}
-	if type(entry.level) == "number" then
-		local level = entry.level
-		if type(entry.xp) == "number" and type(entry.xpMax) == "number" and entry.xpMax > 0 then
-			level = level + math.min(math.floor(entry.xp * 100 / entry.xpMax), 99) / 100
-		end
-		parts[#parts + 1] = "szint " .. Number(level, 2)
+	local level = LevelValue(entry.level, entry.xp, entry.xpMax)
+	if level then
+		parts[#parts + 1] = "szint " .. Number(level / 100, 2)
 	end
 	if type(entry.itemLevel) == "number" then
 		parts[#parts + 1] = "itemlevel " .. Number(entry.itemLevel, 2)
@@ -245,18 +261,6 @@ end
 
 local function IsPlayer(source)
 	return SameCharacter(source, Plain(UnitName("player")), Plain(GetRealmName()))
-end
-
--- Szint századokban, a tapasztalattal együtt (mint a program: 85-ös szint, 29,99% -> 8529).
-local function LevelValue(level, xp, xpMax)
-	if type(level) ~= "number" or level < 1 then
-		return nil
-	end
-	local value = level * 100
-	if type(xp) == "number" and type(xpMax) == "number" and xpMax > 0 and xp > 0 then
-		value = value + math.min(math.floor(xp * 100 / xpMax), 99)
-	end
-	return value
 end
 
 local function ItemLevelValue(itemLevel) -- századokban

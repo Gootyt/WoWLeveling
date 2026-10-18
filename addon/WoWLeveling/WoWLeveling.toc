@@ -2,7 +2,7 @@
 ## Title: WoWLeveling
 ## Notes: Saves each character's level, item level, spec and Mythic+ score for the WoW leveling planner (WoWLeveling), and shows which character is furthest behind the plan.
 ## Author: WoWLeveling
-## Version: 1.1.0
+## Version: 1.2.0
 ## SavedVariables: WoWLevelingDB
 
 PlanData.lua

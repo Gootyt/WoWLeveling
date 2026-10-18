@@ -422,14 +422,19 @@ def _spec_of(entry: dict, char_class: str) -> str:
 
 def _level_of(entry: dict) -> Decimal | None:
     """A szint a tapasztalattal együtt: a tizedesek a következő szintig megszerzett
-    tapasztalat lefelé kerekített százaléka (85-ös szint, 29,99% → 85,29)."""
+    tapasztalat lefelé kerekített százaléka (85-ös szint, 29,99% → 85,29). Az addon 1.2-es
+    változatától így, két tizedesre menti; a régebbi az egész szintet és mellette a
+    tapasztalatot mentette, abból számolja ki."""
     level = entry.get("level")
     if not _is_number(level) or level < 1:
         return None
-    value = Decimal(int(level))
-    xp, xp_max = entry.get("xp"), entry.get("xpMax")
-    if _is_number(xp) and _is_number(xp_max) and xp_max > 0 and xp > 0:
-        value += Decimal(min(int(xp * 100 // xp_max), 99)) / 100
+    if level != int(level):
+        value = Decimal(str(level)).quantize(LEVEL_STEP, rounding=ROUND_HALF_UP)
+    else:
+        value = Decimal(int(level))
+        xp, xp_max = entry.get("xp"), entry.get("xpMax")
+        if _is_number(xp) and _is_number(xp_max) and xp_max > 0 and xp > 0:
+            value += Decimal(min(int(xp * 100 // xp_max), 99)) / 100
     return min(max(value, LEVEL_MIN), LEVEL_MAX).quantize(LEVEL_STEP)
 
 

@@ -545,8 +545,9 @@ belépsz, elmenti:
 
 - a nevét, a realmjét és a régióját,
 - a faját, a kasztját és az aktív specjét,
-- a szintjét a tapasztalattal együtt (pl. 85-ös szint, a következő szinthez
-  szükséges tapasztalat 29%-a: `85,29`),
+- a szintjét két tizedesjegyre, a tapasztalattal együtt (pl. 85-ös szint, a
+  következő szinthez szükséges tapasztalat 29%-a: `85.29`; a százalékot lefelé
+  kerekíti, mint a program), mellette a tapasztalat pontos értékét is,
 - a felvett tárgyak átlagos itemlevelét (amit a karakterlap is mutat),
 - az aktuális szezon Mythic+ pontszámát.
 
@@ -564,6 +565,10 @@ után írja ki, fiókonként ide:
 ```
 World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
 ```
+
+Az addon régebbi (1.2 előtti) változata az egész szintet és mellette a
+tapasztalatot mentette; a program az ilyen mentéseket is beolvassa, a telepített
+addont pedig a következő szinkronizáláskor frissíti (lásd lent).
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
 elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a
