@@ -2460,6 +2460,12 @@ class App:
             sentences.append(
                 f"Nincs a listán: {names} – a felvételükhöz kattints az „Importálás most” gombra."
             )
+        if saved_at is not None and wow_addon.is_outdated(addon_data.version):
+            current = wow_addon.addon_version(wow_addon.ADDON_SOURCE)
+            sentences.append(
+                f"A legutóbbi mentést még az addon régebbi változata írta: az új ({current}) a játék következő "
+                "indításakor vagy /reload után töltődik be."
+            )
         sentences += [f"Gond: {problem}" for problem in addon_data.problems]
         return " ".join(sentences)
 

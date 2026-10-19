@@ -564,7 +564,9 @@ ellenőrizheted, hogy be van-e kapcsolva.
 tapasztalatnál, szintlépéskor, a felszerelés vagy a spec cseréjekor és egy Mythic+
 kör után), de fájlba a játék csak kilépéskor, kijelentkezéskor (karakterváltáskor
 is) és `/reload` után írja ki őket – máskor egy addon sem tudja kiíratni –,
-fiókonként ide:
+fiókonként ide (kilépéskor az addon már nem olvas a játékból, mert az ekkor a
+tapasztalatra és a specre 0-t ad vissza, így a legutóbbi, játék közbeni állapot
+kerül a fájlba):
 
 ```
 World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
@@ -577,7 +579,12 @@ már a friss adatokat tartalmazza.
 
 Az addon régebbi (1.2 előtti) változata az egész szintet és mellette a
 tapasztalatot mentette; a program az ilyen mentéseket is beolvassa, a telepített
-addont pedig a következő szinkronizáláskor frissíti (lásd lent).
+addont pedig a következő szinkronizáláskor frissíti (lásd lent). Az 1.3.1 előtti
+változatok a kilépéskor kapott nullákat is elmentették (`xp = 0`, `xpMax = 0`,
+`specID = 0`), ezért náluk egész szint áll a fájlban: ez a karakter következő
+belépése után javul ki. Az addon a változatát is beírja a mentésbe; ha a
+legutóbbi mentést még régebbi változat írta, a program szól, hogy az új a játék
+következő indításakor vagy `/reload` után töltődik be.
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
 elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a

@@ -5,7 +5,8 @@
 -- a felvett tárgyak átlagos itemlevelét és a Mythic+ pontszámát. Az adatokat játék közben
 -- folyamatosan frissíti (tapasztalat, szintlépés, felszerelés, spec, Mythic+), de a fájlba a
 -- játék csak kilépéskor, kijelentkezéskor és /reload után írja ki őket (máskor egy addon sem
--- tudja kiíratni), a fiók mappájába:
+-- tudja kiíratni), a fiók mappájába. Kilépéskor már nem olvas a játékból, mert az ekkor a
+-- tapasztalatra és a specre 0-t ad vissza: a fájlba a legutóbbi, játék közbeni állapot kerül.
 --
 --   World of Warcraft\_retail_\WTF\Account\<FIÓK>\SavedVariables\WoWLeveling.lua
 --
@@ -44,6 +45,17 @@ local function Plain(value)
 	return value
 end
 
+-- Az addon változata a .toc fájlból: a mentésbe is beírja, így a program látja, ha a játék még
+-- a frissítés előtti változatot futtatja.
+local function AddonVersion()
+	local getMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+	if not getMetadata then
+		return nil
+	end
+	local ok, version = pcall(getMetadata, ADDON_NAME, "Version")
+	return ok and Plain(version) or nil
+end
+
 local function Region()
 	local id = GetCurrentRegion and Plain(GetCurrentRegion())
 	if id and REGIONS[id] then
@@ -66,11 +78,18 @@ local function CurrentSpec()
 		return nil, nil
 	end
 	local index = Plain(getIndex())
-	if not index then
+	if type(index) ~= "number" or index < 1 then
 		return nil, nil
 	end
 	local specID, specName = getInfo(index)
-	return Plain(specID), Plain(specName)
+	specID, specName = Plain(specID), Plain(specName)
+	if type(specID) ~= "number" or specID < 1 then -- ha a játék épp nem tudja, 0-t ad vissza
+		specID = nil
+	end
+	if type(specName) ~= "string" or specName == "" then
+		specName = nil
+	end
+	return specID, specName
 end
 
 -- A felvett tárgyak átlagos itemlevele, ahogy a karakterlap mutatja (kerekítés nélkül).
@@ -127,6 +146,7 @@ local function InitDB()
 		WoWLevelingDB.window = {}
 	end
 	WoWLevelingDB.version = DB_VERSION
+	WoWLevelingDB.addonVersion = AddonVersion()
 end
 
 -- A belépett karakter adatainak mentése. Visszaadja a karakter elmentett adatait
@@ -144,7 +164,18 @@ local function Snapshot()
 	local className, classFile, classID = UnitClass("player")
 	local specID, specName = CurrentSpec()
 	local xp, xpMax = Plain(UnitXP("player")), Plain(UnitXPMax("player"))
+	if type(xp) ~= "number" or type(xpMax) ~= "number" or xp < 0 or xpMax <= 0 then
+		xp, xpMax = nil, nil -- a játék most nem tudja (pl. kilépés közben 0-t ad): a korábbi érték marad
+	end
+	local key = name .. "-" .. realm
+	local entry = WoWLevelingDB.characters[key]
 	local level = LevelValue(Plain(UnitLevel("player")), xp, xpMax)
+	local keepXP = false -- a korábbi tapasztalat és a vele együtt mentett szint marad
+	if level and not xpMax and type(entry) == "table" then
+		local saved = LevelValue(entry.level, entry.xp, entry.xpMax)
+		keepXP = saved ~= nil and math.floor(saved / 100) == math.floor(level / 100)
+		level = keepXP and saved or level
+	end
 	local fresh = {
 		name = name,
 		realm = realm,
@@ -164,14 +195,15 @@ local function Snapshot()
 		mythicPlusScore = MythicPlusScore(),
 		updated = time(),
 	}
-	local key = name .. "-" .. realm
-	local entry = WoWLevelingDB.characters[key]
 	if type(entry) ~= "table" then
 		entry = {}
 		WoWLevelingDB.characters[key] = entry
 	end
 	for field, value in pairs(fresh) do -- ami most nem ismert, az a korábbi értéken marad
 		entry[field] = value
+	end
+	if level and not xpMax and not keepXP then
+		entry.xp, entry.xpMax = nil, nil -- új szint, de a tapasztalata most nem ismert
 	end
 	WoWLevelingDB.lastError = nil
 	return entry
@@ -206,9 +238,10 @@ local function SaveSoon(delay)
 end
 
 -- Az adatok kiíratása most: a játék csak kilépéskor, kijelentkezéskor és a felület újratöltésekor
--- írja ki a mentett adatokat, ezért ez újratölti a felületet (előtte a PLAYER_LOGOUT eseménynél
--- még ment). A játék csak a játékos kattintására vagy parancsára engedi.
+-- írja ki a mentett adatokat, ezért ez a friss adatok mentése után újratölti a felületet. A játék
+-- csak a játékos kattintására vagy parancsára engedi.
 local function SaveNow()
+	Save()
 	local reload = C_UI and C_UI.Reload or ReloadUI
 	if reload then
 		reload()
@@ -581,6 +614,9 @@ SlashCmdList.WOWLEVELING = function(message)
 	end
 	Print("A játék kilépéskor, kijelentkezéskor és /reload után írja ki az adatokat; most rögtön: /wowleveling mentés")
 	Print("A lemaradás ablaka: /wowleveling ablak")
+	if WoWLevelingDB.addonVersion then
+		Print("Az addon változata: " .. WoWLevelingDB.addonVersion)
+	end
 end
 
 local started = false
@@ -590,8 +626,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		if arg1 == ADDON_NAME then
 			InitDB()
 		end
-	elseif event == "PLAYER_LOGOUT" then
-		Save() -- az utolsó esemény, mielőtt a játék kiírja a mentett adatokat
 	elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
 		if arg1 == nil or arg1 == "player" then
 			SaveSoon(1)
@@ -625,7 +659,8 @@ for _, event in ipairs({
 	"PLAYER_AVG_ITEM_LEVEL_UPDATE",
 	"PLAYER_SPECIALIZATION_CHANGED",
 	"CHALLENGE_MODE_COMPLETED",
-	"PLAYER_LOGOUT",
+	-- A PLAYER_LOGOUT eseménynél (kilépés, kijelentkezés, /reload) nem ment: a játék ekkor már 0-t ad
+	-- a tapasztalatra és a specre, a fájlba így a legutóbbi, játék közbeni mentés kerül.
 }) do
 	pcall(frame.RegisterEvent, frame, event) -- egy esetleg megszűnt esemény se okozzon hibát
 end

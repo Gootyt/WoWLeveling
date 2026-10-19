@@ -136,6 +136,13 @@ local function DumpWindow(label)
 	print("footer: " .. Text(window.footer))
 end
 
+-- A belépett karakter elmentett szintje, tapasztalata és specje a kimenetre.
+local function DumpSaved(label)
+	local entry = WoWLevelingDB.characters["Zôltan-Twisting Nether"]
+	print(string.format("saved %s: %s %s %s %s", label, tostring(entry.level), tostring(entry.xp),
+		tostring(entry.xpMax), tostring(entry.specID)))
+end
+
 -- A belépett karakter: Zôltan, Orc Enhancement Shaman a Twisting Nether (EU) realmen.
 local player = { level = 85, xp = 2900, xpMax = 10000, itemLevel = 301.5625, score = 1234 }
 function UnitName()
@@ -186,10 +193,19 @@ C_SpecializationInfo = {
 
 -- Az addon betöltése, ahogy a játék: előbb a fájljai a .toc sorrendjében (közös névtérrel),
 -- aztán a mentett adatai.
-local ns = {}
+local ns, metadata = {}, {}
+C_AddOns = {
+	GetAddOnMetadata = function(name, field)
+		assert(name == "WoWLeveling", name)
+		return metadata[field]
+	end,
+}
 for line in io.lines(addonDir .. "/WoWLeveling.toc") do
+	local field, value = line:match("^## (%w+):%s*(.-)%s*$")
 	local file = line:match("^([%w_]+%.lua)%s*$")
-	if file then
+	if field then
+		metadata[field] = value
+	elseif file then
 		assert(loadfile(addonDir .. "/" .. file))("WoWLeveling", ns)
 	end
 end
@@ -230,18 +246,23 @@ DumpWindow("xp")
 -- Szintlépés; közben az itemlevel „titkos”, ezért a korábbi érték marad meg. A régi
 -- spec-függvények is működnek, ha nincs C_SpecializationInfo.
 now = now + 600
-player.level, player.xp, player.xpMax, player.itemLevel = 86, 0, 12000, SECRET
+player.level, player.xp, player.xpMax, player.itemLevel = 86, 0, 0, SECRET
 C_SpecializationInfo = nil
 function GetSpecialization()
 	return 1
 end
 function GetSpecializationInfo(index)
+	if player.specGone then -- a játék épp nem tudja: 0-t ad vissza, név nélkül
+		return 0
+	end
 	return SPECS[index][1], SPECS[index][2]
 end
 Fire("PLAYER_LEVEL_UP", 86)
 Fire("PLAYER_SPECIALIZATION_CHANGED", "party1") -- más egység: nem ment
 print("timers: " .. RunTimers())
+DumpSaved("levelup") -- az előző szint tapasztalata nem maradhat meg az új szint mellett
 DumpWindow("levelup")
+player.xpMax = 12000
 Fire("PLAYER_SPECIALIZATION_CHANGED", "player")
 print("timers: " .. RunTimers())
 
@@ -256,6 +277,12 @@ for _, tick in ipairs(tickers) do
 	tick()
 end
 DumpWindow("nextday")
+
+-- Ha a játék épp nem tudja a tapasztalatot és a specet (0-t ad vissza), a korábbi értékek maradnak.
+player.xp, player.xpMax, player.specGone = 0, 0, true
+SlashCmdList.WOWLEVELING("")
+DumpSaved("unknown")
+player.xp, player.xpMax, player.specGone = 600, 12000, nil
 
 -- Az ablak be- és kikapcsolása, áthelyezése.
 SlashCmdList.WOWLEVELING("ablak")
@@ -279,10 +306,17 @@ Fire("PLAYER_EQUIPMENT_CHANGED", 16, true)
 RunTimers()
 SlashCmdList.WOWLEVELING("  LISTA ")
 
--- Kilépés: az utolsó mentés, közben gyűlt még egy kis tapasztalat.
+-- Kilépés előtt még egy kis tapasztalat, jobb felszerelés és Mythic+ pontszám (a hiba is elmúlik).
 now = now + 60
 player.levelError = nil
 player.xp, player.itemLevel, player.score = 3456, 303.25, 1500.5
+Fire("PLAYER_XP_UPDATE", "player")
+Fire("PLAYER_EQUIPMENT_CHANGED", 1, true)
+RunTimers()
+
+-- Kilépés: a játék ekkor már 0-t ad a tapasztalatra, a specre és a pontszámra; ezeket nem mentheti el.
+now = now + 30
+player.xp, player.xpMax, player.score, player.specGone = 0, 0, 0, true
 Fire("PLAYER_LOGOUT")
 
 -- A mentett adatok kiírása, ahogy a játék.

@@ -543,6 +543,8 @@ class AddonData:
     snapshots: list[Snapshot]  # karakterenként a legújabb mentés
     files: list[Path]  # a beolvasott fájlok (fiókonként egy)
     problems: list[str] = field(default_factory=list)  # a nem olvasható fájlok és az addon által jelzett hibák
+    # Az addon változata, amely a legutóbb kiírt fájlt írta (az 1.3.1 előttiek nem írják be: None).
+    version: str | None = None
 
     @property
     def saved_at(self) -> datetime | None:
@@ -559,8 +561,10 @@ def load_addon_data(path: str | os.PathLike) -> AddonData:
     latest: dict[str, Snapshot] = {}
     problems = []
     failed = 0  # a nem olvasható fájlok száma
+    newest: tuple[int, str | None] | None = None  # a legutóbb kiírt fájl: (módosítás ideje, addonváltozat)
     for file in files:
         try:
+            written = file.stat().st_mtime_ns
             values = parse_lua(file.read_bytes().decode("utf-8", errors="surrogateescape"))
         except OSError as exc:
             problems.append(f"{file} nem olvasható ({exc.strerror or exc})")
@@ -575,13 +579,16 @@ def load_addon_data(path: str | os.PathLike) -> AddonData:
             known = latest.get(snapshot.key)
             if known is None or snapshot.updated > known.updated:
                 latest[snapshot.key] = snapshot
-        error = _text(db.get("lastError")) if isinstance(db, dict) else ""
+        fields = db if isinstance(db, dict) else {}
+        error = _text(fields.get("lastError"))
         if error:
             problems.append(f"az addon hibát jelzett: {error}")
+        if newest is None or written > newest[0]:
+            newest = (written, _text(fields.get("addonVersion")) or None)
     if failed == len(files):
         raise AddonError("A mentett adatok nem olvashatók be: " + "; ".join(problems))
     snapshots = sorted(latest.values(), key=lambda snapshot: (name_key(snapshot.name), realm_key(snapshot.realm)))
-    return AddonData(snapshots, files, problems)
+    return AddonData(snapshots, files, problems, version=newest[1] if newest else None)
 
 
 def addon_folder(game: Path) -> Path:
@@ -604,6 +611,17 @@ def addon_version(folder: Path) -> str | None:
         return None
     match = re.search(r"^## Version:\s*(\S+)", toc, re.MULTILINE)
     return match.group(1) if match else None
+
+
+def is_outdated(version: str | None) -> bool:
+    """Régebbi-e a megadott addonváltozat annál, amelyet a program telepít (a változatukat még nem
+    író régi változatok is azok)."""
+
+    def key(text: str | None) -> tuple[int, ...]:
+        return tuple(int(part) for part in re.findall(r"\d+", text or ""))
+
+    current = key(addon_version(ADDON_SOURCE))
+    return bool(current) and key(version) < current
 
 
 def install_addon(game: Path) -> Path:

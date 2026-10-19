@@ -32,9 +32,12 @@ from leveling import (
 
 D = Decimal
 
-# A WoWLeveling addon mentése, ahogy a játék kiírja (lásd tests/test_wow_addon.py).
+# A WoWLeveling addon mentése, ahogy a játék kiírja (lásd tests/test_wow_addon.py), a programmal
+# érkező változattól.
+ADDON_VERSION = wow_addon.addon_version(wow_addon.ADDON_SOURCE)
 ADDON_SAVE = """
 WoWLevelingDB = {
+\t["addonVersion"] = "%s",
 \t["characters"] = {
 \t\t["Thrall-Draenor"] = {
 \t\t\t["name"] = "Thrall",
@@ -67,7 +70,7 @@ WoWLevelingDB = {
 \t},
 \t["version"] = 1,
 }
-"""
+""" % ADDON_VERSION
 
 
 @unittest.skipIf(tk is None, "a tkinter nincs telepítve")
@@ -1610,6 +1613,20 @@ class GuiTests(unittest.TestCase):
             self.app._watch_addon()
         check.assert_called_once_with()
         after.assert_called_once_with(self.gui.ADDON_WATCH_MS, self.app._watch_addon)
+
+    def test_old_addon_version_is_pointed_out(self):
+        # A régi addon nem írja be a változatát: a program szól, hogy az új mikor töltődik be a játékban.
+        old = ADDON_SAVE.replace(f'\t["addonVersion"] = "{ADDON_VERSION}",\n', "")
+        self.app.addon_path_var.set(str(self.addon_folder(old)))
+        self.app.import_addon(automatic=True)
+        self.assertIn(
+            f"A legutóbbi mentést még az addon régebbi változata írta: az új ({ADDON_VERSION}) a játék következő "
+            "indításakor vagy /reload után töltődik be.",
+            self.app.addon_status_var.get(),
+        )
+        self.addon_folder()  # már az új változat mentése
+        self.app.import_addon(automatic=True)
+        self.assertNotIn("régebbi változata", self.app.addon_status_var.get())
 
     def test_wow_folder_can_be_browsed_and_the_addon_installed(self):
         folder = self.addon_folder()

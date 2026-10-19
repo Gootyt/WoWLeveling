@@ -331,6 +331,19 @@ class FilesTests(unittest.TestCase):
         empty = wow_addon.load_addon_data(self.save("444#4", "\nWoWLevelingDB = nil\n"))
         self.assertEqual((empty.snapshots, empty.problems, empty.saved_at), ([], [], None))
 
+    def test_version_of_the_addon_that_wrote_the_latest_save(self):
+        old = self.save("111#1")  # a változatát még nem író régi addon mentése
+        new = self.save("222#2", SAVED.replace('\t["version"] = 1,', '\t["addonVersion"] = "1.3.1",\n\t["version"] = 1,'))
+        for path, stamp in ((old, 1_000_000), (new, 2_000_000)):
+            os.utime(path, (stamp, stamp))
+        self.assertEqual(wow_addon.load_addon_data(self.root).version, "1.3.1")
+        os.utime(old, (3_000_000, 3_000_000))  # a régi addon írt utoljára
+        self.assertIsNone(wow_addon.load_addon_data(self.root).version)
+        current = wow_addon.addon_version(wow_addon.ADDON_SOURCE)
+        for version, outdated in ((None, True), ("1.3.0", True), ("1.2.10", True), (current, False), ("1.10.0", False)):
+            with self.subTest(version=version):
+                self.assertEqual(wow_addon.is_outdated(version), outdated)
+
     def test_addon_is_installed_into_the_game(self):
         self.assertIsNone(wow_addon.installed_addon(self.root))
         target = wow_addon.install_addon(self.game)
@@ -719,10 +732,21 @@ class AddonTests(unittest.TestCase):
 
     def test_addon_saves_the_characters(self):
         chat, output, db = self.run_addon(wow_addon.ADDON_SOURCE)
-        # A szintet két tizedesre menti, a tapasztalattal együtt (86-os szint, 3456 / 12000 = 28,8%).
+        # A szintet két tizedesre menti, a tapasztalattal együtt (86-os szint, 3456 / 12000 = 28,8%). A
+        # kilépéskor a játéktól kapott nullák (tapasztalat, spec, pontszám) nem kerülnek a mentésbe.
         zoltan_saved = db["characters"]["Zôltan-Twisting Nether"]
-        self.assertEqual((zoltan_saved["level"], zoltan_saved["xp"], zoltan_saved["xpMax"]), (86.28, 3456, 12000))
+        self.assertEqual(
+            [zoltan_saved[key] for key in ("level", "xp", "xpMax", "specID", "mythicPlusScore")],
+            [86.28, 3456, 12000, 262, 1500.5],
+        )
         self.assertIn('["level"] = 86.28,', output.read_text(encoding="utf-8"))
+        self.assertEqual(db["addonVersion"], wow_addon.addon_version(wow_addon.ADDON_SOURCE))
+        self.assertIn(f"Az addon változata: {db['addonVersion']}", chat)
+        # Ha játék közben a játék épp nem tudja a tapasztalatot és a specet (0-t ad), a korábbi értékek
+        # maradnak; szintlépéskor viszont az előző szint tapasztalata nem marad az új szint mellett.
+        self.assertIn("saved unknown: 86.05 600 12000 262", chat)
+        self.assertIn("WoWLeveling:|r Zôltan (Twisting Nether): szint 86,05, itemlevel 301,56, M+ pontszám 1234", chat)
+        self.assertIn("saved levelup: 86 nil nil 262", chat)
         data = wow_addon.load_addon_data(output)
         self.assertIn("Zôltan (Twisting Nether): szint 85,29, itemlevel 301,56, M+ pontszám 1234", chat)
         # A belépés és a felszerelés cseréje után csak egyszer mentett (és megnyitotta az ablakot), a
@@ -748,7 +772,7 @@ class AddonTests(unittest.TestCase):
         self.assertIn("Zôltan (Twisting Nether): szint 86,05, itemlevel 301,56", chat)  # a titkos érték nem kell
         self.assertIn("hiba: ", chat)
         self.assertIn("UnitLevel: próba hiba", chat)
-        self.assertEqual(data.problems, [])  # a kilépéskori mentés már sikerült
+        self.assertEqual(data.problems, [])  # a kilépés előtti mentés már sikerült
         zoltan = next(s for s in data.snapshots if s.name == "Zôltan")
         self.assertEqual(
             zoltan,
@@ -762,7 +786,7 @@ class AddonTests(unittest.TestCase):
                 D("86.28"),
                 D("303.25"),
                 D("1500.5"),
-                1760700000 + 600 + 86400 + 60,  # a harness órája kilépéskor
+                1760700000 + 600 + 86400 + 60,  # a harness órája a kilépés előtti mentéskor
             ),
         )
         jaina = next(s for s in data.snapshots if s.name == "Jaina")
