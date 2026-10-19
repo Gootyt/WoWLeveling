@@ -443,9 +443,10 @@ minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből va
   ha megfelel a szűrőknek: a régió, a kulcsszintek, az utolsó N nap, az időben
   teljesítés, az itemlevel-tartomány és a „legfeljebb N futás szintenként” (a
   legújabbak előbb). Az affix nem szűri őket. Ezeket a lekérdezés előtt számolja
-  be (a táblázat azonnal megtelik), és a lekérdezés nem számolja őket újra; a
-  csapataik guildjeit nem járja be. Így a minta attól is függ, mit kérdeztél le
-  korábban: a ranglista főleg magas kulcsokat hoz, a guildek minden szintet.
+  be (a táblázat azonnal megtelik), és a lekérdezés nem számolja őket újra – de
+  ugyanúgy továbbhalad rajtuk: ha eléri valamelyiket, a csapata guildjeit is
+  bejárja, mintha most számolta volna be. Így a minta attól is függ, mit kérdeztél
+  le korábban: a ranglista főleg magas kulcsokat hoz, a guildek minden szintet.
 - **Ranglista:** hány oldalt olvasson (API-kulcs nélkül legfeljebb 100),
   **minden dungeon külön** (alacsonyabb kulcsokat is elér), **affix** (pl. a csak
   a +2…+5 kulcsokon élő `lindormis-guidance`-szel a ranglista is eléri a kis

@@ -161,6 +161,47 @@ class FakeRaiderio:
         raise AssertionError(path)
 
 
+class FakeGuildRaiderio:
+    """A guildek bejárásához: a Solutions tagjának futásából derül ki a Bravo, abból a Charlie."""
+
+    GUILDS = {"solutions": ["Thrall"], "bravo": ["Jaina"], "charlie": ["Uther"]}
+    RUNS = {  # futás → (kulcsszint, csapat)
+        1: (12, [member("Thrall", 320, "Solutions"), member("Jaina", 330, "Bravo")]),
+        2: (12, [member("Jaina", 330, "Bravo"), member("Uther", 325, "Charlie")]),
+        3: (14, [member("Uther", 325, "Charlie")]),
+    }
+    RECENT = {"thrall": [1], "jaina": [2], "uther": [3]}  # a tagok legutóbbi futásai
+
+    def __init__(self):
+        self.calls = []
+        self.completed = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def __call__(self, path, params, max_retries=5):
+        self.calls.append(path)
+        if path == "mythic-plus/static-data":
+            return {"seasons": [SEASON]}
+        if path == "mythic-plus/runs":  # a ranglistán csak az 1-es futás van
+            return {"rankings": [leaderboard_run(1, 12)] if params["page"] == 0 else []}
+        if path == "guilds/profile":
+            names = self.GUILDS[params["name"].lower()]
+            return {"members": [{"character": {"name": name, "realm": "Ragnaros", "region": "eu"}} for name in names]}
+        if path == "characters/profile":
+            recent = [
+                {
+                    "mythic_level": self.RUNS[run_id][0],
+                    "completed_at": self.completed,
+                    "num_keystone_upgrades": 1,
+                    "url": f"https://raider.io/mythic-plus-runs/season-mn-2/{run_id}-12-the-stonevault",
+                }
+                for run_id in self.RECENT[params["name"].lower()]
+            ]
+            return {"gear": {"item_level_equipped": 300}, "guild": None, "mythic_plus_recent_runs": recent}
+        if path == "mythic-plus/run-details":
+            level, team = self.RUNS[params["id"]]
+            return {"mythic_level": level, "completed_at": self.completed, "num_chests": 1, "roster": team}
+        raise AssertionError(path)
+
+
 class RaiderioStatsTests(unittest.TestCase):
     def setUp(self):
         mplus.STOP.clear()
@@ -228,7 +269,8 @@ class RaiderioStatsTests(unittest.TestCase):
         number, runs, state = counted()
         self.assertEqual((number, runs), (4, {12: 3, 15: 1}))
         self.assertEqual(state["c"]["runs_ilvl_range"], 1)  # Illidan csapata
-        self.assertEqual(state["seen_runs"], {1, 2, 3, 6, 8})  # a lekérdezés ezeket már kihagyja
+        # A lekérdezés ezeket már nem számolja újra (a beszámoltak csapatait viszont követi).
+        self.assertEqual(state["from_cache"], {1: True, 2: True, 3: True, 6: True, 8: False})
         self.assertEqual(counted("--since-days", "30")[1], {12: 2, 15: 1})
         self.assertEqual(counted("--levels", "15")[1], {15: 1})
         self.assertEqual(counted("--include-untimed")[1], {12: 3, 15: 2})
@@ -272,6 +314,34 @@ class RaiderioStatsTests(unittest.TestCase):
         self.assertIn("Counted straight from the cache (--use-cached-runs): 3 run(s)", summary)
         self.assertTrue(titles[-1].endswith(" | + cached runs"))
         self.assertNotIn("cached runs", titles[0])
+
+    def test_cached_runs_keep_the_guild_crawl_going(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        fake = FakeGuildRaiderio()
+
+        def crawl(*argv):
+            args = mplus.build_parser().parse_args(
+                ["--cache", str(Path(folder.name) / "cache.json"), "--delay", "0", "--max-pages", "1", *argv]
+            )
+            seeds = mplus.prepare_args(args)
+            with mock.patch.object(mplus, "api_get", fake):
+                reason, state, _queue, _range = mplus.run(args, seeds, self.quiet_view, info=lambda line: None)
+            return reason, state
+
+        reason, first = crawl("--guild", "Solutions@Ragnaros")  # a csapatokon át mindhárom guildet bejárja
+        self.assertEqual((first["c"]["guilds_done"], dict(first["runs"])), (3, {12: 2, 14: 1}))
+        calls = len(fake.calls)
+        # A gyorsítótárból előre beszámolt futások csapatain át is továbbjut (és nem számolja őket újra).
+        reason, state = crawl("--guild", "Solutions@Ragnaros", "--use-cached-runs")
+        self.assertEqual((state["c"]["guilds_done"], dict(state["runs"])), (3, {12: 2, 14: 1}))
+        self.assertEqual(state["c"]["cached_runs"], 3)
+        self.assertEqual(len(fake.calls), calls)  # mindent a gyorsítótárból vett
+        self.assertEqual(reason, "the guild queue is empty - nothing left to crawl")
+        # Ugyanígy, ha a ranglistáról indul, és a csapattagok guildjeit követi.
+        reason, state = crawl("--follow-guilds", "--use-cached-runs")
+        self.assertEqual((state["c"]["guilds_done"], dict(state["runs"])), (3, {12: 2, 14: 1}))
+        self.assertEqual(reason, "the guild queue is empty - nothing left to crawl")
 
     def test_stop_ends_the_collection_with_what_it_has(self):
         def stop_at_second_team(run_id):

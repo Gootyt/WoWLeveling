@@ -22,11 +22,12 @@ NEW IN v4.3
   --include-untimed), --min-ilvl / --max-ilvl and --per-level (newest runs first);
   --dungeon as well where the query uses it (a single leaderboard query), but a run
   cached before v4.3 doesn't know its dungeon, so it is left out when one dungeon is
-  asked for. --affixes doesn't filter them. They are
-  counted before the query starts - the table fills up at once - and the query skips
-  them, so no run counts twice; their teams' guilds aren't followed. The sample then
-  depends on what was queried before: the leaderboard brings mostly high keys, guild
-  crawls every level.
+  asked for. --affixes doesn't filter them. They are counted before the query starts
+  - the table fills up at once - and the query doesn't count them again when it
+  reaches them, but goes on through them as usual: a guild crawl follows their teams'
+  guilds just the same (a cached run it never reaches adds no guild to the crawl).
+  The sample then depends on what was queried before: the leaderboard brings mostly
+  high keys, guild crawls every level.
 
 NEW IN v4.2
   ITEM LEVEL RANGE. Item levels below 250 or above 350 are ignored (250 and 350
@@ -1080,6 +1081,7 @@ def new_state():
             "gaps": [],                     # gear snapshot minus run time, in days
             "c": defaultdict(int),          # counters
             "seen_runs": set(),             # run ids already used (leaderboard + crawl)
+            "from_cache": {},               # run id -> counted? (--use-cached-runs, before the query)
             "seen_char_level": set(),       # (character, level) pairs used by the self-gear proxy
             "checked": set(),               # characters whose recent runs were read
             "char_guild": {}}               # character -> guild, from guild rosters already read
@@ -1378,15 +1380,16 @@ def add_cached_runs(args, season, regions, cache, state):
     downloaded it - that passes the filters: one of `regions` (None: any), --levels,
     --since-days, timed only, --min-ilvl / --max-ilvl, --per-level (newest runs first) and
     --dungeon where the query uses it too (a run cached before v4.3 doesn't know its
-    dungeon). Called before the query, which then skips these runs: no run counts twice.
-    Their teams' guilds aren't followed. Returns how many runs were counted.
+    dungeon). Called before the query, which doesn't count these runs again: it only
+    follows their teams' guilds when it reaches them (see follow_cached_team), so the
+    crawl goes on just as without this option. Returns how many runs were counted.
     """
     wanted = parse_levels(args.levels)
     # like the query: --dungeon only filters a single leaderboard query
     dungeon = None if args.guild or args.each_dungeon or args.dungeon == "all" else args.dungeon
     cutoff = (datetime.now(timezone.utc) - timedelta(days=args.since_days)
               if args.since_days else None)
-    c, seen = state["c"], state["seen_runs"]
+    c, seen, from_cache = state["c"], state["seen_runs"], state["from_cache"]
     prefix = run_key(season, "")
     oldest = datetime.min.replace(tzinfo=timezone.utc)
     candidates = []
@@ -1414,12 +1417,21 @@ def add_cached_runs(args, season, regions, cache, state):
             raise Stopped()
         if run_id in seen or (args.per_level and state["runs"][level] >= args.per_level):
             continue
-        seen.add(run_id)
-        if add_roster_run(args, state, level, None if completed == oldest else completed, roster, cache):
+        from_cache[run_id] = add_roster_run(args, state, level, None if completed == oldest else completed,
+                                            roster, cache)
+        if from_cache[run_id]:
             counted += 1
             c["cached_runs"] += 1
             live_changed()
     return counted
+
+
+def follow_cached_team(season, run_id, cache, state, queue):
+    """The query reached a run --use-cached-runs counted already: it isn't counted again,
+    but its team's guilds are queued as if it had been counted now."""
+    team = get_run(season, run_id, cache, state["c"], fetch=False)
+    if team:
+        enqueue_team_guilds(team["roster"], cache, state, queue)
 
 
 # --------------------------------------------------------------------------- leaderboard
@@ -1477,6 +1489,10 @@ def collect(args, season, dungeons, cache, state, queue):
                     continue
                 if run_id is not None:
                     seen.add(run_id)
+                if run_id in state["from_cache"]:       # counted already (--use-cached-runs)
+                    if follow and state["from_cache"][run_id]:
+                        follow_cached_team(season, run_id, cache, state, queue)
+                    continue
                 if wanted is not None and level not in wanted:
                     continue
                 if args.per_level and state["runs"][level] >= args.per_level:
@@ -1624,6 +1640,12 @@ def crawl_guilds(args, season, started, cache, state, queue):
                     continue
                 if run_season and run_season != season:
                     c["skipped_other_season"] += 1
+                    continue
+                if run_id in state["from_cache"]:       # counted already (--use-cached-runs)
+                    if run_id not in seen_runs:
+                        seen_runs.add(run_id)
+                        if follow and state["from_cache"][run_id]:
+                            follow_cached_team(run_season or season, run_id, cache, state, queue)
                     continue
                 if wanted is not None and level not in wanted:
                     continue
