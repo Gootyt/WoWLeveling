@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -104,6 +105,12 @@ def member(name, ilvl, guild="Solutions"):
     }
 
 
+def us_member(name, ilvl):
+    character = member(name, ilvl)
+    character["character"]["region"] = {"slug": "us"}
+    return character
+
+
 def leaderboard_run(run_id, level, chests=1):
     return {
         "run": {
@@ -119,9 +126,10 @@ def leaderboard_run(run_id, level, chests=1):
 class FakeRaiderio:
     """A Raider.io API helyett: a ranglista egy oldala és a futások csapatai."""
 
-    def __init__(self, on_details=None):
+    def __init__(self, on_details=None, affix_runs=None):
         self.calls = []
         self.on_details = on_details
+        self.affix_runs = affix_runs or {}  # affix → a ranglistán szereplő futások (a többinél mind)
         self.teams = {
             1: (12, [member("Thrall", 320), member("Jaina", 330.5), member("Arthas", 400)]),  # 400: tartományon kívül
             2: (12, [member("Uther", 325)]),
@@ -135,13 +143,21 @@ class FakeRaiderio:
         if path == "mythic-plus/runs":
             if params["page"] > 0:
                 return {"rankings": []}
+            if params["affixes"] in self.affix_runs:
+                return {"rankings": [leaderboard_run(i, self.teams[i][0]) for i in self.affix_runs[params["affixes"]]]}
             runs = [leaderboard_run(run_id, level) for run_id, (level, _team) in self.teams.items()]
             return {"rankings": runs + [leaderboard_run(4, 15, chests=0)]}  # időn túli: kimarad
         if path == "mythic-plus/run-details":
             if self.on_details:
                 self.on_details(params["id"])
             level, team = self.teams[params["id"]]
-            return {"mythic_level": level, "completed_at": "2026-10-10T20:00:00Z", "num_chests": 1, "roster": team}
+            return {
+                "mythic_level": level,
+                "completed_at": "2026-10-10T20:00:00Z",
+                "num_chests": 1,
+                "dungeon": {"slug": "the-stonevault", "name": "The Stonevault"},
+                "roster": team,
+            }
         raise AssertionError(path)
 
 
@@ -176,6 +192,86 @@ class RaiderioStatsTests(unittest.TestCase):
         self.assertIn("season=season-mn-2", lines[0])
         summary = "\n".join(mplus.summary_lines(state, guild_queue, ilvl_range))
         self.assertIn("(1 player(s) skipped for an item level outside the allowed range (250-350))", summary)
+
+    def test_cached_run_filters(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cache = mplus.DiskCache(str(Path(folder.name) / "cache.json"), 24)
+        self.addCleanup(cache.close)
+        now = datetime.now(timezone.utc)
+
+        def put(run_id, level, days_ago, team, timed=True, dungeon="the-stonevault", season="season-mn-2"):
+            completed = (now - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            roster = [mplus.pack_member(m) for m in team]
+            entry = {"level": level, "completed_at": completed, "timed": timed, "roster": roster}
+            if dungeon:
+                entry["dungeon"] = dungeon
+            cache.put(mplus.run_key(season, run_id), entry)
+
+        put(1, 12, 1, [member("Thrall", 320), member("Jaina", 330)])
+        put(2, 12, 2, [member("Uther", 325)])
+        put(3, 12, 40, [member("Arthas", 300)])  # régi
+        put(4, 15, 1, [member("Sylvanas", 335)], timed=False)  # időn túli
+        put(5, 15, 1, [us_member("Varian", 331)])  # más régió
+        put(6, 15, 1, [member("Anduin", 333)], dungeon=None)  # 4.3 előtti: nem tudja a dungeont
+        put(7, 15, 1, [member("Garrosh", 340)], season="season-mn-1")  # előző szezon
+        put(8, 18, 1, [member("Illidan", 400)])  # tartományon kívüli itemlevel: nem számít
+
+        def counted(*argv, regions=frozenset({"eu"}), seen=()):
+            args, _seeds = self.args(*argv)
+            state = mplus.new_state()
+            state["seen_runs"].update(seen)
+            number = mplus.add_cached_runs(args, "season-mn-2", regions, cache, state)
+            self.assertEqual(number, state["c"]["cached_runs"])
+            return number, {level: runs for level, runs in state["runs"].items() if runs}, state
+
+        number, runs, state = counted()
+        self.assertEqual((number, runs), (4, {12: 3, 15: 1}))
+        self.assertEqual(state["c"]["runs_ilvl_range"], 1)  # Illidan csapata
+        self.assertEqual(state["seen_runs"], {1, 2, 3, 6, 8})  # a lekérdezés ezeket már kihagyja
+        self.assertEqual(counted("--since-days", "30")[1], {12: 2, 15: 1})
+        self.assertEqual(counted("--levels", "15")[1], {15: 1})
+        self.assertEqual(counted("--include-untimed")[1], {12: 3, 15: 2})
+        self.assertEqual(counted("--dungeon", "the-stonevault")[1], {12: 3})
+        self.assertEqual(counted("--dungeon", "the-stonevault", "--each-dungeon")[1], {12: 3, 15: 1})  # ott nem szűr
+        self.assertEqual(counted(regions=None)[1], {12: 3, 15: 2})  # „world”: minden régió
+        self.assertEqual(counted(seen={1})[1], {12: 2, 15: 1})
+        # Szintenként legfeljebb egy futás: a legújabb.
+        _number, runs, state = counted("--per-level", "1")
+        self.assertEqual((runs, state["ilvls"][12]), ({12: 1, 15: 1}, [320.0, 330.0]))
+
+    def test_cached_runs_are_counted_with_the_query(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        fake = FakeRaiderio(affix_runs={"fortified": [3]})  # ezzel az affixszel csak a 3-as futás látszik
+        titles = []
+
+        def query(*argv):
+            args = mplus.build_parser().parse_args(
+                ["--cache", str(Path(folder.name) / "cache.json"), "--delay", "0", "--max-pages", "1", *argv]
+            )
+            seeds = mplus.prepare_args(args)
+
+            def view(state, guild_queue, title):
+                titles.append(title)
+                return self.quiet_view(state, guild_queue, title)
+
+            with mock.patch.object(mplus, "api_get", fake):
+                _reason, state, guild_queue, ilvl_range = mplus.run(args, seeds, view, info=lambda line: None)
+            return state, "\n".join(mplus.summary_lines(state, guild_queue, ilvl_range))
+
+        first, _summary = query()  # mindhárom csapatot letölti (és a gyorsítótárba teszi)
+        self.assertEqual(dict(first["runs"]), {12: 2, 15: 1})
+        only_reached, _summary = query("--affixes", "fortified")
+        self.assertEqual(dict(only_reached["runs"]), {15: 1})  # alapból csak az elért futások számítanak
+        downloads = fake.calls.count("mythic-plus/run-details")
+        state, summary = query("--affixes", "fortified", "--use-cached-runs")
+        self.assertEqual(mplus.summary_rows(state), mplus.summary_rows(first))
+        self.assertEqual(state["c"]["cached_runs"], 3)  # a 3-ast a lekérdezés már nem számolja újra
+        self.assertEqual(fake.calls.count("mythic-plus/run-details"), downloads)  # semmit sem tölt le újra
+        self.assertIn("Counted straight from the cache (--use-cached-runs): 3 run(s)", summary)
+        self.assertTrue(titles[-1].endswith(" | + cached runs"))
+        self.assertNotIn("cached runs", titles[0])
 
     def test_stop_ends_the_collection_with_what_it_has(self):
         def stop_at_second_team(run_id):

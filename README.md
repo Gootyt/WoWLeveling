@@ -436,6 +436,16 @@ minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből va
 - **Itemlevel:** a tartományon kívüli itemlevelű játékos kimarad (a csapat többi
   tagja számít); **csak az utolsó N nap** futásai; **csak az időben teljesített
   futások** (alapból igen).
+- **A korábban letöltött futásokat is beszámolja** (alapból ki): alapból csak az
+  számít, amit a mostani lekérdezés elér – a gyorsítótár csak a letöltést spórolja
+  meg. Bekapcsolva a gyorsítótárban lévő összes idei szezonbeli futás is
+  beleszámít, bármelyik korábbi lekérdezés (ranglista vagy guildek) töltötte le,
+  ha megfelel a szűrőknek: a régió, a kulcsszintek, az utolsó N nap, az időben
+  teljesítés, az itemlevel-tartomány és a „legfeljebb N futás szintenként” (a
+  legújabbak előbb). Az affix nem szűri őket. Ezeket a lekérdezés előtt számolja
+  be (a táblázat azonnal megtelik), és a lekérdezés nem számolja őket újra; a
+  csapataik guildjeit nem járja be. Így a minta attól is függ, mit kérdeztél le
+  korábban: a ranglista főleg magas kulcsokat hoz, a guildek minden szintet.
 - **Ranglista:** hány oldalt olvasson (API-kulcs nélkül legfeljebb 100),
   **minden dungeon külön** (alacsonyabb kulcsokat is elér), **affix** (pl. a csak
   a +2…+5 kulcsokon élő `lindormis-guidance`-szel a ranglista is eléri a kis

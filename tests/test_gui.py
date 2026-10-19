@@ -909,6 +909,7 @@ class GuiTests(unittest.TestCase):
                     mplus.add_ilvl(state, level, value)
                 view.changed()
             state["c"]["guilds_done"] = 1
+            state["c"]["cached_runs"] = 1
             view.event("guild Solutions@ragnaros@eu: 40 member(s), 38 to check")
             view.stop("finished")
             return None, state, guild_queue, "250-350"
@@ -923,6 +924,8 @@ class GuiTests(unittest.TestCase):
         window.guilds_var.set("Solutions@Ragnaros")
         window.levels_var.set("2-4")
         window.per_level_var.set("5")
+        self.assertFalse(window.cached_runs_var.get())  # alapból csak a most elért futások számítanak
+        window.cached_runs_var.set(True)
         with mock.patch.object(mplus, "run", fake_run):
             window.start_button.invoke()
             self.assertTrue(window.running)
@@ -930,6 +933,7 @@ class GuiTests(unittest.TestCase):
             self.wait_until_finished(window)
         args = seen["args"]
         self.assertEqual((args.guild, args.levels, args.per_level, args.follow_guilds), (["Solutions@Ragnaros"], "2,3,4", 5, True))
+        self.assertTrue(args.use_cached_runs)
         self.assertEqual(seen["seeds"], [("eu", "Ragnaros", "Solutions")])
         self.assertEqual(Path(args.cache), self.path.parent.resolve() / stats.MPLUS_CACHE_NAME)
         self.assertEqual(
@@ -938,11 +942,13 @@ class GuiTests(unittest.TestCase):
         )
         self.assertEqual(window.status_var.get(), "Kész.")
         self.assertIn("beolvasott guildek: 1", window.progress_var.get())
+        self.assertIn("ebből korábban letöltött (a gyorsítótárból): 1", window.progress_var.get())
         log = window.log.content()
         self.assertIn("season=season-mn-2", log)
         self.assertIn("guild Solutions@ragnaros@eu: 40 member(s)", log)
         self.assertIn("(P25 = 25th percentile", log)  # az összefoglaló is a naplóba kerül
         self.assertEqual(load_data(self.path).stats_options["mplus"]["guilds"], "Solutions@Ragnaros")
+        self.assertTrue(load_data(self.path).stats_options["mplus"]["cached_runs"])
 
         csv_path = self.path.parent / "mplus.csv"
         with mock.patch.object(stats.filedialog, "asksaveasfilename", return_value=str(csv_path)):

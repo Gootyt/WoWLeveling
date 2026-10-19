@@ -522,6 +522,8 @@ class _MythicView(mplus.LiveView):
                 f" · beolvasott guildek: {c['guilds_done']}, várakozik: {len(self.queue)}"
                 f" · ellenőrzött karakterek: {c['chars_checked']}"
             )
+        if c["cached_runs"]:
+            text += f" · ebből korábban letöltött (a gyorsítótárból): {c['cached_runs']}"
         return text
 
     def api_line(self) -> str:
@@ -555,7 +557,9 @@ class MythicStatsWindow(StatsWindow):
         "ennél kisebb az itemlevele), minimum és maximum. A ranglista csak a legjobb pontszámú (magas) "
         "futásokat éri el; a guildek tagjainak legutóbbi futásai minden kulcsszintet. A táblázat menet "
         "közben frissül; a „Leállítás” az eddigi adatokkal zárja le. A letöltött adatok a gyorsítótárban "
-        "maradnak, így egy újabb lekérdezés csak az újakat kéri le."
+        "maradnak, így egy újabb lekérdezés csak az újakat kéri le. Alapból csak a most elért futásokból "
+        "számol; kérésre a korábbi lekérdezésekkel letöltött futásokat is beszámolja, ha megfelelnek a "
+        "szűrőknek."
     )
     COLUMNS = (
         ("level", "Kulcsszint", 8),
@@ -592,6 +596,7 @@ class MythicStatsWindow(StatsWindow):
         self.max_ilvl_var = self.option("max_ilvl", "350")
         self.since_days_var = self.option("since_days", "")
         self.timed_only_var = self.option("timed_only", True, tk.BooleanVar)
+        self.cached_runs_var = self.option("cached_runs", False, tk.BooleanVar)
         self.pages_var = self.option("pages", "5")
         self.each_dungeon_var = self.option("each_dungeon", False, tk.BooleanVar)
         self.affixes_var = self.option("affixes", "all")
@@ -650,9 +655,14 @@ class MythicStatsWindow(StatsWindow):
         ttk.Entry(ilvl, textvariable=self.since_days_var, width=6).pack(side="left")
         ttk.Label(ilvl, text="nap futásai (üresen: az egész szezon)", style="Hint.TLabel").pack(side="left", padx=(4, 0))
         self.field(box, 4, "Itemlevel:", ilvl)
-        ttk.Checkbutton(box, text="Csak az időben teljesített futások", variable=self.timed_only_var).grid(
-            row=5, column=1, columnspan=2, sticky="w", pady=2
-        )
+        flags = ttk.Frame(box)
+        flags.grid(row=5, column=1, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(flags, text="Csak az időben teljesített futások", variable=self.timed_only_var).pack(side="left")
+        ttk.Checkbutton(
+            flags,
+            text="A korábban letöltött futásokat is beszámolja (a gyorsítótárból, a szűrőkön belül)",
+            variable=self.cached_runs_var,
+        ).pack(side="left", padx=(16, 0))
 
         pages = ttk.Frame(box)
         ttk.Entry(pages, textvariable=self.pages_var, width=6).pack(side="left")
@@ -713,6 +723,7 @@ class MythicStatsWindow(StatsWindow):
         days = parse_number(self.since_days_var.get(), "Utolsó napok", minimum=1, empty=-1)
         args.since_days = None if days == -1 else days
         args.include_untimed = not self.timed_only_var.get()
+        args.use_cached_runs = self.cached_runs_var.get()
         args.max_pages = parse_number(self.pages_var.get(), "Ranglista-oldalak", minimum=1, maximum=1000)
         args.each_dungeon = self.each_dungeon_var.get()
         args.affixes = self.affixes_var.get().strip() or "all"

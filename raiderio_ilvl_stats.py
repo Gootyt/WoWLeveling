@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-raiderio_ilvl_stats.py  (v4.2)
+raiderio_ilvl_stats.py  (v4.3)
 
 Average / median / 25th percentile / min / max item level of Mythic+ groups,
 grouped by keystone level, using the public Raider.IO API (https://raider.io/api).
@@ -12,6 +12,21 @@ IN THE WOW LEVELING PLANNER
   and a Stop button instead of Ctrl+C (see run() and STOP). Run on its own it
   works exactly as described below. Without the requests package it uses
   httpcompat.py (the same requests calls over the standard library's urllib).
+
+NEW IN v4.3
+  CACHED RUNS IN THE STATISTICS (--use-cached-runs, off by default). Normally only
+  the runs the query itself reaches are counted - the cache just saves downloading
+  them. With this option every run of the season the cache holds counts too,
+  whichever earlier query (leaderboard or guild crawl) downloaded it, as long as it
+  passes the filters: region, --levels, --since-days, timed only (unless
+  --include-untimed), --min-ilvl / --max-ilvl and --per-level (newest runs first);
+  --dungeon as well where the query uses it (a single leaderboard query), but a run
+  cached before v4.3 doesn't know its dungeon, so it is left out when one dungeon is
+  asked for. --affixes doesn't filter them. They are
+  counted before the query starts - the table fills up at once - and the query skips
+  them, so no run counts twice; their teams' guilds aren't followed. The sample then
+  depends on what was queried before: the leaderboard brings mostly high keys, guild
+  crawls every level.
 
 NEW IN v4.2
   ITEM LEVEL RANGE. Item levels below 250 or above 350 are ignored (250 and 350
@@ -810,6 +825,12 @@ class DiskCache:
             n[key.split(":", 1)[0]] += 1
         return n
 
+    def entries(self, prefix):
+        """(key, entry) of every valid entry whose key starts with prefix."""
+        now = time.time()
+        return [(key, entry) for key, entry in self.data.items()
+                if key.startswith(prefix) and self.valid(key, entry, now)]
+
     # -- writing
     @staticmethod
     def _line(key, entry):
@@ -953,6 +974,7 @@ def get_run(season, run_id, cache, c, fetch=True):
             return None
         entry = cache.put(key, {"level": details.get("mythic_level"),
                                 "completed_at": details.get("completed_at"),
+                                "dungeon": _text(details.get("dungeon"), "slug"),
                                 "timed": timed_status(details), "roster": packed})
     else:
         c["run_hits"] += 1
@@ -1285,6 +1307,8 @@ class LiveView:
         if c["guilds_done"] or len(self.queue):
             text += (f" | guilds read {c['guilds_done']}, waiting {len(self.queue)}"
                      f" | characters checked {c['chars_checked']}")
+        if c["cached_runs"]:
+            text += f" | counted straight from the cache: {c['cached_runs']} run(s)"
         return text
 
     def api_line(self):
@@ -1344,6 +1368,58 @@ class LiveView:
             if self.csv_failing:
                 log(f"{self.csv_path} is being updated again")
             self.csv_failing = False
+
+
+# --------------------------------------------------------------------------- cached runs
+
+def add_cached_runs(args, season, regions, cache, state):
+    """
+    --use-cached-runs: count every run of `season` in the cache - whichever earlier query
+    downloaded it - that passes the filters: one of `regions` (None: any), --levels,
+    --since-days, timed only, --min-ilvl / --max-ilvl, --per-level (newest runs first) and
+    --dungeon where the query uses it too (a run cached before v4.3 doesn't know its
+    dungeon). Called before the query, which then skips these runs: no run counts twice.
+    Their teams' guilds aren't followed. Returns how many runs were counted.
+    """
+    wanted = parse_levels(args.levels)
+    # like the query: --dungeon only filters a single leaderboard query
+    dungeon = None if args.guild or args.each_dungeon or args.dungeon == "all" else args.dungeon
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.since_days)
+              if args.since_days else None)
+    c, seen = state["c"], state["seen_runs"]
+    prefix = run_key(season, "")
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    candidates = []
+    for key, entry in cache.entries(prefix):
+        level, completed = entry.get("level"), parse_ts(entry.get("completed_at"))
+        if not isinstance(level, int) or isinstance(level, bool):
+            continue
+        if wanted is not None and level not in wanted:
+            continue
+        if cutoff and (completed is None or completed < cutoff):
+            continue
+        if not (args.include_untimed or entry.get("timed") is True):
+            continue
+        if dungeon is not None and entry.get("dungeon") != dungeon:
+            continue
+        roster = [unpack_member(m) for m in entry.get("roster") or []]
+        refs = [ref for ref in map(character_ref, roster) if ref]
+        if regions is not None and (not refs or refs[0][0] not in regions):
+            continue
+        run_id = key[len(prefix):]
+        candidates.append((completed or oldest, int(run_id) if run_id.isdigit() else run_id, level, roster))
+    counted = 0
+    for completed, run_id, level, roster in sorted(candidates, key=lambda item: item[0], reverse=True):
+        if STOP.is_set():
+            raise Stopped()
+        if run_id in seen or (args.per_level and state["runs"][level] >= args.per_level):
+            continue
+        seen.add(run_id)
+        if add_roster_run(args, state, level, None if completed == oldest else completed, roster, cache):
+            counted += 1
+            c["cached_runs"] += 1
+            live_changed()
+    return counted
 
 
 # --------------------------------------------------------------------------- leaderboard
@@ -1643,6 +1719,9 @@ def summary_lines(state, queue=None, ilvl_range=None):
               + (f", {c['lookup_errors']} lookup(s) failed" if c["lookup_errors"] else "")]
     lines.append(f"From the cache: {c['run_hits']} run(s), {c['profile_hits']} profile(s), "
                  f"{c['guild_hits']} guild roster(s), {c['page_hits']} leaderboard page(s)")
+    if c["cached_runs"]:
+        lines.append(f"Counted straight from the cache (--use-cached-runs): {c['cached_runs']} run(s) "
+                     f"downloaded by earlier queries")
     waiting = len(queue) if queue is not None else 0
     if c["guilds_done"] or waiting:
         lines.append(f"Guild crawl: {c['guilds_done']} guild roster(s) read, {waiting} still waiting, "
@@ -1984,6 +2063,11 @@ def build_parser():
                    help="how long cached profiles, guild rosters, leaderboard pages and season data "
                         "stay valid (runs never expire)")
     p.add_argument("--no-cache", action="store_true", help="don't read/write the cache file")
+    p.add_argument("--use-cached-runs", action="store_true",
+                   help="also count every run of the season already in the cache (downloaded by any "
+                        "earlier query) that passes the filters - region, --levels, --since-days, timed "
+                        "only, --min-ilvl/--max-ilvl, --per-level, --dungeon - not just the runs this "
+                        "query reaches")
     p.add_argument("--api-key", default=None, help="Raider.IO access key (or env RAIDERIO_API_KEY)")
     p.add_argument("--delay", type=float, default=0.4, help="seconds between requests")
     p.add_argument("--csv", default=None,
@@ -2116,6 +2200,8 @@ def run(args, seeds, make_view, info=print):
         title = f"Raider.IO ilvl | {season} | {mode} | {runs_kind}"
         if ilvl_range:
             title += f" | ilvl {ilvl_range}"
+        if args.use_cached_runs:
+            title += " | + cached runs"
         LIVE = make_view(state, queue, title)
         if args.follow_guilds:
             info("Following the guilds of every team member - this can run for a very long time. "
@@ -2123,6 +2209,11 @@ def run(args, seeds, make_view, info=print):
         reason = None
         try:
             LIVE.start()
+            if args.use_cached_runs:
+                live_status("runs in the cache")
+                regions = None if args.region == "world" else {args.region} | {seed[0] for seed in seeds}
+                counted = add_cached_runs(args, season, regions, cache, state)
+                log(f"  counted straight from the cache: {counted} run(s) downloaded by earlier queries")
             if args.guild:
                 reason = crawl_guilds(args, season, started, cache, state, queue)
             else:
