@@ -44,6 +44,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
+import gearing
 from leveling import (
     ITEM_LEVEL_MAX,
     ITEM_LEVEL_STEP,
@@ -642,9 +643,36 @@ def _hundredths(value: Decimal | None) -> int | None:
     return None if value is None else int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
 
 
+# A játék betűkészletében nincs ő és ű: az addonnak küldött feliratokban ö és ü áll helyettük.
+_GAME_FONT = str.maketrans("őűŐŰ", "öüÖÜ")
+
+
+def gear_payload(data: LevelingData) -> dict:
+    """A gear ajánló adatai az addonnak (lásd Gear.lua): a tartalmak csoportjai a statisztikákból
+    frissített belépési ilvl-ekkel, az itemlevelek századokban (311,6 -> 31160)."""
+
+    def hundredths(value: float) -> int:
+        return round(value * 100)
+
+    groups = []
+    for group in gearing.with_entry_mins(data.gear_entry_min, gearing.GROUPS):
+        rows = [
+            {
+                "name": row.name.translate(_GAME_FONT),
+                "entry": hundredths(row.entry_min),
+                "drop": hundredths(row.drop_max),
+                "vault": None if row.vault_max is None else hundredths(row.vault_max),  # nincs Vault-plafon
+            }
+            for row in group.rows
+        ]
+        groups.append({"id": group.id, "label": group.label.translate(_GAME_FONT), "tiered": group.tiered, "rows": rows})
+    return {"updated": len(data.gear_entry_min), "groups": groups}
+
+
 def plan_payload(data: LevelingData, now: datetime | None = None) -> dict:
-    """A terv adatai az addon lemaradás-ablakához. A szintek, az itemlevelek és a pontszámok
-    századokban (egész számok), a dátumok ÉÉÉÉ-HH-NN alakban; a számolás a Plan.lua-ban van."""
+    """A terv adatai az addon lemaradás-ablakához (és a gear ajánlójához, lásd gear_payload). A
+    szintek, az itemlevelek és a pontszámok századokban (egész számok), a dátumok ÉÉÉÉ-HH-NN
+    alakban; a számolás a Plan.lua-ban (és a Gear.lua-ban) van."""
     settings = data.settings
     characters = []
     windows = leveling_windows(settings, len(data.characters))
@@ -676,6 +704,7 @@ def plan_payload(data: LevelingData, now: datetime | None = None) -> dict:
         "targetLevel": _hundredths(settings.target_level),
         "targetItemLevel": _hundredths(settings.target_item_level),
         "characters": characters,
+        "gear": gear_payload(data),
     }
 
 

@@ -23,6 +23,7 @@
 -- Parancsok: /wowleveling (vagy /wowlvl): a karakter elmentett adatai;
 --            /wowleveling lista: az összes elmentett karakter;
 --            /wowleveling ablak: a lemaradás ablakának be- és kikapcsolása;
+--            /wowleveling gear: a gear ajánló be- és kikapcsolása (lásd Gear.lua);
 --            /wowleveling mentés: az adatok kiíratása most (a felület újratöltésével).
 
 local ADDON_NAME, ns = ...
@@ -104,6 +105,8 @@ local function EquippedItemLevel()
 	end
 	return nil
 end
+
+ns.EquippedItemLevel = EquippedItemLevel -- a gear ajánlónak (Gear.lua)
 
 -- Az aktuális szezon Mythic+ pontszáma.
 local function MythicPlusScore()
@@ -507,7 +510,7 @@ local function CreateWindow()
 
 	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	title:SetPoint("TOPLEFT", COLUMNS[1], -9)
-	title:SetText("WoWLeveling - a legnagyobb lemaradás")
+	title:SetText("WoWLeveling - lemaradás")
 	local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 	close:SetPoint("TOPRIGHT", 0, 0)
 	close:SetScript("OnClick", function()
@@ -532,6 +535,14 @@ local function CreateWindow()
 		GameTooltip:Hide()
 	end)
 	frame.saveButton = save
+	local gear = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	gear:SetSize(48, 18)
+	gear:SetPoint("RIGHT", save, "LEFT", -4, 0)
+	gear:SetText("Gear")
+	gear:SetScript("OnClick", function()
+		ns.ToggleGear()
+	end)
+	frame.gearButton = gear
 
 	frame.rows = {}
 	for index, row in ipairs(ROWS) do
@@ -565,9 +576,22 @@ function ns.ShowWindow(show)
 	end
 end
 
+-- A gear ajánló (Gear.lua) be- és kikapcsolása. Az új fájlt a játék csak újraindítás után tölti
+-- be (a /reload után még nem), addig ezt üzeni.
+function ns.ToggleGear()
+	if ns.Gear then
+		ns.Gear.Toggle()
+	else
+		print(PREFIX .. "A gear ajánlóhoz indítsd újra a játékot: új fájl került az addonba.")
+	end
+end
+
 local function StartWindow()
 	if not WoWLevelingDB.window.hidden then
 		ns.ShowWindow(true)
+	end
+	if ns.Gear then
+		ns.Gear.Start()
 	end
 	if C_Timer and C_Timer.NewTicker then
 		C_Timer.NewTicker(60, function() -- éjfél után új nap: új szintcélok
@@ -586,6 +610,10 @@ SlashCmdList.WOWLEVELING = function(message)
 	local command = (message or ""):match("^%s*(.-)%s*$"):lower()
 	if command == "ablak" or command == "window" then
 		ns.ShowWindow(not (window and window:IsShown()))
+		return
+	end
+	if command == "gear" then
+		ns.ToggleGear()
 		return
 	end
 	if command == "mentés" or command == "mentes" or command == "save" then
@@ -613,7 +641,7 @@ SlashCmdList.WOWLEVELING = function(message)
 		Print("hiba: " .. WoWLevelingDB.lastError)
 	end
 	Print("A játék kilépéskor, kijelentkezéskor és /reload után írja ki az adatokat; most rögtön: /wowleveling mentés")
-	Print("A lemaradás ablaka: /wowleveling ablak")
+	Print("A lemaradás ablaka: /wowleveling ablak · a gear ajánló: /wowleveling gear")
 	if WoWLevelingDB.addonVersion then
 		Print("Az addon változata: " .. WoWLevelingDB.addonVersion)
 	end

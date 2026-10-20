@@ -11,7 +11,9 @@ import unittest
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
+import gearing
 import wow_addon
 from leveling import (
     MODES,
@@ -350,7 +352,7 @@ class FilesTests(unittest.TestCase):
         self.assertEqual(target, self.game / "Interface" / "AddOns" / "WoWLeveling")
         self.assertEqual(
             sorted(path.name for path in target.iterdir()),
-            ["Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
+            ["Gear.lua", "Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
         )
         for place in (self.root, self.game, target):
             with self.subTest(place=place):
@@ -367,7 +369,7 @@ class FilesTests(unittest.TestCase):
         versions = [int(version) for version in directives["Interface"].split(",")]
         self.assertIn(120105, versions)  # 12.1.5 (2026. október)
         files = [line for line in toc.splitlines() if line.strip() and not line.startswith("#")]
-        self.assertEqual(files, ["PlanData.lua", "Plan.lua", "WoWLeveling.lua"])  # előbb az adatok
+        self.assertEqual(files, ["PlanData.lua", "Plan.lua", "Gear.lua", "WoWLeveling.lua"])  # előbb az adatok
         self.assertRegex(directives["Version"], r"^\d+\.\d+\.\d+$")
         # A program nélkül telepítve még nincs terv (a program ezt írja felül).
         placeholder = (wow_addon.ADDON_SOURCE / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
@@ -383,8 +385,9 @@ class FilesTests(unittest.TestCase):
         data = LevelingData(settings, [thrall, Character("Jaina")], SpecScores({"death knight/frost": D("3700.5")}))
         data.addon_imported = {"twistingnether/thrall": 1760700000}
         payload = wow_addon.plan_payload(data, datetime(2026, 10, 17, 12, 30))
+        self.assertEqual(payload["gear"], wow_addon.gear_payload(data))  # a gear ajánlóhoz (lásd GearTests)
         self.assertEqual(
-            {key: value for key, value in payload.items() if key != "characters"},
+            {key: value for key, value in payload.items() if key not in ("characters", "gear")},
             {
                 "version": 1,
                 "generated": int(datetime(2026, 10, 17, 12, 30).timestamp()),
@@ -420,7 +423,7 @@ class FilesTests(unittest.TestCase):
         written = parse_lua(text)[wow_addon.PLAN_VARIABLE]
         self.assertEqual(written["characters"][1]["name"], "Thrall")  # a Lua-tömb 1-től számozott
         self.assertEqual(written["characters"][2], {k: v for k, v in payload["characters"][1].items() if v is not None})
-        self.assertEqual(sorted(p.name for p in target.iterdir())[:2], ["Plan.lua", "PlanData.lua"])  # nincs .tmp
+        self.assertFalse([p.name for p in target.iterdir() if p.suffix == ".tmp"])  # nem maradt ideiglenes fájl
 
         # Egy régebbi addont előbb frissít (különben nem olvasná be a tervet).
         (target / "WoWLeveling.toc").write_text("## Version: 1.0.0\n\nWoWLeveling.lua\n", encoding="utf-8")
@@ -694,6 +697,129 @@ class PlanTests(unittest.TestCase):
         )
 
 
+def addon_gear_groups(gear: dict) -> tuple[gearing.ContentGroup, ...]:
+    """A gear ajánló csoportjai úgy, ahogy az addon megkapja őket (századokban)."""
+    return tuple(
+        gearing.ContentGroup(
+            group["id"],
+            group["label"],
+            tuple(
+                gearing.ContentRow(
+                    row["name"], row["entry"] / 100, row["drop"] / 100, None if row["vault"] is None else row["vault"] / 100
+                )
+                for row in group["rows"]
+            ),
+            tiered=group["tiered"],
+        )
+        for group in gear["groups"]
+    )
+
+
+def gear_cells(item: gearing.Evaluation) -> list[str]:
+    """Egy sor cellái úgy, ahogy az addon gear ablaka mutatja (színkódok nélkül)."""
+    row = item.row
+    return [
+        row.name,
+        gearing.format_ilvl(max(row.entry_min, gearing.MIN_ILVL)),
+        gearing.format_ilvl(row.drop_max),
+        "Nincs" if row.vault_max is None else gearing.format_ilvl(row.vault_max),
+        gearing.STATUSES[item.status].label if item.status else "-",
+        item.note,
+    ]
+
+
+class GearPayloadTests(unittest.TestCase):
+    def test_gear_data_for_the_addon(self):
+        data = LevelingData(Settings.default(), [])
+        data.gear_entry_min = {"Mythic+ 10": 309.5}
+        groups = (
+            gearing.ContentGroup("dungeon", "Dungeon", (gearing.ContentRow("Normal Dungeon", 0, 214, None),)),
+            gearing.ContentGroup(
+                "mplus", "Mythic+", (gearing.ContentRow("Mythic+ 10", 311.6, 311, 318),), tiered=True
+            ),
+            gearing.ContentGroup("world", "Világ / Napi küldetés", (gearing.ContentRow("Őrült kihívás", 1, 276.25, None),)),
+        )
+        with mock.patch.object(gearing, "GROUPS", groups):
+            gear = wow_addon.gear_payload(data)
+        self.assertEqual(
+            gear,
+            {
+                "updated": 1,  # ennyi belépési ilvl jött a statisztikákból
+                "groups": [
+                    {
+                        "id": "dungeon",
+                        "label": "Dungeon",
+                        "tiered": False,
+                        "rows": [{"name": "Normal Dungeon", "entry": 0, "drop": 21400, "vault": None}],
+                    },
+                    {
+                        "id": "mplus",
+                        "label": "Mythic+",
+                        "tiered": True,
+                        "rows": [{"name": "Mythic+ 10", "entry": 30950, "drop": 31100, "vault": 31800}],
+                    },
+                    {  # a játék betűkészletében nincs ő és ű
+                        "id": "world",
+                        "label": "Világ / Napi küldetés",
+                        "tiered": False,
+                        "rows": [{"name": "Örült kihívás", "entry": 100, "drop": 27625, "vault": None}],
+                    },
+                ],
+            },
+        )
+        text = wow_addon.lua_value(gear)
+        self.assertNotIn('["vault"]', text.split('"Normal Dungeon"')[1].split("}")[0])  # nincs Vault-plafon: nil
+
+
+@unittest.skipIf(LUA is None, "nincs Lua-értelmező (lua5.1, luajit vagy lua)")
+class GearTests(unittest.TestCase):
+    """Az addon gear ajánlója (Gear.lua) ugyanazt számolja-e, mint a program (gearing.py)."""
+
+    def test_addon_computes_what_the_program_does(self):
+        rng = random.Random(20261020)
+        data = LevelingData(Settings.default(), [])
+        data.gear_entry_min = {"Mythic+ 10": 309.5, "Raid - Sszorak Heroic": 318.7}
+        gear = wow_addon.gear_payload(data)
+        groups = addon_gear_groups(gear)
+        ids = [group.id for group in groups]
+        edges = sorted({value for group in groups for row in group.rows for value in (row.entry_min, row.drop_max, row.vault_ceiling)})
+        cases, expected = [], []
+        for index in range(300):
+            if index == 0:
+                ilvl = None  # nem ismert itemlevel: értékelés nélkül
+            elif index % 3 == 0:
+                ilvl = rng.choice(edges)  # pontosan egy határon
+            else:
+                ilvl = round(rng.uniform(150, 360) * 16) / 16  # mint a játék átlaga (1/16-os lépések)
+            active = sorted(rng.sample(ids, rng.randint(0, len(ids))))
+            show_all = rng.random() < 0.3
+            items = gearing.build_items(ilvl, set(active), show_all, groups)
+            expected.append([[item.row.name, item.status or "", item.note] for item in items])
+            lua_active = "{ " + "".join(f'["{group_id}"] = true, ' for group_id in active) + "}"
+            lua_ilvl = "nil" if ilvl is None else repr(ilvl)
+            cases.append(f"\t{{ gear = Gear, ilvl = {lua_ilvl}, active = {lua_active}, showAll = {str(show_all).lower()} }},")
+        with tempfile.TemporaryDirectory() as folder:
+            cases_path, output = Path(folder) / "esetek.lua", Path(folder) / "eredmenyek.lua"
+            cases_path.write_text(
+                f"Gear = {wow_addon.lua_value(gear)}\nCases = {{\n" + "\n".join(cases) + "\n}\n", encoding="utf-8"
+            )
+            result = subprocess.run(
+                [LUA, str(TESTS / "gear_harness.lua"), str(wow_addon.ADDON_SOURCE / "Gear.lua"), str(cases_path), str(output)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            results = parse_lua(output.read_text(encoding="utf-8"))["Results"]
+        statuses = set()
+        for index, want in enumerate(expected):
+            got = [[item[1], item[2], item[3]] for _, item in sorted(results[index + 1].items())]
+            statuses.update(row[1] for row in want)
+            with self.subTest(case=index):
+                self.assertEqual(got, want)
+        self.assertEqual(statuses, {"", "recommended", "vault", "undergeared", "outgrown"})  # minden állapot előfordult
+
+
 @unittest.skipIf(LUA is None, "nincs Lua-értelmező (lua5.1, luajit vagy lua)")
 class AddonTests(unittest.TestCase):
     """Az addon lefuttatása a játékot utánzó környezetben (tests/addon_harness.lua)."""
@@ -729,6 +855,31 @@ class AddonTests(unittest.TestCase):
             elif line.startswith("footer: "):
                 current["footer"] = line[len("footer: "):]
         return dumps
+
+    @staticmethod
+    def gear_dumps(chat: str) -> dict:
+        """A gear ablak kiírt állapotai: név → {"shown", "ilvl", "chips": [(felirat, be van-e)], "rows",
+        "summary", "source"} (színkódok nélkül)."""
+        dumps, current = {}, None
+        for line in chat.splitlines():
+            if match := re.match(r"gear (\w+): (látszik|rejtve)$", line):
+                current = dumps[match.group(1)] = {"shown": match.group(2) == "látszik", "rows": []}
+            elif line.startswith("gear chips: "):
+                chips = (re.match(r"\|c(\w{8})(.*)\|r$", chip) for chip in line[len("gear chips: "):].split(" ; "))
+                current["chips"] = [(chip.group(2), chip.group(1) == "ffffffff") for chip in chips if chip]
+            elif current is not None:
+                plain = re.sub(r"\|c[0-9a-fA-F]{8}|\|r", "", line)
+                if match := re.match(r"gear row \d+: (.*)$", plain):
+                    current["rows"].append([cell.strip() for cell in match.group(1).split(" | ")])
+                elif match := re.match(r"gear (ilvl|summary|source): (.*)$", plain):
+                    current[match.group(1)] = match.group(2)
+        return dumps
+
+    @staticmethod
+    def gear_rows(items: list, offset: int = 0) -> list:
+        """A gear ablak 12 sora a program számolása szerint (lásd gear_cells), az offset után."""
+        rows = [gear_cells(item) for item in items[offset : offset + 12]]
+        return rows + [[""] * 6] * (12 - len(rows))
 
     def test_addon_saves_the_characters(self):
         chat, output, db = self.run_addon(wow_addon.ADDON_SOURCE)
@@ -791,6 +942,14 @@ class AddonTests(unittest.TestCase):
         )
         jaina = next(s for s in data.snapshots if s.name == "Jaina")
         self.assertEqual((jaina.level, jaina.updated), (D("90.00"), 1760000000))  # a korábbi mentés megmaradt
+        # A gear ajánló szinkronizált adatok nélkül ezt írja; a gombbal bezárva a következő belépéskor sem nyílik meg.
+        gear = self.gear_dumps(chat)
+        self.assertEqual(
+            [row[0] for row in gear["unknown"]["rows"][:3]],
+            ["Még nincs szinkronizált gear-adat.", "A programban: Szinkronizálás, majd /reload.", ""],
+        )
+        self.assertFalse(gear["closed"]["shown"])
+        self.assertEqual(db["gear"], {"off": {}})
 
     def plan_data(self, **overrides) -> LevelingData:
         """A harness karaktereinek terve; overrides: név → (szint, itemlevel, pontszám) a program adata helyett."""
@@ -861,6 +1020,30 @@ class AddonTests(unittest.TestCase):
         self.assertEqual(windows["nextday"]["level"], ["Thrall", "cél: 86,36", "hiányzik: 0,96"])
         # Ki- és bekapcsolható; a helyét és az állapotát megjegyzi.
         self.assertEqual((windows["off"]["shown"], windows["on"]["shown"]), (False, True))
+
+        # A gear ajánló ugyanazt mutatja, mint a program gear ajánlója (a szinkronizált adatokkal).
+        gear = self.gear_dumps(chat)
+        groups = addon_gear_groups(payload["gear"])
+        ids = {group.id for group in groups}
+        unknown = gear["unknown"]  # az itemlevel nem ismert: a sorok értékelés nélkül
+        self.assertEqual(unknown["ilvl"], "Itemlevel: most nem ismert")
+        self.assertEqual(unknown["rows"], self.gear_rows(gearing.build_items(None, ids, False, groups)))
+        known = gear["known"]  # a felszerelés változásakor magától újraszámolt
+        self.assertEqual(known["ilvl"], "Itemlevel: 305,56 (Zôltan)")
+        items = gearing.build_items(305.5625, ids, False, groups)
+        self.assertEqual(known["rows"], self.gear_rows(items))
+        self.assertEqual(known["rows"][0], ["Mythic+ 8", "303", "308", "315", "Irány farmolni!", "dropból még +2,44 ilvl"])
+        recommended = sum(item.status == "recommended" for item in items)
+        self.assertEqual(known["summary"], f"{len(items)} sor, ajánlott: {recommended} · 1-12. sor látszik (görgess az egérrel)")
+        self.assertEqual(known["source"], f"Belépési ilvl-ek: az alapértékek · szinkronizálva: {stamp}")
+        self.assertEqual(known["chips"], [(group.label, True) for group in groups] + [("minden tier", False)])
+        filtered = gear["filtered"]  # a Raid nélkül, minden tierrel, három sorral lejjebb görgetve
+        items = gearing.build_items(305.5625, ids - {"raid"}, True, groups)
+        self.assertEqual(filtered["rows"], self.gear_rows(items, 3))
+        self.assertIn(("Raid", False), filtered["chips"])
+        self.assertEqual(filtered["chips"][-1], ("minden tier", True))
+        self.assertFalse(gear["closed"]["shown"])
+        self.assertEqual(db["gear"], {"off": {"raid": True}, "showAll": True})  # a szűrőket megjegyzi
         self.assertEqual(
             db["window"], {"hidden": False, "point": "TOPLEFT", "relativePoint": "TOPLEFT", "x": 100, "y": -50}
         )

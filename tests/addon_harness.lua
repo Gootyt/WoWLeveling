@@ -49,10 +49,15 @@ local function RunTimers()
 end
 
 -- Keretek és feliratok: amit az addon használ, azt megjegyzik, a többi metódus nem csinál semmit.
+-- A játék metódusai nagybetűvel kezdődnek; a kisbetűs mezők (pl. frame.rows) csak beállítva léteznek.
 local UNKNOWN_EVENTS = { CHALLENGE_MODE_COMPLETED = true } -- ennek a regisztrálása hibát okoz
 local Widget = {}
 Widget.__index = function(_, key)
-	return rawget(Widget, key) or function() end
+	local method = rawget(Widget, key)
+	if method == nil and type(key) == "string" and key:match("^%u") then
+		method = function() end
+	end
+	return method
 end
 local function NewWidget()
 	return setmetatable({ events = {}, scripts = {}, shown = true }, Widget)
@@ -134,6 +139,40 @@ local function DumpWindow(label)
 		print(string.format("row %s: %s | %s | %s", key, Text(cells[2]), Text(cells[3]), Text(cells[4])))
 	end
 	print("footer: " .. Text(window.footer))
+end
+
+-- A gear ajánló ablakának tartalma a kimenetre (a Python-teszt ellenőrzi).
+local function DumpGear(label)
+	local frame = WoWLevelingGearWindow
+	if not frame then
+		print("gear " .. label .. ": nincs")
+		return
+	end
+	local function Text(widget)
+		return widget and rawget(widget, "text") or ""
+	end
+	print("gear " .. label .. ": " .. (frame.shown and "látszik" or "rejtve"))
+	print("gear ilvl: " .. Text(frame.ilvl))
+	local chips = {}
+	for _, chip in ipairs(frame.chips or {}) do
+		chips[#chips + 1] = Text(chip.text)
+	end
+	chips[#chips + 1] = Text(frame.showAll and frame.showAll.text)
+	print("gear chips: " .. table.concat(chips, " ; "))
+	for index, cells in ipairs(frame.rows) do
+		print(string.format(
+			"gear row %d: %s | %s | %s | %s | %s | %s",
+			index,
+			Text(cells.name),
+			Text(cells.entry),
+			Text(cells.drop),
+			Text(cells.vault),
+			Text(cells.status),
+			Text(cells.note)
+		))
+	end
+	print("gear summary: " .. Text(frame.summary))
+	print("gear source: " .. Text(frame.source))
 end
 
 -- A belépett karakter elmentett szintje, tapasztalata és specje a kimenetre.
@@ -305,6 +344,29 @@ player.levelError = true
 Fire("PLAYER_EQUIPMENT_CHANGED", 16, true)
 RunTimers()
 SlashCmdList.WOWLEVELING("  LISTA ")
+
+-- A gear ajánló: a /wowleveling gear parancs nyitja meg; az itemlevel most titkos.
+SlashCmdList.WOWLEVELING("gear")
+DumpGear("unknown")
+-- Ismert itemlevel: a felszerelés változásakor magától újraszámol.
+player.itemLevel = 305.5625
+Fire("PLAYER_AVG_ITEM_LEVEL_UPDATE")
+RunTimers()
+DumpGear("known")
+-- Szűrés: a Raid kikapcsolása, minden tier, és görgetés lefelé.
+for _, chip in ipairs(WoWLevelingGearWindow.chips or {}) do
+	if chip.id == "raid" then
+		chip.scripts.OnClick(chip)
+	end
+end
+if WoWLevelingGearWindow.showAll then
+	WoWLevelingGearWindow.showAll.scripts.OnClick(WoWLevelingGearWindow.showAll)
+end
+WoWLevelingGearWindow.scripts.OnMouseWheel(WoWLevelingGearWindow, -1)
+DumpGear("filtered")
+-- A lemaradás ablakának Gear gombja be- és kikapcsolja.
+WoWLevelingWindow.gearButton.scripts.OnClick(WoWLevelingWindow.gearButton)
+DumpGear("closed")
 
 -- Kilépés előtt még egy kis tapasztalat, jobb felszerelés és Mythic+ pontszám (a hiba is elmúlik).
 now = now + 60

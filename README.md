@@ -74,7 +74,9 @@ megtervezéséhez és követéséhez.
   bármikor az „Importálás most” gombbal) beolvassa. Az addon egy kis ablakban azt
   is mutatja, melyik karakter van a **legnagyobb lemaradásban** szintben,
   itemlevelben és Mythic+ pontszámban, mennyit kell elérnie, és mennyi hiányzik; a
-  tervet a program szinkronizálja neki (lásd lent, „WoW addon”).
+  tervet a program szinkronizálja neki (lásd lent, „WoW addon”). A **gear ajánló**
+  is megvan benne: a karakter itemlevele alapján megmutatja, melyik tartalom ad
+  még fejlesztést.
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -568,7 +570,8 @@ mappáját (pl. `C:\Program Files (x86)\World of Warcraft`; a „Tallózás…�
 is választhatod), majd kattints az „Addon telepítése…” gombra: a program a
 `_retail_\Interface\AddOns\WoWLeveling` mappába másolja az addont (frissíteni is
 így lehet). Kézzel is bemásolhatod oda az `addon\WoWLeveling` mappát. Ha a játék
-fut, írd be a chatbe: `/reload`. A karakterválasztó „AddOns” gombjával
+fut, indítsd újra: a `/reload` csak a már betöltött fájlokat frissíti, az újonnan
+érkezőket (pl. az 1.4-es `Gear.lua`) nem. A karakterválasztó „AddOns” gombjával
 ellenőrizheted, hogy be van-e kapcsolva.
 
 **Mentés.** Az addon játék közben folyamatosan frissíti az adatokat (a
@@ -599,8 +602,9 @@ következő indításakor vagy `/reload` után töltődik be.
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
 elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a
-`/wowleveling ablak` be- és kikapcsolja a lemaradás ablakát (lásd lent), a
-`/wowleveling mentés` pedig most rögtön kiíratja az adatokat (lásd fent).
+`/wowleveling ablak` be- és kikapcsolja a lemaradás ablakát, a
+`/wowleveling gear` a gear ajánlót (lásd lent), a `/wowleveling mentés` pedig
+most rögtön kiíratja az adatokat (lásd fent).
 
 **Importálás.** A program **minden indításkor magától** beolvassa a mentéseket,
 és bármikor az „Importálás most” gombbal. **Futás közben is figyeli** őket: amint
@@ -660,6 +664,29 @@ kiíratja az adatokat a program számára (a felület újratöltésével, lásd 
   saját mentéseit is felhasználja, ha azok újabbak annál, amit a program már
   beolvasott (pl. ha ugyanabban a játékmenetben több karakterrel is játszol).
 
+**A gear ajánló a játékban.** Ugyanaz, mint a program gear ajánlója (lásd „Gear
+ajánló”), a karakter felvett tárgyainak itemlevelével: soronként a tartalom
+(dungeon, Mythic+, delve, prey, raid, napi küldetés), a belépési, a drop és a
+Great Vault ilvl-je, és az ajánlás – *Irány farmolni!* (a drop még fejleszt),
+*Csak Vaultért*, *Túl alacsony ilvl* vagy *Túlfejlett vagy* –, a programéval
+azonos sorrendben. A `/wowleveling gear` paranccsal vagy a lemaradás ablakának
+„Gear” gombjával nyílik meg; a helyét, a szűrőket és azt, hogy nyitva volt-e,
+megjegyzi.
+
+- **Az itemlevel** a karakteré, és a felszerelés cseréjekor magától frissül.
+- **Szűrők:** a tartalomtípusok neve az ablak tetején kattintással ki- és
+  bekapcsolható; a „minden tier” a delve és a prey összes tierjét mutatja (alapból
+  csak a legjobb elérhetőt).
+- **Görgetés:** egyszerre 12 sor látszik, a többi az egérgörgővel érhető el; a
+  lábléc mutatja, hány sor van, és ebből hány ajánlott.
+- **Az adatok** a programból jönnek, a tervvel együtt szinkronizálva: a
+  tartalmak táblázata (`gearing.py`) a statisztikákból frissített belépési
+  ilvl-ekkel. Így egy új szezonnál elég a programot frissíteni; a játékban a
+  változás `/reload` után látszik.
+- Az 1.4-es változat egy új fájllal (`Gear.lua`) bővült: ezt a játék csak
+  **újraindítás után** tölti be (a `/reload` után még nem), addig a parancs ezt
+  üzeni.
+
 Az addon a Midnight 12.1-es patchéhez készült. Ha egy újabb patch után a játék
 elavultnak („Out of date”) jelzi, az AddOns ablakban kapcsold be a „Load out of
 date AddOns” lehetőséget, vagy írd át a `WoWLeveling.toc` fájl `## Interface:`
@@ -708,11 +735,13 @@ eredménye mikor került át utoljára.
 - `wow_addon.py` – a WoWLeveling addon mentéseinek beolvasása és importálása, a
   terv átadása az addonnak
 - `addon/WoWLeveling/` – a WoW addon: `WoWLeveling.toc`, `WoWLeveling.lua` (mentés
-  és az ablak), `Plan.lua` (a lemaradások számolása, mint a programban),
-  `PlanData.lua` (a program által szinkronizált terv)
+  és a lemaradás ablaka), `Plan.lua` (a lemaradások számolása, mint a programban),
+  `Gear.lua` (a gear ajánló a játékban), `PlanData.lua` (a program által
+  szinkronizált terv és gear-adatok)
 - `tests/` – automatikus tesztek (a `tests/addon_harness.lua` a játék nélkül,
-  utánzott játékkörnyezetben futtatja az addont, a `tests/plan_harness.lua` pedig
-  véletlen terveken összeveti a számolását a programéval)
+  utánzott játékkörnyezetben futtatja az addont, a `tests/plan_harness.lua` és a
+  `tests/gear_harness.lua` pedig véletlen eseteken összeveti a számolását a
+  programéval)
 
 ## Tesztek
 

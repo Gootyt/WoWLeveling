@@ -1657,7 +1657,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(info.call_args.args[1], self.gui.ADDON_INSTALLED)
         self.assertEqual(
             sorted(path.name for path in target.iterdir()),
-            ["Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
+            ["Gear.lua", "Plan.lua", "PlanData.lua", "WoWLeveling.lua", "WoWLeveling.toc"],
         )
         plan = wow_addon.parse_lua((target / "PlanData.lua").read_text(encoding="utf-8"))  # a terv is odakerült
         self.assertEqual(plan[wow_addon.PLAN_VARIABLE]["version"], 1)
@@ -1718,6 +1718,17 @@ class GuiTests(unittest.TestCase):
             self.app.save()  # nem változott a terv: nem írja újra
             self.app.sync_addon_plan(automatic=True)
         write.assert_not_called()
+
+        # A gear ajánló adatai is átmennek; a statisztikákból frissített belépési ilvl változása is.
+        def gear_entry(name):
+            text = (target / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
+            groups = wow_addon.parse_lua(text)[wow_addon.PLAN_VARIABLE]["gear"]["groups"]
+            return next(row["entry"] for group in groups.values() for row in group["rows"].values() if row["name"] == name)
+
+        self.assertEqual(gear_entry("Mythic+ 10"), 31160)
+        self.app.data.gear_entry_min["Mythic+ 10"] = 309.5
+        self.app.sync_addon_plan(automatic=True)
+        self.assertEqual(gear_entry("Mythic+ 10"), 30950)
 
         # Ha nem írható, az állapotsor jelzi (a gombnál üzenet is).
         self.app.data.characters[0].level = D("84.00")

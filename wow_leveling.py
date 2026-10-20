@@ -96,9 +96,9 @@ ADDON_HINT = (
     "neki a tervet a lemaradás ablakához. Az addont az „Addon telepítése…” gomb másolja a játékba."
 )
 ADDON_INSTALLED = (
-    "Az addon a helyén van. Ha a játék fut, írd be a chatbe: /reload (különben a következő "
-    "indításkor töltődik be); a karakterválasztó „AddOns” gombjával ellenőrizheted, hogy be van-e "
-    "kapcsolva.\n\nA játék kilépéskor, kijelentkezéskor és /reload után menti a karakterek adatait "
+    "Az addon a helyén van. Ha a játék fut, indítsd újra (a /reload csak a már betöltött fájlokat "
+    "frissíti, az újonnan érkezőket nem); a karakterválasztó „AddOns” gombjával ellenőrizheted, hogy be "
+    "van-e kapcsolva.\n\nA játék kilépéskor, kijelentkezéskor és /reload után menti a karakterek adatait "
     "(játék közben azonnal: /wowleveling mentés, vagy a lemaradás ablakának Mentés gombja); a futó "
     "program ezeket magától beolvassa."
 )
