@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import storage
 from leveling import (
     PARALLEL,
     SEQUENTIAL,
@@ -801,10 +802,17 @@ class RaiderioPlanTests(unittest.TestCase):
 class PersistenceTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.path = Path(self.temp_dir.name) / "adatok.json"
+        self.path = Path(self.temp_dir.name) / "adatok.sqlite"
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def saved(self):
+        """A mentett adatok, ahogy az adatbázisban vannak."""
+        return json.loads(storage.read_document(self.path, storage.LEVELING))
+
+    def write(self, content):
+        storage.write_document(self.path, storage.LEVELING, content)
 
     def test_round_trip(self):
         data = LevelingData(
@@ -826,7 +834,7 @@ class PersistenceTests(unittest.TestCase):
             ],
         )
         save_data(self.path, data)
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = self.saved()
         self.assertEqual(raw["characters"][0]["level"], 83.45)  # olvasható szám a fájlban
         self.assertEqual(raw["settings"]["target_item_level"], 330.55)
         self.assertEqual(raw["characters"][0]["raiderio_score"], 2543.7)
@@ -856,7 +864,7 @@ class PersistenceTests(unittest.TestCase):
         data = LevelingData(dataclasses.replace(make_settings(), region="us"))
         data.raiderio_fetched_at = datetime(2026, 10, 17, 14, 5, 9)
         save_data(self.path, data)
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = self.saved()
         self.assertEqual((raw["settings"]["region"], raw["raiderio"]), ("us", {"fetched_at": "2026-10-17T14:05:09"}))
         loaded = load_data(self.path)
         self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("us", data.raiderio_fetched_at))
@@ -878,7 +886,7 @@ class PersistenceTests(unittest.TestCase):
         data.addon_imported = {"draenor/thrall": 1760700660}
         data.addon_skipped = ["draenor/jaina"]
         save_data(self.path, data)
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = self.saved()
         self.assertEqual(
             raw["addon"],
             {"path": data.addon_path, "imported": {"draenor/thrall": 1760700660}, "skipped": ["draenor/jaina"]},
@@ -890,11 +898,11 @@ class PersistenceTests(unittest.TestCase):
         )
         # A hibás értékek kimaradnak, a többi adat megmarad.
         raw["addon"] = {"path": 5, "imported": {"a/b": "tegnap", "c/d": 1760000000.0, "e/f": True}, "skipped": "x"}
-        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        self.write(json.dumps(raw))
         loaded = load_data(self.path)
         self.assertEqual((loaded.addon_path, loaded.addon_imported, loaded.addon_skipped), ("", {"c/d": 1760000000}, []))
         del raw["addon"]  # a régebbi adatfájlokban nincs ilyen
-        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        self.write(json.dumps(raw))
         loaded = load_data(self.path)
         self.assertEqual((loaded.addon_path, loaded.addon_imported, loaded.addon_skipped), ("", {}, []))
 
@@ -904,7 +912,7 @@ class PersistenceTests(unittest.TestCase):
         data.gear_auto, data.gear_auto_days = False, 3
         data.gear_updated_at = {"mplus": datetime(2026, 10, 17, 12, 3, 4)}
         save_data(self.path, data)
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = self.saved()
         self.assertEqual(raw["gear_auto"], {"enabled": False, "days": 3, "updated": {"mplus": "2026-10-17T12:03:04"}})
         loaded = load_data(self.path)
         self.assertEqual(
@@ -912,7 +920,7 @@ class PersistenceTests(unittest.TestCase):
             (False, 3, {"mplus": datetime(2026, 10, 17, 12, 3, 4)}),
         )
         raw["gear_auto"] = {"enabled": "igen", "days": 0, "updated": {"mplus": "tegnap", "raid": 5}}
-        self.path.write_text(json.dumps(raw), encoding="utf-8")
+        self.write(json.dumps(raw))
         loaded = load_data(self.path)
         self.assertEqual((loaded.gear_auto, loaded.gear_auto_days, loaded.gear_updated_at), (True, 7, {}))
 
@@ -946,17 +954,21 @@ class PersistenceTests(unittest.TestCase):
             "raiderio": {"fetched_at": "nem dátum"},
         }
         content["settings"]["region"] = "xx"
-        self.path.write_text(json.dumps(content), encoding="utf-8")
+        self.write(json.dumps(content))
         loaded = load_data(self.path)
         self.assertEqual([c.name for c in loaded.characters], ["Arthas"])
         self.assertIsNone(loaded.spec_scores.fetched_at)
         self.assertEqual((loaded.settings.region, loaded.raiderio_fetched_at), ("eu", None))
 
-    def test_missing_file(self):
+    def test_missing_data(self):
+        with self.assertRaises(FileNotFoundError):
+            load_data(self.path)
+        self.assertFalse(self.path.exists())  # a betöltés nem hoz létre adatbázist
+        storage.write_document(self.path, storage.API_KEYS, "{}")  # az adatbázis megvan, de szintezési adat még nincs
         with self.assertRaises(FileNotFoundError):
             load_data(self.path)
 
-    def test_corrupt_files_raise_value_error(self):
+    def test_corrupt_data_raises_value_error(self):
         settings = '{"start_date": "2026-10-01", "first_target_date": "2026-10-10", "last_target_date": "2026-11-01"}'
         contents = (
             "{nem json",
@@ -968,7 +980,7 @@ class PersistenceTests(unittest.TestCase):
         )
         for content in contents:
             with self.subTest(content=content):
-                self.path.write_text(content, encoding="utf-8")
+                self.write(content)
                 with self.assertRaises(ValueError):
                     load_data(self.path)
 
@@ -982,7 +994,7 @@ class PersistenceTests(unittest.TestCase):
             },
             "characters": [{"name": "Arthas"}],
         }
-        self.path.write_text(json.dumps(content), encoding="utf-8")
+        self.write(json.dumps(content))
         loaded = load_data(self.path)
         self.assertEqual(loaded.settings.mode, PARALLEL)
         self.assertEqual((loaded.settings.start_level, loaded.settings.target_level), (D("80.00"), D("90.00")))
@@ -1007,7 +1019,7 @@ class PersistenceTests(unittest.TestCase):
             },
             "characters": [{"name": "Thrall", "class": "Shaman", "level": 23}],
         }
-        self.path.write_text(json.dumps(content), encoding="utf-8")
+        self.write(json.dumps(content))
         loaded = load_data(self.path)
         self.assertEqual(
             loaded.settings,

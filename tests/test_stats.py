@@ -13,6 +13,7 @@ from unittest import mock
 
 import httpcompat
 import raiderio_ilvl_stats as mplus
+import storage
 import wcl_raid_ilvl_stats as wcl
 
 try:
@@ -237,7 +238,7 @@ class RaiderioStatsTests(unittest.TestCase):
     def test_cached_run_filters(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        cache = mplus.DiskCache(str(Path(folder.name) / "cache.json"), 24)
+        cache = mplus.DiskCache(str(Path(folder.name) / "cache.sqlite"), 24)
         self.addCleanup(cache.close)
         now = datetime.now(timezone.utc)
 
@@ -290,7 +291,7 @@ class RaiderioStatsTests(unittest.TestCase):
 
         def query(*argv):
             args = mplus.build_parser().parse_args(
-                ["--cache", str(Path(folder.name) / "cache.json"), "--delay", "0", "--max-pages", "1", *argv]
+                ["--cache", str(Path(folder.name) / "cache.sqlite"), "--delay", "0", "--max-pages", "1", *argv]
             )
             seeds = mplus.prepare_args(args)
 
@@ -322,7 +323,7 @@ class RaiderioStatsTests(unittest.TestCase):
 
         def crawl(*argv):
             args = mplus.build_parser().parse_args(
-                ["--cache", str(Path(folder.name) / "cache.json"), "--delay", "0", "--max-pages", "1", *argv]
+                ["--cache", str(Path(folder.name) / "cache.sqlite"), "--delay", "0", "--max-pages", "1", *argv]
             )
             seeds = mplus.prepare_args(args)
             with mock.patch.object(mplus, "api_get", fake):
@@ -575,20 +576,22 @@ class StatsFieldTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "konkrét régiót"):
             stats_windows.parse_guilds("Solutions@Ragnaros", "world")
 
-    def test_api_keys_file(self):
+    def test_api_keys_in_the_database(self):
         with tempfile.TemporaryDirectory() as name:
-            folder = Path(name)
-            self.assertEqual(stats_windows.load_api_keys(folder), {})
-            stats_windows.save_api_keys(folder, {"wcl_client_id": "id", "wcl_client_secret": "titok"})
-            stats_windows.save_api_keys(folder, {"raiderio_api_key": "rio"})
+            database = Path(name) / "adatok.sqlite"
+            self.assertEqual(stats_windows.load_api_keys(database), {})
+            stats_windows.save_api_keys(database, {"raiderio_api_key": ""})  # nincs mit menteni
+            self.assertFalse(database.exists())  # ezért adatbázist sem hoz létre
+            stats_windows.save_api_keys(database, {"wcl_client_id": "id", "wcl_client_secret": "titok"})
+            stats_windows.save_api_keys(database, {"raiderio_api_key": "rio"})
             self.assertEqual(
-                stats_windows.load_api_keys(folder),
+                stats_windows.load_api_keys(database),
                 {"wcl_client_id": "id", "wcl_client_secret": "titok", "raiderio_api_key": "rio"},
             )
-            stats_windows.save_api_keys(folder, {"wcl_client_id": "", "wcl_client_secret": "", "raiderio_api_key": ""})
-            self.assertFalse((folder / stats_windows.KEYS_FILE_NAME).exists())  # üresen törlődik
-            (folder / stats_windows.KEYS_FILE_NAME).write_text("nem json", encoding="utf-8")
-            self.assertEqual(stats_windows.load_api_keys(folder), {})
+            stats_windows.save_api_keys(database, {"wcl_client_id": "", "wcl_client_secret": "", "raiderio_api_key": ""})
+            self.assertIsNone(storage.read_document(database, storage.API_KEYS))  # üresen törlődik
+            storage.write_document(database, storage.API_KEYS, "nem json")
+            self.assertEqual(stats_windows.load_api_keys(database), {})
 
     def test_format(self):
         self.assertEqual((stats_windows.format_stat(329.44), stats_windows.format_stat(None)), ("329,4", "–"))

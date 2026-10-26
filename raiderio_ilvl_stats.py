@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-raiderio_ilvl_stats.py  (v4.3)
+raiderio_ilvl_stats.py  (v4.4)
 
 Average / median / 25th percentile / min / max item level of Mythic+ groups,
 grouped by keystone level, using the public Raider.IO API (https://raider.io/api).
@@ -12,6 +12,16 @@ IN THE WOW LEVELING PLANNER
   and a Stop button instead of Ctrl+C (see run() and STOP). Run on its own it
   works exactly as described below. Without the requests package it uses
   httpcompat.py (the same requests calls over the standard library's urllib).
+
+NEW IN v4.4
+  THE CACHE IS AN SQLITE DATABASE: by default the planner's own database,
+  szintezes_adatok.sqlite next to this script, which holds everything the planner
+  saves - its window and the command line share one cache (--cache FILE: a separate
+  one). Downloads go into its raiderio_cache table, each one committed the moment it
+  arrives; nothing is loaded into memory up front. The old default cache file,
+  raiderio_ilvl_cache.json, is imported by the planner the next time it starts; an
+  older cache file - JSON Lines (v4.0-v4.3) or one JSON object (v2/v3) - given with
+  --cache is imported into a database next to it (the old file is left as it is).
 
 NEW IN v4.3
   CACHED RUNS IN THE STATISTICS (--use-cached-runs, off by default). Normally only
@@ -46,8 +56,7 @@ NEW IN v4.1
 
 NEW IN v4 - AS FEW API REQUESTS AS POSSIBLE
   1. NOTHING IS DOWNLOADED TWICE. Everything the script downloads goes into the
-     cache file (--cache, default raiderio_ilvl_cache.json), one line per
-     download, written the moment it arrives - Ctrl+C, a crash or simply
+     cache (--cache, see v4.4) the moment it arrives - Ctrl+C, a crash or simply
      closing the window loses nothing.
        - RUNS (team + item levels from run-details) are kept FOREVER: a
          finished run never changes, so a run downloaded once is never
@@ -208,6 +217,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -719,7 +729,8 @@ def run_key(season, run_id):
 
 class DiskCache:
     """
-    Everything downloaded, kept in one file so that nothing is downloaded twice:
+    Everything downloaded, kept in the raiderio_cache table of an SQLite database so that
+    nothing is downloaded twice:
         run:<season>/<id>              team of one run (run-details) + whether it was
                                        timed - kept FOREVER, a finished run never changes
         char:<region>/<realm>/<name>   character profile (item level, guild, recent runs)
@@ -727,89 +738,39 @@ class DiskCache:
         page:<region>/<season>/...     one leaderboard page
         static:<expansion id>          season list (start dates, dungeons)
     Everything but runs is reused for --cache-hours: new runs and members show up in
-    them over time. The file is JSON Lines - every download is appended as one line and
-    flushed at once, so Ctrl+C, a crash or closing the window loses nothing. On start it
-    is read back (a line cut off by a kill is skipped) and rewritten once when superseded,
-    expired or broken lines make up a good part of it. A v2/v3 cache file (one big JSON
-    object of profiles) is converted.
+    them over time; older entries are deleted when the cache is opened. Every download
+    is committed at once, so Ctrl+C, a crash or closing the window loses nothing. The
+    database can be shared (the planner keeps all its data in one): every thread opens
+    its own connection, SQLite's locking keeps the writes apart. path=None (--no-cache):
+    in memory only. An older cache file (JSON Lines, or v2/v3 JSON) is imported, see
+    import_legacy_cache.
     """
     PERMANENT = ("run",)
 
     def __init__(self, path, max_age_hours):
         self.path = path
         self.max_age = max_age_hours * 3600
-        self.data = {}          # key -> entry (every entry has 'fetched')
-        self.fresh = set()      # keys downloaded in this session: valid whatever their age
-        self.file = None        # append handle, opened at the first download
-        self.failed = False     # writing failed once: carry on without the file
-        self.existed = bool(path) and os.path.exists(path)
-        if self.existed:
-            self._load()
-
-    # -- reading
-    @staticmethod
-    def _record(line):
-        """(key, entry) from one cache line, or None if it isn't one (e.g. cut off)."""
+        self.fresh = {}         # key -> entry downloaded in this session: valid whatever its age
+        self.failed = False     # writing failed once: carry on, the session still has them (fresh)
+        legacy = None
+        if path and os.path.exists(path) and not is_sqlite_file(path):
+            legacy = path       # an older cache file: imported into a database next to it
+            self.path = path = os.path.splitext(path)[0] + ".sqlite"
+            print(f"  (cache file {legacy} is in the old format - importing it into {path})", file=sys.stderr)
         try:
-            rec = json.loads(line)
-        except ValueError:
-            return None
-        if isinstance(rec, dict) and isinstance(rec.get("k"), str) and isinstance(rec.get("v"), dict):
-            return rec["k"], rec["v"]
-        return None
-
-    def _load(self):
-        lines, rewrite = 0, False
+            self.db = open_cache_db(path or ":memory:")
+        except sqlite3.Error as exc:
+            print(f"  (cache {path} can't be opened: {exc} - starting with an empty cache)", file=sys.stderr)
+            self.path, self.db = None, open_cache_db(":memory:")
+        if legacy:
+            import_legacy_cache(legacy, self.db)
+        self.existed = self.db.execute("SELECT EXISTS (SELECT 1 FROM raiderio_cache)").fetchone()[0] == 1
         try:
-            # errors="replace": a kill in the middle of a multi-byte letter must not
-            # make the whole file unreadable - only that (cut off) line is lost
-            with open(self.path, encoding="utf-8", errors="replace") as f:
-                first = f.readline()
-                while first and not first.strip():
-                    first = f.readline()
-                old = None
-                if first.strip() and self._record(first) is None and first.lstrip().startswith("{"):
-                    f.seek(0)
-                    try:
-                        old = json.load(f)          # v2/v3 format: one JSON object
-                    except ValueError:
-                        old = None
-                f.seek(0)
-                if isinstance(old, dict):
-                    lines, rewrite = self._import_old(old), True
-                else:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        lines += 1
-                        rec = self._record(line)
-                        if rec is None:
-                            rewrite = True          # cut off by a kill (or garbage): dropped
-                        else:
-                            self.data[rec[0]] = rec[1]
-        except OSError as exc:
-            print(f"  (cache file {self.path} can't be read: {exc} - starting with an empty cache)",
-                  file=sys.stderr)
-            self.data = {}
-            return
-        now = time.time()
-        for key in [k for k, e in self.data.items() if not self.valid(k, e, now)]:
-            del self.data[key]                      # expired: it would be downloaded again anyway
-        dead = lines - len(self.data)               # superseded, expired and broken lines
-        if rewrite or dead * 4 > lines:
-            self.rewrite()
-
-    def _import_old(self, old):
-        """Profiles from a v2/v3 cache file {'region/realm/name': entry}."""
-        for key, entry in old.items():
-            parts = str(key).split("/", 2)
-            if not isinstance(entry, dict) or len(parts) != 3:
-                continue
-            runs = entry.get("recent_runs")
-            if isinstance(runs, list):
-                entry["recent_runs"] = [compact_recent_run(r) for r in runs if isinstance(r, (dict, list))]
-            self.data[char_key(parts)] = entry
-        return len(old)
+            with self.db:       # expired: it would be downloaded again anyway
+                self.db.execute("DELETE FROM raiderio_cache WHERE fetched < ? AND key NOT LIKE 'run:%'",
+                                (int(time.time() - self.max_age),))
+        except sqlite3.Error:
+            pass
 
     def valid(self, key, entry, now=None):
         if key in self.fresh or key.split(":", 1)[0] in self.PERMANENT:
@@ -817,69 +778,149 @@ class DiskCache:
         return (now or time.time()) - entry.get("fetched", 0) <= self.max_age
 
     def get(self, key):
-        entry = self.data.get(key)
+        entry = self.fresh.get(key)
+        if entry is not None:
+            return entry
+        try:
+            row = self.db.execute("SELECT value FROM raiderio_cache WHERE key = ?", (key,)).fetchone()
+        except sqlite3.Error:
+            return None
+        entry = _cache_value(row[0]) if row else None
         return entry if entry is not None and self.valid(key, entry) else None
 
     def counts(self):
         n = defaultdict(int)
-        for key in self.data:
-            n[key.split(":", 1)[0]] += 1
+        for kind, count in self.db.execute(
+                "SELECT substr(key, 1, instr(key, ':') - 1), COUNT(*) FROM raiderio_cache GROUP BY 1"):
+            n[kind] += count
         return n
 
     def entries(self, prefix):
         """(key, entry) of every valid entry whose key starts with prefix."""
         now = time.time()
-        return [(key, entry) for key, entry in self.data.items()
-                if key.startswith(prefix) and self.valid(key, entry, now)]
-
-    # -- writing
-    @staticmethod
-    def _line(key, entry):
-        return json.dumps({"k": key, "v": entry}, ensure_ascii=False, separators=(",", ":")) + "\n"
+        rows = self.db.execute("SELECT key, value FROM raiderio_cache WHERE key >= ? AND key < ?",
+                               (prefix, prefix + "\U0010ffff"))
+        found = {key: _cache_value(value) for key, value in rows}
+        found.update((key, entry) for key, entry in self.fresh.items() if key.startswith(prefix))
+        return [(key, entry) for key, entry in found.items() if entry is not None and self.valid(key, entry, now)]
 
     def put(self, key, entry):
         entry = dict(entry, fetched=int(time.time()))
-        self.data[key] = entry
-        self.fresh.add(key)
-        if self.path and not self.failed:
-            try:
-                if self.file is None:
-                    self._open()
-                self.file.write(self._line(key, entry))
-                self.file.flush()                   # on disk now, whatever happens next
-            except (OSError, ValueError) as exc:
+        self.fresh[key] = entry
+        try:
+            with self.db:
+                self.db.execute("INSERT OR REPLACE INTO raiderio_cache (key, fetched, value) VALUES (?, ?, ?)",
+                                (key, entry["fetched"], json.dumps(entry, ensure_ascii=False, separators=(",", ":"))))
+        except sqlite3.Error as exc:
+            if not self.failed:
                 self.failed = True
-                log(f"  (can't write the cache file {self.path}: {exc} - continuing without it)", err=True)
+                log(f"  (can't write the cache {self.path}: {exc} - continuing without saving)", err=True)
         return entry
 
-    def _open(self):
-        cut = False
-        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
-            with open(self.path, "rb") as f:        # does the last line lack its newline (kill)?
-                f.seek(-1, os.SEEK_END)
-                cut = f.read(1) != b"\n"
-        self.file = open(self.path, "a", encoding="utf-8", newline="\n")
-        if cut:
-            self.file.write("\n")
-
-    def rewrite(self):
-        """Write the valid entries to a fresh file - atomically (temp file + rename)."""
-        tmp = self.path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-                for key, entry in self.data.items():
-                    f.write(self._line(key, entry))
-            os.replace(tmp, self.path)
-        except OSError as exc:
-            print(f"  (could not tidy up the cache file {self.path}: {exc})", file=sys.stderr)
-
     def close(self):
-        if self.file is not None:
+        try:
+            self.db.close()
+        except sqlite3.Error:
+            pass
+
+
+# The planner's database next to this script (storage.DB_NAME): the planner's window and the
+# command line share one cache.
+DEFAULT_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "szintezes_adatok.sqlite")
+CACHE_TABLE = ("CREATE TABLE IF NOT EXISTS raiderio_cache "
+               "(key TEXT PRIMARY KEY, fetched INTEGER NOT NULL, value TEXT NOT NULL)")
+
+
+def open_cache_db(path):
+    """A connection to the cache database (created with its table if needed)."""
+    db = sqlite3.connect(path, timeout=30)
+    try:
+        db.execute(CACHE_TABLE)
+        db.commit()
+    except sqlite3.Error:
+        db.close()
+        raise
+    return db
+
+
+def is_sqlite_file(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
+def _cache_value(text):
+    try:
+        entry = json.loads(text)
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) else None
+
+
+def _cache_record(line):
+    """(key, entry) from one line of an old JSON Lines cache, or None if it isn't one (e.g. cut off)."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None
+    if isinstance(rec, dict) and isinstance(rec.get("k"), str) and isinstance(rec.get("v"), dict):
+        return rec["k"], rec["v"]
+    return None
+
+
+def read_legacy_cache(path):
+    """{key: entry} from an older cache file: JSON Lines (v4.0-v4.3; a line cut off by a kill is
+    skipped, the last line of a key wins) or one JSON object of profiles (v2/v3)."""
+    data = {}
+    # errors="replace": a kill in the middle of a multi-byte letter must not make the whole
+    # file unreadable - only that (cut off) line is lost
+    with open(path, encoding="utf-8", errors="replace") as f:
+        first = f.readline()
+        while first and not first.strip():
+            first = f.readline()
+        old = None
+        if first.strip() and _cache_record(first) is None and first.lstrip().startswith("{"):
+            f.seek(0)
             try:
-                self.file.close()
-            except OSError:
-                pass
-            self.file = None
+                old = json.load(f)          # v2/v3 format: one JSON object
+            except ValueError:
+                old = None
+        f.seek(0)
+        if isinstance(old, dict):
+            for key, entry in old.items():  # profiles {'region/realm/name': entry}
+                parts = str(key).split("/", 2)
+                if not isinstance(entry, dict) or len(parts) != 3:
+                    continue
+                runs = entry.get("recent_runs")
+                if isinstance(runs, list):
+                    entry["recent_runs"] = [compact_recent_run(r) for r in runs if isinstance(r, (dict, list))]
+                data[char_key(parts)] = entry
+        else:
+            for line in f:
+                rec = _cache_record(line) if line.strip() else None
+                if rec is not None:
+                    data[rec[0]] = rec[1]
+    return data
+
+
+def import_legacy_cache(source, target):
+    """An older cache file (see read_legacy_cache) into the raiderio_cache table of `target` (a
+    database path or an open connection). An entry already there stays if it is newer."""
+    entries = read_legacy_cache(source)
+    db = target if isinstance(target, sqlite3.Connection) else open_cache_db(str(target))
+    try:
+        with db:
+            db.executemany(
+                "INSERT INTO raiderio_cache (key, fetched, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE "
+                "SET fetched = excluded.fetched, value = excluded.value WHERE excluded.fetched > raiderio_cache.fetched",
+                [(key, int(entry.get("fetched") or 0), json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+                 for key, entry in entries.items()])
+    finally:
+        if db is not target:
+            db.close()
+    return len(entries)
 
 
 def get_profile(ref, cache, c, need_guild=False, with_runs=False):
@@ -2078,9 +2119,11 @@ def build_parser():
                    help="also download the profile of guild members Raider.IO hasn't crawled since "
                         "the season (or the --since-days window) started - they can't have a run "
                         "we'd use, so by default they are skipped")
-    p.add_argument("--cache", default="raiderio_ilvl_cache.json",
-                   help="cache file: downloaded runs (kept forever), character profiles, guild rosters, "
-                        "leaderboard pages and season data (valid for --cache-hours)")
+    p.add_argument("--cache", default=DEFAULT_CACHE,
+                   help="cache database (SQLite; default: the planner's database, szintezes_adatok.sqlite "
+                        "next to this script): downloaded runs (kept forever), character profiles, guild "
+                        "rosters, leaderboard pages and season data (valid for --cache-hours); an older "
+                        "JSON Lines cache file given here is imported into a database next to it")
     p.add_argument("--cache-hours", type=float, default=24,
                    help="how long cached profiles, guild rosters, leaderboard pages and season data "
                         "stay valid (runs never expire)")
@@ -2175,7 +2218,7 @@ def run(args, seeds, make_view, info=print):
             n = cache.counts()
             info(f"cache {cache.path}: {n['run']} run(s), {n['char']} profile(s), {n['guild']} guild "
                  f"roster(s), {n['page']} leaderboard page(s) - runs are kept forever, the rest for "
-                 f"{args.cache_hours:g} h" if cache.existed else f"cache {cache.path}: new file")
+                 f"{args.cache_hours:g} h" if cache.existed else f"cache {cache.path}: empty so far")
         try:
             season_info = get_season(args.season, args.region, args.expansion_id, cache)
             season = season_info["slug"]

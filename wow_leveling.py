@@ -4,10 +4,11 @@
 World of Warcraft karakterek szintezésének megtervezését és követését segítő
 program. Indítás:
 
-    python wow_leveling.py [adatfájl]
+    python wow_leveling.py [adatbázis]
 
-A beállításokat és a karaktereket a program automatikusan menti, alapértelmezés
-szerint a program mappájában lévő ``szintezes_adatok.json`` fájlba.
+A program minden adatát (beállítások, karakterek, API-kulcsok, a statisztikák
+gyorsítótára) automatikusan menti, egyetlen adatbázisba: alapértelmezés szerint a
+program mappájában lévő ``szintezes_adatok.sqlite`` fájlba (lásd storage.py).
 """
 
 from __future__ import annotations
@@ -69,20 +70,21 @@ import gear_advisor
 import gearing
 import murlok
 import raiderio
+import storage
 import wow_addon
 from recommend import recommend_combo
 from wow_data import ALL_SPECS, ALLIANCE, FACTIONS, WOW_CLASSES, WOW_RACES, role_label, role_of, specs_for_class
 
 try:
     import stats_windows
-except ImportError as exc:  # pl. ha a Pythonból hiányzik az sqlite3: a statisztikák nélkül is működik
+except ImportError as exc:  # pl. ha egy modulja hiányzik: a statisztikák nélkül is működik
     stats_windows = None
     STATS_IMPORT_ERROR = str(exc)
 
 APP_TITLE = "WoW szintezés tervező"
 RAIDERIO_TITLE = "Frissítés a Raider.io-ról"
 ADDON_TITLE = "WoW addon"
-DATA_FILE_NAME = "szintezes_adatok.json"
+DATA_FILE_NAME = storage.DB_NAME  # minden adat egy adatbázisban (lásd storage.py)
 
 INTRO_TEXT = (
     "Add meg, mikor kezdődik a szintezés, mikorra érje el az első, illetve az utolsó karakter a "
@@ -139,7 +141,7 @@ STATUS_COLORS = {
 
 
 def default_data_path() -> Path:
-    """Az adatfájl alapértelmezett helye: a program mappája."""
+    """Az adatbázis alapértelmezett helye: a program mappája."""
     if getattr(sys, "frozen", False):  # pl. PyInstallerrel készült .exe esetén
         folder = Path(sys.executable).resolve().parent
     else:
@@ -1297,7 +1299,10 @@ class App:
         self, root: tk.Tk, data_path: Path, fetch_scores=None, fetch_profile=None, auto_stats: bool = False
     ) -> None:
         self.root = root
-        self.data_path = Path(data_path)
+        # Minden adat egy adatbázisban (lásd storage.py); egy régi adatfájl (.json) helyett a mellette
+        # lévő azonos nevű .sqlite, amelybe az első indításkor beolvassa a korábbi fájlokat.
+        self.data_path = storage.database_path(Path(data_path))
+        self._migration = storage.migrate_legacy(self.data_path)
         # A Murlok.io-pontszámokat lekérő függvény (None: nincs lekérés, pl. a tesztekben).
         self._fetch_scores = fetch_scores
         self._score_fetch_running = False
@@ -1401,6 +1406,7 @@ class App:
         self.name_entry.focus_set()
         root.after(60_000, self._watch_date)
         root.after(ADDON_WATCH_MS, self._watch_addon)  # a játék új mentéseit futás közben is beolvassa
+        self._report_migration()
 
     def px(self, value: int) -> int:
         """Képpontméret a kijelző felbontásához (DPI) igazítva."""
@@ -1442,8 +1448,8 @@ class App:
             return load_data(self.data_path)
         except FileNotFoundError:
             return LevelingData(Settings.default())
-        except (OSError, ValueError) as exc:
-            message = f"Az adatfájl nem olvasható be:\n{self.data_path}\n\n{exc}"
+        except storage.CorruptDatabase as exc:  # maga az adatbázis sérült: az egészet félreteszi
+            message = f"Az adatbázis sérült:\n{self.data_path}\n\n{exc}"
             backup = self.data_path.with_name(
                 f"{self.data_path.stem}.hibas-{datetime.now():%Y%m%d-%H%M%S}{self.data_path.suffix}"
             )
@@ -1453,8 +1459,54 @@ class App:
                 pass
             else:
                 message += f"\n\nA hibás fájlt átneveztem, így megmaradt: {backup.name}"
-            messagebox.showwarning(APP_TITLE, message + "\n\nA program alapbeállításokkal indul.")
-            return LevelingData(Settings.default())
+        except storage.StorageError as exc:  # most nem olvasható (pl. zárolja egy másik futó példány)
+            messagebox.showerror(
+                APP_TITLE,
+                f"Az adatbázis most nem olvasható:\n{self.data_path}\n\n{exc}\n\nLehet, hogy a program már "
+                "fut? A program most kilép, hogy ne írja felül az adatokat.",
+            )
+            raise SystemExit(1) from exc
+        except (OSError, ValueError) as exc:  # csak a szintezés adatai hibásak: a kulcsok és a gyorsítótár maradnak
+            message = f"A szintezés adatai nem olvashatók be:\n{self.data_path}\n\n{exc}"
+            backup = self.data_path.with_name(f"{self.data_path.stem}.hibas-{datetime.now():%Y%m%d-%H%M%S}.json")
+            try:
+                backup.write_text(storage.read_document(self.data_path, storage.LEVELING) or "", encoding="utf-8")
+                storage.delete_document(self.data_path, storage.LEVELING)
+            except OSError:
+                pass
+            else:
+                message += f"\n\nA hibás adatokat ide mentettem, így megmaradtak: {backup.name}"
+        messagebox.showwarning(APP_TITLE, message + "\n\nA program alapbeállításokkal indul.")
+        return LevelingData(Settings.default())
+
+    def _report_migration(self) -> None:
+        """Ha az indításkor beolvasta a korábbi változatok külön fájljait (lásd storage.migrate_legacy),
+        egyszer megmondja, hova kerültek."""
+        migration = self._migration
+        parts = []
+        if migration.moved:
+            names = "\n".join(f"• {path.name}" for path in migration.moved)
+            parts.append(
+                f"A program mostantól minden adatát egyetlen fájlban tárolja:\n{self.data_path}\n\nA korábbi "
+                f"fájlokat beolvastam, és áttettem ide: {migration.moved[0].parent}\n{names}"
+            )
+        if migration.skipped:
+            names = "\n".join(f"• {path.name}" for path in migration.skipped)
+            parts.append(
+                "Ezeket a korábbi fájlokat nem olvastam be, mert ezek az adatok már megvannak az adatbázisban "
+                f"(azokat nem írtam felül). Áttettem őket ide: {migration.skipped[0].parent}\n{names}"
+            )
+        if parts:
+            messagebox.showinfo(
+                APP_TITLE, "\n\n".join(parts) + "\n\nHa minden rendben van, törölheted őket.", parent=self.root
+            )
+        if migration.problems:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Ezeket a korábbi fájlokat nem sikerült beolvasni (a helyükön maradtak):\n"
+                + "\n".join(f"• {problem}" for problem in migration.problems),
+                parent=self.root,
+            )
 
     def _build(self) -> None:
         root = self.root
@@ -2648,7 +2700,8 @@ def main(argv: list[str] | None = None) -> None:
         nargs="?",
         type=Path,
         default=default_data_path(),
-        help=f"az adatfájl útvonala (alapértelmezés: {DATA_FILE_NAME} a program mappájában)",
+        help=f"az adatbázis útvonala (alapértelmezés: {DATA_FILE_NAME} a program mappájában); egy régi .json "
+        "adatfájl helyett a mellette lévő, azonos nevű .sqlite",
     )
     args = parser.parse_args(argv)
     _enable_windows_dpi_awareness()

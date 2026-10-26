@@ -2,6 +2,7 @@
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
 import gc
+import json
 import os
 import tempfile
 import threading
@@ -84,7 +85,7 @@ class GuiTests(unittest.TestCase):
 
         self.gui = wow_leveling
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.path = Path(self.temp_dir.name) / "adatok.json"
+        self.path = Path(self.temp_dir.name) / "adatok.sqlite"
         # A gépen telepített játék mentéseit a tesztek ne olvassák be.
         patcher = mock.patch.object(wow_addon, "default_wow_folders", return_value=[])
         patcher.start()
@@ -577,7 +578,7 @@ class GuiTests(unittest.TestCase):
 
     def fetch_app(self, fetch):
         """Egy második főablak, amely a megadott függvénnyel „kéri le” a spec-pontszámokat."""
-        return self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "lekeres.json", fetch_scores=fetch)
+        return self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "lekeres.sqlite", fetch_scores=fetch)
 
     def wait_for_fetch(self, app):
         for _ in range(200):
@@ -632,7 +633,7 @@ class GuiTests(unittest.TestCase):
     def raiderio_app(self, fetch, characters=(), fetched_at=None):
         """Egy második főablak a megadott karakterekkel, amely a `fetch` függvénnyel „kéri le” a
         Raider.io-adatokat (fetched_at: a legutóbbi lekérés ideje)."""
-        path = Path(self.temp_dir.name) / "raiderio.json"
+        path = Path(self.temp_dir.name) / "raiderio.sqlite"
         data = LevelingData(Settings.default(), list(characters))
         data.raiderio_fetched_at = fetched_at
         save_data(path, data)
@@ -939,7 +940,7 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(args.use_cached_runs)
         self.assertEqual((args.since_days, args.cache_hours), (14, 168.0))
         self.assertEqual(seen["seeds"], [("eu", "Ragnaros", "Solutions")])
-        self.assertEqual(Path(args.cache), self.path.parent.resolve() / stats.MPLUS_CACHE_NAME)
+        self.assertEqual(Path(args.cache), self.path.resolve())  # a gyorsítótár is a program adatbázisában
         self.assertEqual(
             window.table.rows(),
             [("2", "1", "2", "305,0", "305,0", "302,5", "300,0", "310,0"), ("4", "1", "1", "315,0", "315,0", "315,0", "315,0", "315,0")],
@@ -1063,7 +1064,7 @@ class GuiTests(unittest.TestCase):
             self.wait_until_finished(window)
         args = seen["args"]
         self.assertEqual((args.client_id, args.zone_id, args.zone, args.region, args.players), ("azonosito", 1500, None, "eu", 3))
-        self.assertEqual(Path(cache.call_args.args[0]), self.path.parent.resolve() / stats.WCL_CACHE_NAME)
+        self.assertEqual(Path(cache.call_args.args[0]), self.path.resolve())
         cache.return_value.close.assert_called_once()
         self.assertEqual(window.status_var.get(), "Kész.")
         self.assertIsNone(wcl.OUTPUT)
@@ -1078,7 +1079,7 @@ class GuiTests(unittest.TestCase):
         window._show_result()
         self.assertIn("players", heroic.tree["displaycolumns"])
         self.assertEqual(heroic.rows()[0][:4], ("Első Boss", "2", "20", "331,0"))
-        keys = stats.load_api_keys(self.path.parent)
+        keys = stats.load_api_keys(self.path)
         self.assertEqual((keys["wcl_client_id"], keys["wcl_client_secret"]), ("azonosito", "titok"))
 
         csv_path = self.path.parent / "raid.csv"
@@ -1091,7 +1092,7 @@ class GuiTests(unittest.TestCase):
         with mock.patch.object(wcl, "run", fake_run), mock.patch.object(wcl, "Cache"):
             window.start()
             self.wait_until_finished(window)
-        self.assertEqual(stats.load_api_keys(self.path.parent), {})
+        self.assertEqual(stats.load_api_keys(self.path), {})
 
     def test_gear_advisor_window(self):
         advisor = self.gui.gear_advisor
@@ -1265,8 +1266,8 @@ class GuiTests(unittest.TestCase):
 
     def test_gear_entry_levels_are_updated_automatically(self):
         stats = self.gui.stats_windows
-        path = Path(self.temp_dir.name) / "auto.json"
-        stats.save_api_keys(path.parent, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
+        path = Path(self.temp_dir.name) / "auto.sqlite"
+        stats.save_api_keys(path, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
         self.assertEqual(  # a tesztek főablakában ki van kapcsolva
             self.app.gear_status_var.get(),
             "Gear ajánló – automatikus frissítés a statisztikákból 7 naponta. "
@@ -1296,7 +1297,7 @@ class GuiTests(unittest.TestCase):
             r"raid: frissítve .* \(1 belépési ilvl változott\)\.$",
         )
         self.assertEqual(app.gear_status_label.cget("style"), "Hint.TLabel")
-        self.assertEqual(stats.load_api_keys(path.parent)["wcl_client_id"], "azonosito")  # a kulcsokhoz nem nyúlt
+        self.assertEqual(stats.load_api_keys(path)["wcl_client_id"], "azonosito")  # a kulcsokhoz nem nyúlt
 
         # Az ablak gombjával megnyitva az automatikus frissítés eredménye látszik.
         mythic = app.mplus_stats_window
@@ -1316,7 +1317,7 @@ class GuiTests(unittest.TestCase):
 
     def test_gear_auto_update_problems_and_retry(self):
         stats = self.gui.stats_windows
-        path = Path(self.temp_dir.name) / "auto.json"
+        path = Path(self.temp_dir.name) / "auto.sqlite"
 
         def failing_run(args, seeds, make_view, info):
             raise stats.mplus.StatsError("a Raider.io nem érhető el")
@@ -1338,7 +1339,7 @@ class GuiTests(unittest.TestCase):
         with mock.patch.object(stats.mplus, "run", never):
             app._watch_date()
         self.assertFalse(app.mplus_stats_window.running)
-        stats.save_api_keys(path.parent, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
+        stats.save_api_keys(path, {"wcl_client_id": "azonosito", "wcl_client_secret": "titok"})
         app.data.stats_options["raid"] = {"refresh": True}  # a raid ablakban bejelölt „Minden újra letöltése”
         with mock.patch.object(stats.mplus, "run", self.fake_mplus_run()), mock.patch.object(
             stats.wcl, "run", self.fake_raid_run
@@ -1363,7 +1364,7 @@ class GuiTests(unittest.TestCase):
     def test_automatic_run_can_be_watched_and_stopped(self):
         stats = self.gui.stats_windows
         mplus = stats.mplus
-        path = Path(self.temp_dir.name) / "auto.json"
+        path = Path(self.temp_dir.name) / "auto.sqlite"
 
         def endless_run(args, seeds, make_view, info):
             state, guild_queue = mplus.new_state(), mplus.GuildQueue()
@@ -1449,7 +1450,7 @@ class GuiTests(unittest.TestCase):
     def test_addon_data_is_imported_at_startup(self):
         data = LevelingData(Settings.default(), [Character("Thrall", level=D("84.00")), Character("Garrosh")])
         data.addon_path = str(self.addon_folder())
-        path = Path(self.temp_dir.name) / "addon.json"
+        path = Path(self.temp_dir.name) / "addon.sqlite"
         save_data(path, data)
         with mock.patch.object(self.gui.messagebox, "showinfo") as info, mock.patch.object(
             self.gui.messagebox, "showwarning"
@@ -1765,7 +1766,7 @@ class GuiTests(unittest.TestCase):
         target = wow_addon.install_addon(folder / "_retail_")
         data = LevelingData(Settings.default(), [Character("Thrall")])
         data.addon_path = str(folder)
-        path = Path(self.temp_dir.name) / "indulas.json"
+        path = Path(self.temp_dir.name) / "indulas.sqlite"
         save_data(path, data)
         before = (target / wow_addon.PLAN_FILE).read_text(encoding="utf-8")
         self.assertEqual(wow_addon.parse_lua(before), {})  # még a telepítéskori üres terv
@@ -1777,7 +1778,7 @@ class GuiTests(unittest.TestCase):
     def test_addon_is_found_in_the_usual_place_at_startup(self):
         folder = self.addon_folder()
         with mock.patch.object(wow_addon, "default_wow_folders", return_value=[Path(self.temp_dir.name), folder]):
-            app = self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "uj.json")
+            app = self.gui.App(tk.Toplevel(self.root), Path(self.temp_dir.name) / "uj.sqlite")
         self.assertEqual(app.data.addon_path, str(folder))
         self.assertIn("Nincs a listán: Jaina, Thrall, Arthas", app.addon_status_var.get())
 
@@ -2358,15 +2359,87 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(popup.winfo_exists())
 
     def test_corrupt_data_file_is_backed_up(self):
-        path = Path(self.temp_dir.name) / "hibas.json"
+        # Egy régi, hibás adatfájl: beolvassa az adatbázisba, és mivel nem értelmezhető, a hibás
+        # adatokat külön fájlba menti, és alapbeállításokkal indul (a többi adat megmarad).
+        folder = Path(self.temp_dir.name)
+        path = folder / "hibas.json"
         path.write_text("{nem json", encoding="utf-8")
-        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning, mock.patch.object(
+            self.gui.messagebox, "showinfo"
+        ):
             app = self.gui.App(tk.Toplevel(self.root), path)
         warning.assert_called_once()
         self.assertEqual(app.data.characters, [])
-        backups = list(Path(self.temp_dir.name).glob("hibas.hibas-*.json"))
+        self.assertEqual(app.data_path, folder / "hibas.sqlite")
+        backups = list(folder.glob("hibas.hibas-*.json"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(encoding="utf-8"), "{nem json")
+        self.assertIn("A hibás adatokat ide mentettem, így megmaradtak", warning.call_args.args[1])
+
+        # Ha maga az adatbázis sérült, az egészet félreteszi.
+        database = folder / "serult.sqlite"
+        database.write_bytes(b"ez nem adatbazis" * 100)
+        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
+            app = self.gui.App(tk.Toplevel(self.root), database)
+        self.assertIn("Az adatbázis sérült", warning.call_args.args[1])
+        self.assertEqual([p.read_bytes() for p in folder.glob("serult.hibas-*.sqlite")], [b"ez nem adatbazis" * 100])
+        app.save()  # a helyén új adatbázis
+        self.assertEqual(load_data(database).characters, [])
+
+        # Ha most nem olvasható (pl. zárolja egy másik futó példány), nem indul el: nem írja felül.
+        with mock.patch.object(
+            self.gui.storage, "read_document", side_effect=self.gui.storage.StorageError("database is locked")
+        ), mock.patch.object(self.gui.messagebox, "showerror") as error:
+            with self.assertRaises(SystemExit):
+                self.gui.App(tk.Toplevel(self.root), database)
+        self.assertIn("Lehet, hogy a program már fut?", error.call_args.args[1])
+
+    def test_old_data_files_are_moved_into_the_database(self):
+        folder = Path(self.temp_dir.name) / "regi"
+        folder.mkdir()
+        old = LevelingData(Settings.default(), [Character("Thrall", level=D("85.29"))])
+        (folder / "szintezes_adatok.json").write_text(json.dumps(old.to_dict()), encoding="utf-8")
+        (folder / "api_kulcsok.json").write_text('{"raiderio_api_key": "rio"}', encoding="utf-8")
+        line = {"k": "run:season-mn-2/7", "v": {"level": 12, "timed": True, "roster": [], "fetched": 1760000000}}
+        (folder / "raiderio_ilvl_cache.json").write_text(json.dumps(line) + "\n", encoding="utf-8")
+        wcl_cache = self.gui.stats_windows.wcl.Cache(str(folder / "wcl_cache.sqlite"))
+        wcl_cache.set_meta("zones", [{"id": 46}])
+        wcl_cache.close()
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            app = self.gui.App(tk.Toplevel(self.root), folder / "szintezes_adatok.json")
+        database = folder / "szintezes_adatok.sqlite"
+        self.assertEqual(app.data_path, database)
+        self.assertEqual([(c.name, c.level) for c in app.data.characters], [("Thrall", D("85.29"))])
+        moved = ["api_kulcsok.json", "raiderio_ilvl_cache.json", "szintezes_adatok.json", "wcl_cache.sqlite"]
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["regi_adatok", "szintezes_adatok.sqlite"])
+        self.assertEqual(sorted(p.name for p in (folder / "regi_adatok").iterdir()), moved)
+        message = info.call_args.args[1]
+        self.assertIn(f"egyetlen fájlban tárolja:\n{database}", message)
+        self.assertIn("• raiderio_ilvl_cache.json", message)
+        # Minden a helyén van az adatbázisban: a kulcs, és mindkét gyorsítótár.
+        stats = self.gui.stats_windows
+        self.assertEqual(stats.load_api_keys(database), {"raiderio_api_key": "rio"})
+        cache = stats.mplus.DiskCache(str(database), 24)
+        self.assertEqual(cache.get("run:season-mn-2/7")["level"], 12)
+        cache.close()
+        wcl_cache = stats.wcl.Cache(str(database))
+        self.assertEqual(wcl_cache.get_meta("zones"), [{"id": 46}])
+        wcl_cache.close()
+        # Újraindításkor már nincs mit áthelyezni (és nem kérdez).
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            app = self.gui.App(tk.Toplevel(self.root), database)
+        info.assert_not_called()
+        self.assertEqual(app.data.characters[0].name, "Thrall")
+        # Ha később mégis előkerül egy régi fájl (pl. a korábbi változat futott), az adatbázisban lévő adatok maradnak.
+        (folder / "api_kulcsok.json").write_text('{"raiderio_api_key": "masik"}', encoding="utf-8")
+        with mock.patch.object(self.gui.messagebox, "showinfo") as info:
+            self.gui.App(tk.Toplevel(self.root), database)
+        message = info.call_args.args[1]
+        self.assertIn("nem olvastam be, mert ezek az adatok már megvannak az adatbázisban", message)
+        self.assertIn("• api_kulcsok.", message)  # időbélyeggel, mert a regi_adatok mappában már van ilyen nevű
+        self.assertNotIn("egyetlen fájlban tárolja", message)
+        self.assertEqual(stats.load_api_keys(database), {"raiderio_api_key": "rio"})
+        self.assertEqual(len(list((folder / "regi_adatok").glob("api_kulcsok*.json"))), 2)
 
 
 if __name__ == "__main__":

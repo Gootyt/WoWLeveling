@@ -22,12 +22,10 @@ Az ütemezés szabályai:
 
 from __future__ import annotations
 
-import contextlib
 import json
 import math
 import os
 import re
-import tempfile
 import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
@@ -35,8 +33,8 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
 from fractions import Fraction
-from pathlib import Path
 
+import storage
 from wow_data import ROLES, role_of
 
 LEVEL_STEP = Decimal("0.01")  # a szintek két tizedesjegy pontosságúak
@@ -1186,31 +1184,21 @@ class LevelingData:
 
 
 def load_data(path: str | os.PathLike) -> LevelingData:
-    """Az adatok betöltése.
+    """Az adatok betöltése az adatbázisból (lásd storage.py).
 
-    FileNotFoundError-t dob, ha a fájl nem létezik, és ValueError-t,
-    ha a tartalma nem értelmezhető.
+    FileNotFoundError-t dob, ha még nincsenek elmentett adatok, ValueError-t, ha a tartalmuk nem
+    értelmezhető, és storage.StorageError-t, ha maga az adatbázis nem olvasható (pl. sérült).
     """
-    with open(path, encoding="utf-8") as handle:
-        raw = json.load(handle)
+    text = storage.read_document(path, storage.LEVELING)
+    if text is None:
+        raise FileNotFoundError(f"Még nincsenek elmentett adatok: {path}")
     try:
-        return LevelingData.from_dict(raw)
+        return LevelingData.from_dict(json.loads(text))
     except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"Hiányzó vagy hibás adat a fájlban ({exc!r}).") from exc
+        raise ValueError(f"Hiányzó vagy hibás adat az adatbázisban ({exc!r}).") from exc
 
 
 def save_data(path: str | os.PathLike, data: LevelingData) -> None:
-    """Az adatok mentése. Előbb ideiglenes fájlba ír, így megszakadt mentés
-    esetén sem sérül a korábbi adatfájl."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(data.to_dict(), stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-        os.replace(temp_name, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(temp_name)
-        raise
+    """Az adatok mentése az adatbázisba, egy tranzakcióban: megszakadt mentés esetén is a korábbi
+    adatok maradnak meg."""
+    storage.write_document(path, storage.LEVELING, json.dumps(data.to_dict(), ensure_ascii=False, indent=2))

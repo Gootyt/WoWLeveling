@@ -100,11 +100,15 @@ python wow_leveling.py
 
 Windowson `py wow_leveling.py` is jó, vagy dupla kattintás a fájlra.
 
-Ha több tervet akarsz külön vezetni (pl. másik szerveren), add meg az adatfájlt:
+Ha több tervet akarsz külön vezetni (pl. másik szerveren), add meg az adatbázis
+fájlját (ha még nincs meg, a program létrehozza):
 
 ```
-python wow_leveling.py masik_terv.json
+python wow_leveling.py masik_terv.sqlite
 ```
+
+Minden tervnek saját adatbázisa lesz, a saját API-kulcsaival és gyorsítótárával
+(lásd „Adatok”).
 
 ## Használat
 
@@ -346,7 +350,7 @@ pontszámhoz, de nem pontosan ugyanaz.
   program közben használható; az eredmény (és az esetleges hiba) a lista tetején
   látszik.
 - Internetkapcsolat kell hozzá. A program csak ezt a három nyilvános oldalt kéri le,
-  rólad vagy a karaktereidről nem küld semmit. A lekért pontszámok az adatfájlba is
+  rólad vagy a karaktereidről nem küld semmit. A lekért pontszámok az adatbázisba is
   bekerülnek, így netkapcsolat nélkül a legutóbbi adatok látszanak.
 - Csak akkor van érték, ha a karakternél a kaszt és a spec is meg van adva (a
   listában szereplő angol nevekkel, pl. „Death Knight” és „Unholy”).
@@ -382,7 +386,7 @@ nevével, realmjével és a beállított régióval, és ezeket írja be a vála
 - Ha lekérés közben adsz hozzá új karaktert, az övé a futó lekérés után
   következik.
 - Internetkapcsolat kell hozzá. A karakterek nevén, realmjén és a régión kívül a
-  program nem küld semmit. A legutóbbi lekérés ideje az adatfájlba is bekerül.
+  program nem küld semmit. A legutóbbi lekérés ideje az adatbázisba is bekerül.
 
 **Állapotok:**
 
@@ -410,10 +414,10 @@ A két statisztika a program mappájában lévő két önálló program
 (`raiderio_ilvl_stats.py` és `wcl_raid_ilvl_stats.py`) ablakos változata: ugyanazt
 számolják, csak a beállítások mezőkben vannak, az eredmény táblázatban látszik, és a
 parancssori Ctrl+C helyett a „Leállítás” gomb állítja meg őket. Mindkettő
-gyorsítótárat használ (a program mappájában, lásd „Adatok”), így egy újabb
+gyorsítótárat használ (a program adatbázisában, lásd „Adatok”), így egy újabb
 lekérdezés csak azt tölti le, ami még nincs meg. Az ablakok mezői megmaradnak a
 következő megnyitásra; az API-kulcsokat a „Megjegyzés ezen a gépen” bejelölésével
-az `api_kulcsok.json` fájlba menti a program (titkosítás nélkül). A gear ajánló
+az adatbázisba menti a program (titkosítás nélkül). A gear ajánló
 automatikus frissítése is az ablakokban beállított értékekkel, és az elmentett
 kulcsokkal futtatja a lekérdezéseket (lásd „Gear ajánló”).
 
@@ -519,7 +523,7 @@ a kulcsszint játékosainak medián itemlevele (M+ ilvl statisztika), a raid sor
 boss kill-jeinek medián itemlevele az adott nehézségen (Raid ilvl statisztika, a
 „raid átlag / kill” mérőszám). Ahol nincs adat (a statisztikában nem szereplő
 kulcsszint, még meg nem ölt boss), ott a belépési ilvl marad; az „Összes boss” sor
-nem számít. A frissített értékek az adatfájlba kerülnek, az „Alapértékek
+nem számít. A frissített értékek az adatbázisba kerülnek, az „Alapértékek
 visszaállítása” gomb törli őket.
 
 **Automatikus frissítés.** A program indításkor (és amíg nyitva van, percenként
@@ -700,20 +704,40 @@ sorában a számot az új verzióéra.
 
 ## Adatok
 
-A beállítások és a karakterek a program mappájában lévő `szintezes_adatok.json`
-fájlba kerülnek (egyszerű, olvasható JSON). Ha ezt a fájlt elmented, az adataid is
-megvannak. A program korábbi (maximum szintes) változatának adatfájlját is
-beolvassa: ilyenkor a kezdőszint 1,00, a célszint a korábbi maximum szint lesz. Ha
-a fájl megsérül, a program átnevezi (`szintezes_adatok.hibas-<időpont>.json`, így
-nem vész el), és alapbeállításokkal indul.
+A program minden adatát egyetlen fájlban, a program mappájában lévő
+`szintezes_adatok.sqlite` adatbázisban tárolja (SQLite: a Python beépített `sqlite3`
+moduljával kezeli, nem kell hozzá semmit telepíteni):
 
-A statisztikák a fájljaikat az adatfájl mellé teszik: `raiderio_ilvl_cache.json`
-és `wcl_cache.sqlite` (a letöltött adatok gyorsítótára – bármikor törölhető, csak
-újra le kell tölteni őket), valamint – ha kéred – `api_kulcsok.json` (az
-API-kulcsok).
+- a beállításokat és a karaktereket, az ablakok mezőivel és a lekért adatokkal
+  együtt,
+- ha kéred, az API-kulcsokat (titkosítás nélkül),
+- a két statisztika gyorsítótárát (a letöltött adatokat; ami elavul, azt magától
+  törli).
+
+Ha ezt az egy fájlt elmented, minden adatod megvan; a másoláshoz zárd be a
+programot, hogy egy éppen folyó mentés ne kerüljön félig a másolatba. Minden mentés
+egy lépésben történik, így egy összeomlás vagy áramszünet sem rontja el a korábban
+mentett adatokat, és a háttérben futó statisztikák is írhatnak bele, amíg a program
+ment. A két statisztika parancssorból futtatva is ezt a gyorsítótárat használja (a
+`--cache` kapcsolóval másik fájl adható meg).
+
+A korábbi változatok négy külön fájlba mentettek: `szintezes_adatok.json`,
+`api_kulcsok.json`, `raiderio_ilvl_cache.json` és `wcl_cache.sqlite`. Az első
+indításkor a program ezeket beolvassa az adatbázisba, és áthelyezi őket a
+`regi_adatok` mappába (ha minden rendben van, törölheted őket). Ha később mégis
+előkerül egy ilyen fájl, az adatbázisban már meglévő adatokat nem írja felül vele. A
+legelső (maximum szintes) változat adatfájlját is beolvassa: ilyenkor a kezdőszint
+1,00, a célszint a korábbi maximum szint lesz.
+
+Ha a szintezés adatai nem olvashatók be, a program kimenti őket egy
+`szintezes_adatok.hibas-<időpont>.json` fájlba (így nem vesznek el), és
+alapbeállításokkal indul; az API-kulcsok és a gyorsítótár megmaradnak. Ha maga az
+adatbázis sérült, az egész fájlt nevezi át (`szintezes_adatok.hibas-<időpont>.sqlite`).
+Ha az adatbázist sokáig egy másik program zárolja, a tervező inkább kilép, hogy ne
+írja felül az adatokat.
 
 Az addon mentéseinek beolvasásához és a terv szinkronizálásához a program az
-adatfájlban megjegyzi a WoW mappáját, karakterenként a legutóbb felhasznált mentés
+adatbázisban megjegyzi a WoW mappáját, karakterenként a legutóbb felhasznált mentés
 idejét, és azokat a karaktereket, amelyeket nem kértél fel a listára. A gear
 ajánló automatikus frissítéséhez a beállításait és azt, hogy a két statisztika
 eredménye mikor került át utoljára.
@@ -722,6 +746,7 @@ eredménye mikor került át utoljára.
 
 - `wow_leveling.py` – a grafikus felület, ezt kell elindítani
 - `leveling.py` – az ütemezés számítása, mentés és betöltés
+- `storage.py` – a közös adatbázis, és a korábbi változatok fájljainak beolvasása
 - `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
 - `raiderio.py` – az itemlevelek és a Raider.io pontszámok lekérése a Raider.io-ról
 - `recommend.py` – a combóajánlás

@@ -6,9 +6,9 @@
   Heroic és Mythic nehézségen (wcl_raid_ilvl_stats.py, a Warcraft Logs adataiból).
 
 A lekérdezés a háttérben fut, közben a program használható; a „Leállítás” gomb az eddig
-összegyűjtött adatokkal zárja le (mint parancssorban a Ctrl+C). A beállítások az adatfájlba
-kerülnek, az API-kulcsok – ha kéred – külön fájlba (api_kulcsok.json) az adatfájl mellé.
-A letöltött adatok gyorsítótára is ott van, így egy újabb lekérdezés csak az újakat kéri le.
+összegyűjtött adatokkal zárja le (mint parancssorban a Ctrl+C). A beállítások, az API-kulcsok
+(ha kéred) és a letöltött adatok gyorsítótára is a program adatbázisába kerülnek (lásd
+storage.py), így egy újabb lekérdezés csak az újakat kéri le.
 
 A gear ajánló automatikus frissítéséhez (App.update_gear_stats) a program egy rejtett ablakban
 indítja el a lekérdezést (start_automatic) az elmentett beállításokkal; az ablak gombjával
@@ -30,11 +30,9 @@ from tkinter import font as tkfont
 
 import gearing
 import raiderio_ilvl_stats as mplus
+import storage
 import wcl_raid_ilvl_stats as wcl
 
-KEYS_FILE_NAME = "api_kulcsok.json"
-MPLUS_CACHE_NAME = "raiderio_ilvl_cache.json"
-WCL_CACHE_NAME = "wcl_cache.sqlite"
 LOG_LINES = 2000  # ennyi sor marad meg a naplóban
 POLL_MS = 100  # ilyen gyakran nézi az ablak a háttérszál üzeneteit
 
@@ -55,10 +53,11 @@ class MissingApiKey(ValueError):
     """A lekérdezéshez API-kulcs kellene (a raid statisztikához a Warcraft Logs kulcsa)."""
 
 
-def load_api_keys(folder: Path) -> dict[str, str]:
-    """Az elmentett API-kulcsok (ha nincs fájl vagy hibás, üres)."""
+def load_api_keys(database: Path) -> dict[str, str]:
+    """Az adatbázisba mentett API-kulcsok (ha nincsenek, vagy hibásak: üres)."""
     try:
-        data = json.loads((folder / KEYS_FILE_NAME).read_text(encoding="utf-8"))
+        text = storage.read_document(database, storage.API_KEYS)
+        data = json.loads(text) if text else {}
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
@@ -66,21 +65,21 @@ def load_api_keys(folder: Path) -> dict[str, str]:
     return {key: value for key, value in data.items() if isinstance(value, str) and value}
 
 
-def save_api_keys(folder: Path, changes: dict[str, str]) -> None:
-    """A megadott kulcsok mentése (üres érték: törlés), a többi kulcs marad; ha egy sem
-    marad, a fájl törlődik. A mentés nem kötelező, ezért a hibája nem állítja meg a programot."""
-    keys = load_api_keys(folder)
+def save_api_keys(database: Path, changes: dict[str, str]) -> None:
+    """A megadott kulcsok mentése az adatbázisba (üres érték: törlés), a többi kulcs marad; ha
+    egy sem marad, a bejegyzés törlődik. A mentés nem kötelező, ezért a hibája nem állítja meg a
+    programot."""
+    keys = load_api_keys(database)
     for key, value in changes.items():
         if value:
             keys[key] = value
         else:
             keys.pop(key, None)
-    path = folder / KEYS_FILE_NAME
     try:
         if keys:
-            path.write_text(json.dumps(keys, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        elif path.exists():
-            path.unlink()
+            storage.write_document(database, storage.API_KEYS, json.dumps(keys, ensure_ascii=False, indent=2))
+        elif Path(database).exists():
+            storage.delete_document(database, storage.API_KEYS)
     except OSError:
         pass
 
@@ -228,8 +227,9 @@ class StatsWindow(tk.Toplevel):
         self.title(f"{self.TITLE} – {app.root.title()}")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Escape>", lambda _event: self.close())
-        self.folder = Path(app.data_path).resolve().parent  # ide kerül a gyorsítótár és a kulcsfájl
-        self.keys = load_api_keys(self.folder)
+        self.database = Path(app.data_path).resolve()  # a gyorsítótár és a kulcsok is ide kerülnek
+        self.folder = self.database.parent  # a CSV-fájlok alapértelmezett helye
+        self.keys = load_api_keys(self.database)
         self.status_var = tk.StringVar(value="Állítsd be a lekérdezést, majd kattints az „Indítás” gombra.")
         self._messages: queue.Queue = queue.Queue()
         self._running = False
@@ -358,7 +358,7 @@ class StatsWindow(tk.Toplevel):
         if self._busy():
             return BUSY
         if self.state() == "withdrawn":  # a rejtett ablak a legutóbb elmentett beállításokkal fusson
-            self.keys = load_api_keys(self.folder)
+            self.keys = load_api_keys(self.database)
             self._load_keys()
             self._load_options()
         try:
@@ -745,11 +745,11 @@ class MythicStatsWindow(StatsWindow):
         args.each_dungeon = self.each_dungeon_var.get()
         args.affixes = self.affixes_var.get().strip() or "all"
         args.api_key = self.api_key_var.get().strip() or None
-        args.cache = str(self.folder / MPLUS_CACHE_NAME)
+        args.cache = str(self.database)
         args.no_live = True
         seeds = mplus.prepare_args(args)
         if not automatic:
-            save_api_keys(self.folder, {"raiderio_api_key": args.api_key if self.remember_key_var.get() else ""})
+            save_api_keys(self.database, {"raiderio_api_key": args.api_key if self.remember_key_var.get() else ""})
         return args, seeds
 
     def _work(self, job) -> None:
@@ -950,11 +950,11 @@ class RaidStatsWindow(StatsWindow):
         args.exclude = self.exclude_var.get()
         args.players = parse_number(self.players_var.get(), "Játékosok", empty=0)
         args.refresh = self.refresh_var.get() and not automatic  # hetente ne töltsön le mindent újra
-        args.cache = str(self.folder / WCL_CACHE_NAME)
+        args.cache = str(self.database)
         if not automatic:
             remember = self.remember_var.get()
             keys = {"wcl_client_id": client_id, "wcl_client_secret": client_secret}
-            save_api_keys(self.folder, {name: value if remember else "" for name, value in keys.items()})
+            save_api_keys(self.database, {name: value if remember else "" for name, value in keys.items()})
         return args
 
     def _work(self, args) -> None:

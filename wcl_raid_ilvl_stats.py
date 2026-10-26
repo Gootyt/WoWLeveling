@@ -31,8 +31,10 @@ Ugyanazt a kill-t több logger is feltöltheti - ezeket a script összevonja.
 A WCL a raid zónájába sorolja a Lair / world bossokat is (Nymrissa Wavecaller,
 Kith'ix) - ezeket alapból kihagyja, lásd --exclude.
 
-Cache: a letöltött adatokat a script mellé menti (wcl_cache.sqlite), így egy újabb
-futás csak azt kéri le az API-tól, ami még nincs meg:
+Cache: a letöltött adatokat egy SQLite adatbázisba menti, alapból a tervezőébe (a script
+melletti szintezes_adatok.sqlite wcl_ előtagú tábláiba, így a tervező ablaka és a parancssor
+közös cache-t használ; a korábbi wcl_cache.sqlite fájlt a tervező a következő indításakor
+beolvassa). Egy újabb futás csak azt kéri le az API-tól, ami még nincs meg:
   * report-oldalak időablakonként. Az ablakok rögzített rácsra illeszkednek (a még
     folyamatban lévő legutolsó ablak kimarad), így ugyanazzal az ablakhosszal
     (--days / --pages arány) futtatva a már letöltött ablakok a cache-ből jönnek,
@@ -101,7 +103,8 @@ COMPLEXITY_RE = re.compile(r"complexity should be (\d+) but got (\d+)", re.IGNOR
 HOUR_MS = 3_600_000
 DAY_MS = 24 * HOUR_MS
 
-DEFAULT_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wcl_cache.sqlite")
+# A tervező adatbázisa a script mellett (storage.DB_NAME): a tervező ablakáé és a parancssoré a közös cache.
+DEFAULT_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "szintezes_adatok.sqlite")
 CACHE_SCHEMA = 1            # ha a lekérdezések vagy a tárolt formátum változik, növeld (a régi cache törlődik)
 CACHE_SETTLE_HOURS = 12     # a lezárulása után legalább ennyivel letöltött időablak végleges
 CACHE_KEEP_DAYS = 30        # az ennyi napja nem használt bejegyzések törlődnek
@@ -321,13 +324,69 @@ class WCLClient:
 
 # ------------------------------------------------------------------------- cache
 
+# A cache táblái wcl_ előtaggal, hogy egy közös adatbázisban (a tervezőé, szintezes_adatok.sqlite)
+# se ütközzenek más táblákkal; a sémájuk változata a schema_versions táblában van.
 CACHE_TABLES = """
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, saved INTEGER NOT NULL, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS pages (key TEXT PRIMARY KEY, w_end INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS wcl_meta (key TEXT PRIMARY KEY, saved INTEGER NOT NULL, value BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS wcl_pages (key TEXT PRIMARY KEY, w_end INTEGER NOT NULL,
     fetched INTEGER NOT NULL, used INTEGER NOT NULL, body BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS players (report TEXT NOT NULL, fight INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS wcl_players (report TEXT NOT NULL, fight INTEGER NOT NULL,
     used INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY (report, fight));
 """
+CACHE_NAMES = ("meta", "pages", "players")  # a táblák az előtag nélkül (a régi cache fájlokban így hívták őket)
+VERSIONS_TABLE = "CREATE TABLE IF NOT EXISTS schema_versions (component TEXT PRIMARY KEY, version INTEGER NOT NULL)"
+
+
+def _tables(db, schema="main"):
+    return {row[0] for row in db.execute(f"SELECT name FROM {schema}.sqlite_master WHERE type = 'table'")}
+
+
+def prepare_cache_db(db):
+    """A cache táblái a megnyitott adatbázisban: ha a sémájuk régebbi, törlődnek és újra létrejönnek.
+    Egy régi, önálló cache fájl (előtag nélküli táblák, PRAGMA user_version) tábláit átnevezi."""
+    db.execute(VERSIONS_TABLE)
+    tables = _tables(db)
+    if "pages" in tables and "wcl_pages" not in tables:  # a 2026. októberi előtti cache fájl
+        if db.execute("PRAGMA user_version").fetchone()[0] == CACHE_SCHEMA:
+            for name in CACHE_NAMES:
+                if name in tables:
+                    db.execute(f"ALTER TABLE {name} RENAME TO wcl_{name}")
+            db.execute("INSERT OR REPLACE INTO schema_versions (component, version) VALUES ('wcl', ?)", (CACHE_SCHEMA,))
+        else:
+            db.executescript("DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS pages; DROP TABLE IF EXISTS players;")
+    row = db.execute("SELECT version FROM schema_versions WHERE component = 'wcl'").fetchone()
+    if row is None or row[0] != CACHE_SCHEMA:
+        db.executescript("DROP TABLE IF EXISTS wcl_meta; DROP TABLE IF EXISTS wcl_pages; DROP TABLE IF EXISTS wcl_players;")
+    db.executescript(CACHE_TABLES)
+    db.execute("INSERT OR REPLACE INTO schema_versions (component, version) VALUES ('wcl', ?)", (CACHE_SCHEMA,))
+    db.commit()
+
+
+def import_cache_file(source, target):
+    """Egy régi, önálló cache fájl (wcl_cache.sqlite) adatai a target adatbázis cache tábláiba; a
+    target-ben már meglévő bejegyzéseket felülírja. Régebbi sémájú fájlból nincs mit átvenni."""
+    db = sqlite3.connect(str(target), timeout=30)
+    try:
+        prepare_cache_db(db)
+        db.execute("ATTACH DATABASE ? AS old", (str(source),))
+        try:
+            tables = _tables(db, "old")
+            version = db.execute("PRAGMA old.user_version").fetchone()[0]
+            prefixed = "wcl_pages" in tables
+            if prefixed:
+                row = (db.execute("SELECT version FROM old.schema_versions WHERE component = 'wcl'").fetchone()
+                       if "schema_versions" in tables else None)
+                version = row[0] if row else None
+            if version == CACHE_SCHEMA:
+                with db:
+                    for name in CACHE_NAMES:
+                        table = f"wcl_{name}" if prefixed else name
+                        if table in tables:
+                            db.execute(f"INSERT OR REPLACE INTO main.wcl_{name} SELECT * FROM old.{table}")
+        finally:
+            db.execute("DETACH DATABASE old")
+    finally:
+        db.close()
 
 
 def now_ms():
@@ -354,14 +413,10 @@ class Cache:
         self.refresh = refresh
         self.ttl_ms = max(0.0, ttl_hours) * HOUR_MS
         self._write_warned = False
+        self._touches = []          # a 'legutóbb használva' frissítései, a következő írással kerülnek a fájlba
         try:
             self.db = sqlite3.connect(path or ":memory:", timeout=30)
-            if self.db.execute("PRAGMA user_version").fetchone()[0] != CACHE_SCHEMA:
-                self.db.executescript("DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS pages; "
-                                      "DROP TABLE IF EXISTS players;")
-                self.db.executescript(CACHE_TABLES)
-                self.db.execute(f"PRAGMA user_version = {CACHE_SCHEMA}")
-                self.db.commit()
+            prepare_cache_db(self.db)
         except sqlite3.Error as exc:
             raise StatsError(f"A cache fájl nem nyitható meg ({path}): {exc}\n"
                      "Töröld a fájlt, vagy futtasd a --no-cache kapcsolóval.")
@@ -370,30 +425,39 @@ class Cache:
         """Írás + azonnali mentés (így megszakításkor sem vész el a már letöltött adat).
         Ha nem sikerül (pl. egy másik futás zárolja a fájlt), csak figyelmeztet."""
         try:
+            self._flush_touches()
             self.db.executemany(sql, rows)
             self.db.commit()
         except sqlite3.Error as exc:
+            try:
+                self.db.rollback()  # egy félbemaradt írás se zárolja tovább az adatbázist
+            except sqlite3.Error:
+                pass
             if not self._write_warned:
                 out(f"  ! nem sikerült a cache-be írni ({exc}) - a futás folytatódik", err=True)
                 self._write_warned = True
 
     def _touch(self, sql, params):
-        """A 'legutóbb használva' időbélyeg frissítése - ha nem sikerül, nem baj."""
-        try:
+        """A 'legutóbb használva' időbélyeg frissítése - csak a következő írással (vagy a lezáráskor)
+        kerül a fájlba, mert a közös adatbázisban (lásd storage.py) egy nyitva hagyott írási
+        tranzakció feltartaná a program többi mentését. Ha nem sikerül, nem baj."""
+        self._touches.append((sql, params))
+
+    def _flush_touches(self):
+        touches, self._touches = self._touches, []
+        for sql, params in touches:
             self.db.execute(sql, params)
-        except sqlite3.Error:
-            pass
 
     def get_meta(self, key, max_age_ms=None):
         if self.refresh:
             return None
-        row = self.db.execute("SELECT saved, value FROM meta WHERE key = ?", (key,)).fetchone()
+        row = self.db.execute("SELECT saved, value FROM wcl_meta WHERE key = ?", (key,)).fetchone()
         if row is None or (max_age_ms is not None and now_ms() - row[0] > max_age_ms):
             return None
         return _unpack(row[1])
 
     def set_meta(self, key, value):
-        self._write("INSERT OR REPLACE INTO meta (key, saved, value) VALUES (?, ?, ?)",
+        self._write("INSERT OR REPLACE INTO wcl_meta (key, saved, value) VALUES (?, ?, ?)",
                     [(key, now_ms(), _pack(value))])
 
     def get_page(self, key):
@@ -402,19 +466,19 @@ class Cache:
         csak ttl-ig használható, mert azóta még kerülhettek fel logok az ablakba."""
         if self.refresh:
             return None
-        row = self.db.execute("SELECT w_end, fetched, body FROM pages WHERE key = ?", (key,)).fetchone()
+        row = self.db.execute("SELECT w_end, fetched, body FROM wcl_pages WHERE key = ?", (key,)).fetchone()
         if row is None:
             return None
         w_end, fetched, body = row
         now = now_ms()
         if fetched - w_end < CACHE_SETTLE_HOURS * HOUR_MS and now - fetched > self.ttl_ms:
             return None
-        self._touch("UPDATE pages SET used = ? WHERE key = ?", (now, key))
+        self._touch("UPDATE wcl_pages SET used = ? WHERE key = ?", (now, key))
         return _unpack(body)
 
     def put_page(self, key, w_end, block):
         now = now_ms()
-        self._write("INSERT OR REPLACE INTO pages (key, w_end, fetched, used, body) VALUES (?, ?, ?, ?, ?)",
+        self._write("INSERT OR REPLACE INTO wcl_pages (key, w_end, fetched, used, body) VALUES (?, ?, ?, ?, ?)",
                     [(key, w_end, now, now, _pack(block))])
 
     def get_players(self, keys):
@@ -424,11 +488,11 @@ class Cache:
             return found
         now = now_ms()
         for report, fight in keys:
-            row = self.db.execute("SELECT body FROM players WHERE report = ? AND fight = ?",
+            row = self.db.execute("SELECT body FROM wcl_players WHERE report = ? AND fight = ?",
                                   (report, fight)).fetchone()
             if row is not None:
                 found[(report, fight)] = _unpack(row[0])
-                self._touch("UPDATE players SET used = ? WHERE report = ? AND fight = ?",
+                self._touch("UPDATE wcl_players SET used = ? WHERE report = ? AND fight = ?",
                             (now, report, fight))
         return found
 
@@ -437,17 +501,18 @@ class Cache:
         now = now_ms()
         rows = [(report, fight, now, _pack(v)) for (report, fight), v in values.items() if v]
         if rows:
-            self._write("INSERT OR REPLACE INTO players (report, fight, used, body) VALUES (?, ?, ?, ?)", rows)
+            self._write("INSERT OR REPLACE INTO wcl_players (report, fight, used, body) VALUES (?, ?, ?, ?)", rows)
 
     def close(self):
         """A régóta nem használt bejegyzések törlése, mentés, lezárás."""
         try:
+            self._flush_touches()
             cutoff = now_ms() - CACHE_KEEP_DAYS * DAY_MS
-            removed = (self.db.execute("DELETE FROM pages WHERE used < ?", (cutoff,)).rowcount
-                       + self.db.execute("DELETE FROM players WHERE used < ?", (cutoff,)).rowcount)
+            self.db.execute("DELETE FROM wcl_pages WHERE used < ?", (cutoff,))
+            self.db.execute("DELETE FROM wcl_players WHERE used < ?", (cutoff,))
+            # VACUUM nincs: a közös adatbázisban az egész fájlt átírná, és addig feltartaná a program
+            # mentéseit. A felszabadult helyet az SQLite az új adatokhoz újra felhasználja.
             self.db.commit()
-            if removed >= 200:
-                self.db.execute("VACUUM")       # a fájl méretét csak ez csökkenti
         except sqlite3.Error as exc:
             out(f"  ! cache karbantartás sikertelen: {exc}", err=True)
         finally:
@@ -1052,7 +1117,7 @@ def build_parser():
     ap.add_argument("--probe", action="store_true", help="nyers API válaszok mentése ellenőrzéshez")
     ap.add_argument("--probe-out", default="wcl_probe_output.json", metavar="FILE")
     ap.add_argument("--cache", default=DEFAULT_CACHE, metavar="FILE",
-                    help="cache fájl (alap: wcl_cache.sqlite a script mellett)")
+                    help="cache adatbázis (alap: a tervezőé, szintezes_adatok.sqlite a script mellett)")
     ap.add_argument("--no-cache", action="store_true", help="cache nélkül: nem olvas belőle és nem is ír bele")
     ap.add_argument("--refresh", action="store_true",
                     help="mindent újra letölt, a cache tartalmát figyelmen kívül hagyva (az új adatok bekerülnek)")

@@ -1,13 +1,17 @@
 __pycache__/
 *.py[cod]
 
-# A program saját adatfájljai (beállítások, karakterek)
-szintezes_adatok*.json
+# A program adatbázisa (beállítások, karakterek, API-kulcsok, a statisztikák gyorsítótára)
+szintezes_adatok*.sqlite
+*.sqlite-journal
+regi_adatok/
 *.tmp
 
-# A statisztikai programok gyorsítótárai, API-kulcsai és hibakereső kimenetei
+# A korábbi változatok külön fájljai, a statisztikai programok hibakereső kimenetei
+szintezes_adatok*.json
 raiderio_ilvl_cache.json
 raiderio_ilvl_cache.json.tmp
+raiderio_ilvl_cache.sqlite
 wcl_cache.sqlite
 api_kulcsok.json
 probe_output.json
