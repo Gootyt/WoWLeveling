@@ -436,8 +436,14 @@ minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből va
   **legfeljebb N futás szintenként:** egy szintből ennyi után nem gyűjt többet, és
   ha minden kért szint megvan, leáll.
 - **Itemlevel:** a tartományon kívüli itemlevelű játékos kimarad (a csapat többi
-  tagja számít); **csak az utolsó N nap** futásai; **csak az időben teljesített
-  futások** (alapból igen).
+  tagja számít).
+- **Futások kora:** csak az utolsó N nap futásai számítanak (a futás befejezésének
+  ideje szerint; üresen az egész szezon) – a korábban letöltött futásoknál is.
+- **Letöltött adatok:** a profilokat, a guildlistákat és a ranglista-oldalakat
+  ennyi óráig (alapból 24) használja újra a gyorsítótárból, a régebbieket újra
+  letölti (0: mindig újra letölti). A futások csapatai nem változnak, azokat
+  sosem tölti le újra.
+- **Csak az időben teljesített futások** (alapból igen).
 - **A korábban letöltött futásokat is beszámolja** (alapból ki): alapból csak az
   számít, amit a mostani lekérdezés elér – a gyorsítótár csak a letöltést spórolja
   meg. Bekapcsolva a gyorsítótárban lévő összes idei szezonbeli futás is

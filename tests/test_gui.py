@@ -926,6 +926,9 @@ class GuiTests(unittest.TestCase):
         window.per_level_var.set("5")
         self.assertFalse(window.cached_runs_var.get())  # alapból csak a most elért futások számítanak
         window.cached_runs_var.set(True)
+        self.assertEqual((window.since_days_var.get(), window.cache_hours_var.get()), ("", "24"))
+        window.since_days_var.set("14")  # csak a két hétnél nem régebbi futások
+        window.cache_hours_var.set("168")  # a letöltött adatok egy hétig jók
         with mock.patch.object(mplus, "run", fake_run):
             window.start_button.invoke()
             self.assertTrue(window.running)
@@ -934,6 +937,7 @@ class GuiTests(unittest.TestCase):
         args = seen["args"]
         self.assertEqual((args.guild, args.levels, args.per_level, args.follow_guilds), (["Solutions@Ragnaros"], "2,3,4", 5, True))
         self.assertTrue(args.use_cached_runs)
+        self.assertEqual((args.since_days, args.cache_hours), (14, 168.0))
         self.assertEqual(seen["seeds"], [("eu", "Ragnaros", "Solutions")])
         self.assertEqual(Path(args.cache), self.path.parent.resolve() / stats.MPLUS_CACHE_NAME)
         self.assertEqual(
@@ -949,6 +953,7 @@ class GuiTests(unittest.TestCase):
         self.assertIn("(P25 = 25th percentile", log)  # az összefoglaló is a naplóba kerül
         self.assertEqual(load_data(self.path).stats_options["mplus"]["guilds"], "Solutions@Ragnaros")
         self.assertTrue(load_data(self.path).stats_options["mplus"]["cached_runs"])
+        self.assertEqual(load_data(self.path).stats_options["mplus"]["cache_hours"], "168")
 
         csv_path = self.path.parent / "mplus.csv"
         with mock.patch.object(stats.filedialog, "asksaveasfilename", return_value=str(csv_path)):
@@ -980,6 +985,18 @@ class GuiTests(unittest.TestCase):
             self.assertIn(message, warning.call_args.args[1])
             self.assertFalse(window.running)
         window.levels_var.set("")
+        for variable, value, message in (
+            (window.since_days_var, "0", "Futások kora: legalább 1 lehet."),
+            (window.cache_hours_var, "egy nap", "Letöltött adatok: számot adj meg."),
+            (window.cache_hours_var, "-1", "Letöltött adatok: legalább 0 lehet."),
+        ):
+            old = variable.get()
+            variable.set(value)
+            with mock.patch.object(stats.messagebox, "showwarning") as warning:
+                window.start()
+            self.assertIn(message, warning.call_args.args[1])
+            self.assertFalse(window.running)
+            variable.set(old)
 
         def endless_run(args, seeds, make_view, info):
             state, guild_queue = mplus.new_state(), mplus.GuildQueue()

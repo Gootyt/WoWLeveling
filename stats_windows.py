@@ -595,6 +595,7 @@ class MythicStatsWindow(StatsWindow):
         self.min_ilvl_var = self.option("min_ilvl", "250")
         self.max_ilvl_var = self.option("max_ilvl", "350")
         self.since_days_var = self.option("since_days", "")
+        self.cache_hours_var = self.option("cache_hours", "24")
         self.timed_only_var = self.option("timed_only", True, tk.BooleanVar)
         self.cached_runs_var = self.option("cached_runs", False, tk.BooleanVar)
         self.pages_var = self.option("pages", "5")
@@ -650,13 +651,28 @@ class MythicStatsWindow(StatsWindow):
         ttk.Entry(ilvl, textvariable=self.min_ilvl_var, width=7).pack(side="left")
         ttk.Label(ilvl, text="–").pack(side="left", padx=4)
         ttk.Entry(ilvl, textvariable=self.max_ilvl_var, width=7).pack(side="left")
-        ttk.Label(ilvl, text="a többit kihagyja (0: nincs korlát)", style="Hint.TLabel").pack(side="left", padx=(6, 16))
-        ttk.Label(ilvl, text="csak az utolsó").pack(side="left", padx=(0, 4))
-        ttk.Entry(ilvl, textvariable=self.since_days_var, width=6).pack(side="left")
-        ttk.Label(ilvl, text="nap futásai (üresen: az egész szezon)", style="Hint.TLabel").pack(side="left", padx=(4, 0))
+        ttk.Label(ilvl, text="a többit kihagyja (0: nincs korlát)", style="Hint.TLabel").pack(side="left", padx=(6, 0))
         self.field(box, 4, "Itemlevel:", ilvl)
+
+        # Milyen régi adatokból számoljon: a futások kora, és meddig jók a letöltött adatok.
+        age = ttk.Frame(box)
+        ttk.Label(age, text="csak az utolsó").pack(side="left", padx=(0, 4))
+        ttk.Entry(age, textvariable=self.since_days_var, width=6).pack(side="left")
+        ttk.Label(age, text="nap futásai").pack(side="left", padx=(4, 0))
+        self.field(box, 5, "Futások kora:", age, "üresen: az egész szezon; a futás befejezésének ideje számít")
+        cache = ttk.Frame(box)
+        ttk.Entry(cache, textvariable=self.cache_hours_var, width=6).pack(side="left")
+        ttk.Label(cache, text="óráig használja újra").pack(side="left", padx=(4, 0))
+        self.field(
+            box,
+            6,
+            "Letöltött adatok:",
+            cache,
+            "profilok, guildlisták, ranglista-oldalak: a régebbieket újra letölti (0: mindig); a futásokat "
+            "sosem tölti le újra",
+        )
         flags = ttk.Frame(box)
-        flags.grid(row=5, column=1, columnspan=2, sticky="w", pady=2)
+        flags.grid(row=7, column=1, columnspan=2, sticky="w", pady=2)
         ttk.Checkbutton(flags, text="Csak az időben teljesített futások", variable=self.timed_only_var).pack(side="left")
         ttk.Checkbutton(
             flags,
@@ -672,13 +688,13 @@ class MythicStatsWindow(StatsWindow):
         )
         ttk.Label(pages, text="Affix:").pack(side="left", padx=(16, 4))
         ttk.Entry(pages, textvariable=self.affixes_var, width=20).pack(side="left")
-        self.field(box, 6, "Ranglista:", pages)
+        self.field(box, 8, "Ranglista:", pages)
         key = ttk.Frame(box)
         ttk.Entry(key, textvariable=self.api_key_var, width=34, show="•").pack(side="left")
         ttk.Checkbutton(key, text="Megjegyzés ezen a gépen", variable=self.remember_key_var).pack(
             side="left", padx=(12, 0)
         )
-        self.field(box, 7, "Raider.io API-kulcs:", key, "nem kötelező (nagyobb lekérési keret)")
+        self.field(box, 9, "Raider.io API-kulcs:", key, "nem kötelező (nagyobb lekérési keret)")
 
     def _load_keys(self) -> None:
         self.api_key_var.set(self.keys.get("raiderio_api_key") or os.environ.get("RAIDERIO_API_KEY", ""))
@@ -720,8 +736,9 @@ class MythicStatsWindow(StatsWindow):
         args.max_ilvl = parse_number(self.max_ilvl_var.get(), "Legnagyobb itemlevel", float, empty=0.0)
         if args.min_ilvl and args.max_ilvl and args.min_ilvl > args.max_ilvl:
             raise ValueError("Az itemlevel-tartomány alja nem lehet nagyobb a tetejénél.")
-        days = parse_number(self.since_days_var.get(), "Utolsó napok", minimum=1, empty=-1)
+        days = parse_number(self.since_days_var.get(), "Futások kora", minimum=1, empty=-1)
         args.since_days = None if days == -1 else days
+        args.cache_hours = parse_number(self.cache_hours_var.get(), "Letöltött adatok", float, empty=24.0)
         args.include_untimed = not self.timed_only_var.get()
         args.use_cached_runs = self.cached_runs_var.get()
         args.max_pages = parse_number(self.pages_var.get(), "Ranglista-oldalak", minimum=1, maximum=1000)
