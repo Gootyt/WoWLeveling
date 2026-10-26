@@ -16,11 +16,12 @@
 -- „Importálás most” gombjával.
 --
 -- Egy kis ablakban azt is mutatja, melyik karakter van a legnagyobb lemaradásban szintben,
--- itemlevelben és Mythic+ pontszámban (a program terve szerint, amelyet a program a
--- PlanData.lua fájlba szinkronizál; a számolás a Plan.lua-ban van). Ha a három karakter
--- valamelyikével játszol, az ablak a játékbeli adatokból magától frissül.
+-- itemlevelben és Mythic+ pontszámban, alatta pedig a belépett karakter saját lemaradását (vagy
+-- előnyét) ugyanebben a háromban (a program terve szerint, amelyet a program a PlanData.lua
+-- fájlba szinkronizál; a számolás a Plan.lua-ban van). Ha a terv egyik karakterével játszol, az
+-- ablak a játékbeli adatokból magától frissül.
 --
--- Parancsok: /wowleveling (vagy /wowlvl): a karakter elmentett adatai;
+-- Parancsok: /wowleveling (vagy /wowlvl): a karakter elmentett adatai és a lemaradása;
 --            /wowleveling lista: az összes elmentett karakter;
 --            /wowleveling ablak: a lemaradás ablakának be- és kikapcsolása;
 --            /wowleveling gear: a gear ajánló be- és kikapcsolása (lásd Gear.lua);
@@ -302,15 +303,16 @@ end
 
 -- === A lemaradás ablaka ===
 
-local WIDTH, HEIGHT = 370, 122 -- a lábléc két sorba is kifér
+local WIDTH, HEIGHT = 370, 190 -- a lábléc két sorba is kifér
 local ROWS = { -- az ablak sorai: a Plan.Compute eredményének kulcsa, felirat, a számok léptéke
 	{ key = "level", label = "Szint", scale = 100, digits = 2 },
 	{ key = "itemLevel", label = "Itemlevel", scale = 100, digits = 2 },
 	{ key = "score", label = "Mythic+", scale = 10, digits = 1 },
 }
-local COLUMNS = { 10, 78, 190, 280 } -- felirat, karakter, cél, hiány
+local COLUMNS = { 10, 78, 190, 280 } -- felirat, karakter (a saját soroknál az érték), cél, hiány
+local OWN_TOP = 4 * 17 + 4 -- a belépett karakter sorai ennyivel lejjebb kezdődnek
 local window
-local tracking = false -- a kilistázott karakterek egyikével játszik: az ablak magától frissül
+local tracking = false -- a terv egyik karakterével játszik: az ablak magától frissül
 local refreshScheduled = false
 local shownDay -- az ablakban mutatott nap (éjfél után újraszámol)
 
@@ -406,28 +408,73 @@ local function SetRow(cells, name, target, missing)
 	cells[4]:SetText(missing or "")
 end
 
+-- A terv számolása a játékbeli adatokkal: az eredmény, és a belépett karakter a tervben (nil, ha
+-- nincs benne). Az eredmény own mezőjében a belépett karakter saját sorai (lásd Plan.Compute).
+local function ComputePlan(data, today)
+	local chars = Plan.Characters(data, Override)
+	local focus
+	for _, char in ipairs(chars) do
+		if IsPlayer(char.source) then
+			focus = char
+			break
+		end
+	end
+	return Plan.Compute(data, chars, today, focus), focus
+end
+
+-- A belépett karakter értéke egy szempontból, a sor léptékében (a pontszám tizedekben).
+local function OwnValue(focus, key)
+	if key == "score" then
+		return focus.score and Plan.RoundHalfUp(focus.score, 10)
+	end
+	return focus[key]
+end
+
+-- A belépett karakter egy sorának szövegei: az érték, a cél és az eltérés; az érték és hogy elérte
+-- a célt (vagy mikor kezd); vagy csak az, hogy miért nincs mihez mérni.
+local function OwnTexts(line, row, value)
+	local shown = value and Number(value / row.scale, row.digits)
+	if line.target then
+		local amount = Number(math.abs(line.deviation) / row.scale, row.digits)
+		local deviation = line.deviation < 0 and "|cffff6060hiányzik: " .. amount .. "|r"
+			or line.deviation > 0 and "|cff60ff60többlet: " .. amount .. "|r"
+			or "|cff60ff60terv szerint|r"
+		return { shown, "cél: " .. Number(line.target / row.scale, row.digits), deviation }
+	end
+	local status = line.done and "|cff60ff60" .. line.done .. "|r"
+		or line.notStarted and "|cff999999kezdés: " .. line.notStarted .. "|r"
+	if status and shown then
+		return { shown, status }
+	end
+	return { status or "|cff999999" .. tostring(line.problem) .. "|r" }
+end
+
+local function NotInPlanText()
+	local name = Plain(UnitName("player"))
+	return "Ez a karakter" .. (type(name) == "string" and name ~= "" and " (" .. name .. ")" or "") .. " nincs a tervben."
+end
+
 local function Refresh()
 	local data = WoWLevelingPlanData
 	local today = Today()
 	shownDay = today
+	local own = window.own
 	if type(data) ~= "table" then
 		for index, row in ipairs(ROWS) do
 			local note = index == 1 and "Még nincs szinkronizált terv."
 				or index == 2 and "A programban: Szinkronizálás, majd /reload."
 				or nil
 			SetRow(window.rows[row.key], note and ("|cff999999" .. note .. "|r"))
+			SetRow(own.rows[row.key])
 		end
+		own.header:SetText("")
 		window.footer:SetText("")
 		return
 	end
-	local result = Plan.Compute(data, Plan.Characters(data, Override), today)
-	local live
+	local result, focus = ComputePlan(data, today)
 	for _, row in ipairs(ROWS) do
 		local cells, line = window.rows[row.key], result[row.key]
 		if line.char then
-			if IsPlayer(line.char.source) then
-				tracking, live = true, line.char.name
-			end
 			SetRow(
 				cells,
 				ColoredName(line.char),
@@ -439,13 +486,44 @@ local function Refresh()
 		else
 			SetRow(cells, "|cff999999" .. tostring(line.problem) .. "|r")
 		end
+		if focus then
+			local texts = OwnTexts(result.own[row.key], row, OwnValue(focus, row.key))
+			SetRow(own.rows[row.key], texts[1], texts[2], texts[3])
+		else
+			SetRow(own.rows[row.key])
+		end
+	end
+	if focus then -- vele játszik: az ablak a játékbeli adataiból magától frissül
+		tracking = true
+		own.header:SetText("Ez a karakter: " .. ColoredName(focus))
+	else
+		own.header:SetText("|cff999999" .. NotInPlanText() .. "|r")
+		SetRow(own.rows.level, "|cff999999A programban vedd fel a listára, majd Szinkronizálás.|r")
 	end
 	local parts = { "Szinkronizálva: " .. date("%Y-%m-%d %H:%M", tonumber(data.generated) or 0) }
 	parts[#parts + 1] = GoalDayText(result.goalDay, today)
-	if live then
-		parts[#parts + 1] = "automatikus frissítés: " .. live
+	if focus then
+		parts[#parts + 1] = "automatikus frissítés: " .. focus.name
 	end
 	window.footer:SetText(table.concat(parts, " · "))
+end
+
+-- A /wowleveling parancshoz: a belépett karakter lemaradása a csevegőablakba (nil: nincs terv).
+local function OwnLines()
+	local data = WoWLevelingPlanData
+	if type(data) ~= "table" then
+		return nil
+	end
+	local result, focus = ComputePlan(data, Today())
+	if not focus then
+		return { NotInPlanText() }
+	end
+	local lines = { "A lemaradása a terv szerint:" }
+	for _, row in ipairs(ROWS) do
+		local texts = OwnTexts(result.own[row.key], row, OwnValue(focus, row.key))
+		lines[#lines + 1] = "  " .. row.label .. ": " .. table.concat(texts, " · ")
+	end
+	return lines
 end
 
 -- Az ablak újraszámolása; egy váratlan hiba csak az ablakban látszik, a játékot nem zavarja.
@@ -556,6 +634,21 @@ local function CreateWindow()
 		cells[1]:SetText(row.label)
 		frame.rows[row.key] = cells
 	end
+	-- Alatta a belépett karakter saját sorai, ugyanezekben az oszlopokban.
+	frame.own = { rows = {} }
+	frame.own.header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	frame.own.header:SetPoint("TOPLEFT", COLUMNS[1], -14 - OWN_TOP)
+	for index, row in ipairs(ROWS) do
+		local cells = {}
+		for column, x in ipairs(COLUMNS) do
+			local cell = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			cell:SetPoint("TOPLEFT", x, -14 - OWN_TOP - index * 17)
+			cell:SetJustifyH("LEFT")
+			cells[column] = cell
+		end
+		cells[1]:SetText(row.label)
+		frame.own.rows[row.key] = cells
+	end
 	frame.footer = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	frame.footer:SetPoint("BOTTOMLEFT", COLUMNS[1], 9)
 	frame.footer:SetWidth(WIDTH - 2 * COLUMNS[1])
@@ -634,6 +727,10 @@ SlashCmdList.WOWLEVELING = function(message)
 		end
 	elseif current then
 		Print(Describe(current))
+		local ok, lines = pcall(OwnLines) -- egy váratlan hiba ne akassza meg a parancsot
+		for index, line in ipairs(ok and lines or {}) do
+			print(index == 1 and PREFIX .. line or line)
+		end
 	else
 		Print("most nem sikerült elmenteni a karakter adatait.")
 	end

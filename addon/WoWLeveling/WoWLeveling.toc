@@ -1,8 +1,8 @@
 ## Interface: 120100, 120105, 120107, 120200, 120205, 120207
 ## Title: WoWLeveling
-## Notes: Saves each character's level, item level, spec and Mythic+ score for the WoW leveling planner (WoWLeveling), shows which character is furthest behind the plan, and which content still gives gear upgrades.
+## Notes: Saves each character's level, item level, spec and Mythic+ score for the WoW leveling planner (WoWLeveling), shows which character is furthest behind the plan and how far behind (or ahead) the current one is, and which content still gives gear upgrades.
 ## Author: WoWLeveling
-## Version: 1.4.0
+## Version: 1.5.0
 ## SavedVariables: WoWLevelingDB
 
 PlanData.lua

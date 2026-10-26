@@ -73,8 +73,9 @@ megtervezéséhez és követéséhez.
   indításkor**, futás közben pedig **amint a játék kiírja őket** magától (és
   bármikor az „Importálás most” gombbal) beolvassa. Az addon egy kis ablakban azt
   is mutatja, melyik karakter van a **legnagyobb lemaradásban** szintben,
-  itemlevelben és Mythic+ pontszámban, mennyit kell elérnie, és mennyi hiányzik; a
-  tervet a program szinkronizálja neki (lásd lent, „WoW addon”). A **gear ajánló**
+  itemlevelben és Mythic+ pontszámban, mennyit kell elérnie, és mennyi hiányzik,
+  alatta pedig **a belépett karakter saját lemaradását** (vagy előnyét) ugyanebben a
+  háromban; a tervet a program szinkronizálja neki (lásd lent, „WoW addon”). A **gear ajánló**
   is megvan benne: a karakter itemlevele alapján megmutatja, melyik tartalom ad
   még fejlesztést.
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
@@ -611,7 +612,7 @@ legutóbbi mentést még régebbi változat írta, a program szól, hogy az új 
 következő indításakor vagy `/reload` után töltődik be.
 
 Játék közben a `/wowleveling` (vagy `/wowlvl`) parancs kiírja a karakter
-elmentett adatait, a `/wowleveling lista` az összes elmentett karakterét, a
+elmentett adatait és a terv szerinti lemaradását, a `/wowleveling lista` az összes elmentett karakterét, a
 `/wowleveling ablak` be- és kikapcsolja a lemaradás ablakát, a
 `/wowleveling gear` a gear ajánlót (lásd lent), a `/wowleveling mentés` pedig
 most rögtön kiíratja az adatokat (lásd fent).
@@ -654,7 +655,14 @@ hogy a program terve szerint
 | Mythic+ | a legnagyobb Raider.io-különbözetű | a tervezett pontszáma | ennyi pont |
 
 Ha senki sincs lemaradásban, ezt írja ki; ha egy terv nem számolható (pl. nincs
-célitemlevel), az okát. Az ablak ugyanazt számolja, mint a program (a
+célitemlevel), az okát.
+
+Alatta **a belépett karakter** („Ez a karakter: …”) ugyanebben a három sorban: a
+jelenlegi értéke, a cél (a szintnél a mai cél, a másik kettőnél a tervezett
+itemlevel és pontszám), és hogy mennyi hiányzik még (pirossal), vagy mennyi a
+többlet (zölddel). Ezek ugyanazok a számok, mint a program listájában az eltérések.
+Ha a karakter elérte a célszintet vagy a célitemlevelt, ezt írja ki; ha a
+szintezése még nem kezdődött el, azt, hogy mikor kezd; ha nincs a tervben, ezt. Az ablak ugyanazt számolja, mint a program (a
 karakterlista, a Gear és a Mythic+ ablak), az előretekintéssel együtt: a mai
 napot a gép órájából veszi, így napok múlva is a napi célokkal számol. Bezárni a
 sarkában lévő X-szel, újra megnyitni a `/wowleveling ablak` paranccsal lehet; a
@@ -667,10 +675,10 @@ kiíratja az adatokat a program számára (a felület újratöltésével, lásd 
   keret „Szinkronizálás” gombjával. A játék az addon fájljait belépéskor és
   `/reload` után olvassa be, így a változás ezután látszik az ablakban. Ha az
   addon régebbi változat, a program a szinkronizáláskor frissíti is.
-- **Automatikus frissítés:** ha a három kiírt karakter valamelyikével játszol, az
-  ablak a játékbeli adatokból magától frissül (tapasztalat, szintlépés,
-  felszerelés, Mythic+ pontszám), és ezt a lábléc jelzi. Ha közben más karakter
-  kerül a legnagyobb lemaradásba, azt mutatja. A többi karakterhez az addon a
+- **Automatikus frissítés:** ha a terv valamelyik karakterével játszol, az ablak
+  a játékbeli adatokból magától frissül (tapasztalat, szintlépés, felszerelés,
+  Mythic+ pontszám), és ezt a lábléc jelzi. Ha közben más karakter kerül a
+  legnagyobb lemaradásba, azt mutatja. A többi karakterhez az addon a
   saját mentéseit is felhasználja, ha azok újabbak annál, amit a program már
   beolvasott (pl. ha ugyanabban a játékmenetben több karakterrel is játszol).
 

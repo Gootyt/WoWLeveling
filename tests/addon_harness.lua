@@ -4,9 +4,9 @@
 --
 -- Utánozza a játék addonoknak szóló függvényeit, betölti az addon fájljait a .toc szerint,
 -- lejátszik egy belépést, néhány eseményt és a /wowleveling parancsot, közben kiírja a
--- lemaradás ablakának tartalmát, végül úgy írja ki a WoWLevelingDB táblát, ahogy a játék a
--- SavedVariables mappába. A chatüzenetek, az ablak sorai és a felület újratöltései a kimenetre
--- kerülnek.
+-- lemaradás ablakának tartalmát (a legnagyobb lemaradásokat és a belépett karakterét), végül
+-- úgy írja ki a WoWLevelingDB táblát, ahogy a játék a SavedVariables mappába. A chatüzenetek,
+-- az ablak sorai és a felület újratöltései a kimenetre kerülnek.
 
 local addonDir, outputPath = arg[1], arg[2]
 
@@ -137,6 +137,11 @@ local function DumpWindow(label)
 	for _, key in ipairs({ "level", "itemLevel", "score" }) do
 		local cells = window.rows[key]
 		print(string.format("row %s: %s | %s | %s", key, Text(cells[2]), Text(cells[3]), Text(cells[4])))
+	end
+	print("own: " .. Text(window.own.header))
+	for _, key in ipairs({ "level", "itemLevel", "score" }) do
+		local cells = window.own.rows[key]
+		print(string.format("own %s: %s | %s | %s", key, Text(cells[2]), Text(cells[3]), Text(cells[4])))
 	end
 	print("footer: " .. Text(window.footer))
 end

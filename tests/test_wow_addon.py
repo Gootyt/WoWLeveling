@@ -25,6 +25,7 @@ from leveling import (
     lookahead_day,
     plan_item_levels,
     plan_raiderio_scores,
+    reached_target_item_level,
 )
 from wow_addon import AddonError, LuaSyntaxError, Snapshot, parse_lua
 from wow_data import WOW_SPECS
@@ -638,6 +639,46 @@ def expected_rows(data: LevelingData, today: date) -> dict:
     return rows
 
 
+LABELS = {"level": "Szint", "itemLevel": "Itemlevel", "score": "Mythic+"}  # az addon ablakának sorai
+
+
+def expected_own(data: LevelingData, today: date) -> list[dict]:
+    """Karakterenként a saját sorok a program listája szerint, ahogy az addon is kiírja, ha azzal a
+    karakterrel lépnek be (lásd Plan.Compute: focus): a tervezett érték és az eltérés századokban (a
+    pontszámé tizedekben), vagy hogy elérte a célt, még nem kezdte, illetve nincs mihez mérni."""
+    settings, characters = data.settings, data.characters
+    goal_day = lookahead_day(settings, characters, today) if data.look_ahead else today
+    item_levels = plan_item_levels(characters, data.spec_scores, settings.target_item_level)
+    scores = plan_raiderio_scores(characters, data.spec_scores, settings.target_item_level)
+    rows = []
+    for plan in build_plan(settings, characters, today, data.spec_scores, goal_day):
+        character = plan.character
+        reached = reached_target_item_level(character, settings.target_item_level)
+        if character.level >= settings.target_level:
+            level = {"done": "elérte a célszintet"}
+        elif goal_day < plan.start and character.level >= settings.start_level:
+            level = {"notStarted": plan.start.isoformat()}
+        else:
+            level = {"target": int((character.level - plan.deviation) * 100), "deviation": int(plan.deviation * 100)}
+        if reached:
+            item_level = {"done": "elérte a célitemlevelt"}
+        elif item_levels.step is None or plan.item_level_deviation is None:
+            item_level = {"problem": True}
+        else:
+            item_level = {
+                "target": int(plan.planned_item_level * 100),
+                "deviation": int(plan.item_level_deviation * 100),
+            }
+        if reached:
+            score = {"done": "elérte a célitemlevelt"}
+        elif scores.step is None or plan.raiderio_deviation is None:
+            score = {"problem": True}
+        else:
+            score = {"target": int(plan.planned_raiderio * 10), "deviation": int(plan.raiderio_deviation * 10)}
+        rows.append({"level": level, "itemLevel": item_level, "score": score})
+    return rows
+
+
 @unittest.skipIf(LUA is None, "nincs Lua-értelmező (lua5.1, luajit vagy lua)")
 class PlanTests(unittest.TestCase):
     """Az addon (Plan.lua) ugyanazt számolja-e, mint a program (leveling.py)."""
@@ -652,7 +693,7 @@ class PlanTests(unittest.TestCase):
         )
         for data, today in [(even, date(2026, 10, 5))] + [random_plan(rng) for _ in range(400)]:
             cases.append({"data": wow_addon.plan_payload(data, datetime(2026, 10, 17, 12)), "today": today.isoformat()})
-            expected.append(expected_rows(data, today))
+            expected.append(dict(expected_rows(data, today), own=expected_own(data, today)))
         with tempfile.TemporaryDirectory() as folder:
             cases_path, output = Path(folder) / "esetek.lua", Path(folder) / "eredmenyek.lua"
             cases_path.write_text(f"Cases = {wow_addon.lua_value(cases)}\n", encoding="utf-8")
@@ -665,17 +706,27 @@ class PlanTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             results = parse_lua(output.read_text(encoding="utf-8"))["Results"]
-        kinds = set()
+        kinds, own_kinds = set(), set()
         for index, want in enumerate(expected):
             got = results[index + 1]
+            got["own"] = [got["own"][number] for number in range(1, len(got["own"]) + 1)]
             for key in ("level", "itemLevel", "score"):
                 row = got[key]
                 got[key] = {"problem": True} if "problem" in row else row
                 kinds.add((key, next(iter(want[key]))))
+                for own, wanted in zip(got["own"], want["own"]):
+                    own[key] = {"problem": True} if "problem" in own[key] else own[key]
+                    kind = next(iter(wanted[key]))
+                    if kind == "target":  # az eltérés előjele szerint is
+                        kind = (kind, (wanted[key]["deviation"] > 0) - (wanted[key]["deviation"] < 0))
+                    own_kinds.add((key, kind))
             with self.subTest(case=index):
                 self.assertEqual(got, want)
         # A véletlen esetek között minden fajta eredmény előfordult.
         self.assertEqual(len(kinds), 9, kinds)
+        # A saját soroknál szempontonként ötféle: a terv alatt, pont rajta, felette, elérte a célt, és a
+        # szintnél még nem kezdte, a másik kettőnél nincs mihez mérni.
+        self.assertEqual(len(own_kinds), 15, own_kinds)
 
     def test_rounding_and_dates(self):
         script = (
@@ -726,6 +777,31 @@ def gear_cells(item: gearing.Evaluation) -> list[str]:
         gearing.STATUSES[item.status].label if item.status else "-",
         item.note,
     ]
+
+
+def lua_strings(line: str) -> list[str]:
+    """Egy Lua-sor szövegkonstansai, a sor végi megjegyzés nélkül (az addon nem használ [[...]]-t)."""
+    strings, index = [], 0
+    while index < len(line) and not line.startswith("--", index):
+        if line[index] in "\"'":
+            end = index + 1
+            while end < len(line) and line[end] != line[index]:
+                end += 2 if line[end] == "\\" else 1
+            strings.append(line[index + 1 : end])
+            index = end
+        index += 1
+    return strings
+
+
+class AddonTextTests(unittest.TestCase):
+    def test_texts_fit_the_game_font(self):
+        """A játék betűkészletében nincs ő és ű: az addon kiírt szövegeiben ne legyen (a megjegyzésekben lehet)."""
+        self.assertEqual(lua_strings('x = "a -- b" .. \'c\\\'d\' -- "e"'), ["a -- b", "c\\'d"])
+        for path in sorted(wow_addon.ADDON_SOURCE.glob("*.lua")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                for text in lua_strings(line):
+                    with self.subTest(file=path.name, line=number):
+                        self.assertNotRegex(text, "[őűŐŰ]")
 
 
 class GearPayloadTests(unittest.TestCase):
@@ -844,14 +920,18 @@ class AddonTests(unittest.TestCase):
 
     @staticmethod
     def windows(chat: str) -> dict:
-        """Az ablak kiírt állapotai: név → {"shown", "level", "itemLevel", "score", "footer"} (színkódok nélkül)."""
+        """Az ablak kiírt állapotai: név → {"shown", "level", "itemLevel", "score", "own", "footer"}
+        (színkódok nélkül); az own a belépett karakter része: {"header", "level", "itemLevel", "score"}."""
         plain = re.sub(r"\|c[0-9a-fA-F]{8}|\|r", "", chat)
         dumps, current = {}, None
         for line in plain.splitlines():
             if match := re.match(r"window (\w+): (\S+)$", line):
-                current = dumps[match.group(1)] = {"shown": match.group(2) == "látszik"}
-            elif match := re.match(r"row (\w+): (.*)$", line):
-                current[match.group(1)] = [cell.strip() for cell in match.group(2).split(" | ")]
+                current = dumps[match.group(1)] = {"shown": match.group(2) == "látszik", "own": {}}
+            elif match := re.match(r"(row|own) (\w+): (.*)$", line):
+                target = current if match.group(1) == "row" else current["own"]
+                target[match.group(2)] = [cell.strip() for cell in match.group(3).split(" | ")]
+            elif line.startswith("own: "):
+                current["own"]["header"] = line[len("own: "):]
             elif line.startswith("footer: "):
                 current["footer"] = line[len("footer: "):]
         return dumps
@@ -910,6 +990,8 @@ class AddonTests(unittest.TestCase):
             [login["level"][0], login["itemLevel"][0]],
             ["Még nincs szinkronizált terv.", "A programban: Szinkronizálás, majd /reload."],
         )
+        self.assertEqual(login["own"], {"header": "", "level": ["", "", ""], "itemLevel": ["", "", ""], "score": ["", "", ""]})
+        self.assertNotIn("terv szerint:", chat)  # a /wowleveling sem ír lemaradást
         # Kiíratás most: a parancs rögtön, az ablak gombja kérdés után tölti újra a felületet (/reload),
         # mert a játék csak ekkor (és kilépéskor, kijelentkezéskor) írja ki a mentett adatokat.
         self.assertEqual(re.findall(r"^C_UI\.Reload$", chat, re.M), ["C_UI.Reload"] * 2)
@@ -982,15 +1064,45 @@ class AddonTests(unittest.TestCase):
                 shown[key] = ["senki sincs lemaradásban" if "ok" in row else row, "", ""]
         return shown
 
-    def test_window_shows_the_largest_lag(self):
-        # A program szinkronizálja a tervet az addon egy másolatába.
+    @staticmethod
+    def own_rows(data: LevelingData, today: date, name: str) -> dict:
+        """Amit az ablaknak a belépett karakterről mutatnia kell a program számolása szerint (lásd
+        expected_own): az érték, a cél és a hiány vagy az előny."""
+        index = next(number for number, character in enumerate(data.characters) if character.name == name)
+        character, own = data.characters[index], expected_own(data, today)[index]
+        values = {"level": character.level, "itemLevel": character.item_level, "score": character.raiderio_score}
+        shown = {}
+        for key, scale, digits in (("level", 100, 2), ("itemLevel", 100, 2), ("score", 10, 1)):
+            text = lambda value: f"{D(value) / scale:.{digits}f}".replace(".", ",")  # noqa: E731
+            value = None if values[key] is None else f"{values[key]:.{digits}f}".replace(".", ",")
+            row = own[key]
+            if "target" in row:
+                deviation = row["deviation"]
+                if deviation < 0:
+                    status = f"hiányzik: {text(-deviation)}"
+                else:
+                    status = f"többlet: {text(deviation)}" if deviation > 0 else "terv szerint"
+                shown[key] = [value, f"cél: {text(row['target'])}", status]
+            elif "done" in row or "notStarted" in row:
+                status = row.get("done") or f"kezdés: {row['notStarted']}"
+                shown[key] = [value, status, ""] if value else [status, "", ""]
+            else:
+                shown[key] = row  # nincs mihez mérni: itt nem fordul elő
+        return shown
+
+    def run_synced(self, synced: LevelingData) -> tuple[str, dict, dict]:
+        """A harness egy addonmásolattal, amelybe a program szinkronizálta a tervet: a kimenet, a
+        szinkronizált adatok és a mentés."""
         addon = Path(tempfile.mkdtemp()) / wow_addon.ADDON_NAME
         self.addCleanup(shutil.rmtree, addon.parent)
         shutil.copytree(wow_addon.ADDON_SOURCE, addon)
-        synced = self.plan_data()
         payload = wow_addon.plan_payload(synced, datetime.fromtimestamp(self.HARNESS_TIME - 3600))
         wow_addon.write_plan(addon, payload)
         chat, _output, db = self.run_addon(addon)
+        return chat, payload, db
+
+    def test_window_shows_the_largest_lag(self):
+        chat, payload, db = self.run_synced(self.plan_data())
         windows = self.windows(chat)
         today = date.fromtimestamp(self.HARNESS_TIME)
 
@@ -1005,19 +1117,39 @@ class AddonTests(unittest.TestCase):
         self.assertEqual(login["score"][0], "Jaina")
         stamp = datetime.fromtimestamp(payload["generated"]).strftime("%Y-%m-%d %H:%M")
         self.assertEqual(login["footer"], f"Szinkronizálva: {stamp} · automatikus frissítés: Zôltan")
-        # A listán van, így a tapasztalattól magától frissül; szintlépéskor kiesik a listából.
-        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "2", "2", "1", "1"])
+        # Alatta Zôltan saját lemaradása (vagy előnye) mindhárom szempontból.
+        own = self.own_rows(self.plan_data(Zôltan=("85.29", "301.56", 1234), **live), today, "Zôltan")
+        self.assertEqual({key: login["own"][key] for key in own}, own)
+        self.assertEqual(
+            login["own"],
+            {
+                "header": "Ez a karakter: Zôltan",
+                "level": ["85,29", "cél: 85,45", "hiányzik: 0,16"],
+                "itemLevel": ["301,56", "cél: 300,50", "többlet: 1,06"],
+                # A Murlok.io szerinti sorrendben a 2. helyen áll: a pontszámterv szerint ott 0 az eltérés.
+                "score": ["1234,0", "cél: 1234,0", "terv szerint"],
+            },
+        )
+        # A /wowleveling is kiírja.
+        plain = re.sub(r"\|c[0-9a-fA-F]{8}|\|r", "", chat)
+        lines = [f"  {label}: {' · '.join(cell for cell in own[key] if cell)}" for key, label in LABELS.items()]
+        self.assertIn("\n".join(["WoWLeveling: A lemaradása a terv szerint:", *lines]), plain)
+        # A terv karakterével játszik, így a tapasztalattól (szintlépés után is) magától frissül.
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "2", "2", "1", "2"])
         xp = self.window_rows(self.plan_data(Zôltan=("85.40", "301.56", 1234), **live), today)
         self.assertEqual(windows["xp"]["level"], xp["level"])
         self.assertEqual(xp["level"], ["Zôltan", "cél: 85,45", "hiányzik: 0,05"])  # Thrall-lal egyenlő: az első
+        self.assertEqual(windows["xp"]["own"]["level"], ["85,40", "cél: 85,45", "hiányzik: 0,05"])
         levelup = self.window_rows(self.plan_data(Zôltan=("86.00", "301.56", 1234), **live), today)
         self.assertEqual({key: windows["levelup"][key] for key in levelup}, levelup)
         self.assertEqual(windows["levelup"]["level"][0], "Thrall")
-        self.assertEqual(windows["levelup"]["footer"], f"Szinkronizálva: {stamp}")
+        self.assertEqual(windows["levelup"]["own"]["level"], ["86,00", "cél: 85,45", "többlet: 0,55"])
+        self.assertEqual(windows["levelup"]["footer"], f"Szinkronizálva: {stamp} · automatikus frissítés: Zôltan")
         # Másnap az új szintcélokkal.
         nextday = self.window_rows(self.plan_data(Zôltan=("86.05", "301.56", 1234), **live), today + timedelta(days=1))
         self.assertEqual({key: windows["nextday"][key] for key in nextday}, nextday)
         self.assertEqual(windows["nextday"]["level"], ["Thrall", "cél: 86,36", "hiányzik: 0,96"])
+        self.assertEqual(windows["nextday"]["own"]["level"], ["86,05", "cél: 86,36", "hiányzik: 0,31"])
         # Ki- és bekapcsolható; a helyét és az állapotát megjegyzi.
         self.assertEqual((windows["off"]["shown"], windows["on"]["shown"]), (False, True))
 
@@ -1047,6 +1179,20 @@ class AddonTests(unittest.TestCase):
         self.assertEqual(
             db["window"], {"hidden": False, "point": "TOPLEFT", "relativePoint": "TOPLEFT", "x": 100, "y": -50}
         )
+
+    def test_window_when_the_character_is_not_in_the_plan(self):
+        synced = self.plan_data()
+        synced.characters = [character for character in synced.characters if character.name != "Zôltan"]
+        chat, payload, _db = self.run_synced(synced)
+        login = self.windows(chat)["login"]
+        self.assertEqual(login["own"]["header"], "Ez a karakter (Zôltan) nincs a tervben.")
+        self.assertEqual(login["own"]["level"], ["A programban vedd fel a listára, majd Szinkronizálás.", "", ""])
+        self.assertEqual((login["own"]["itemLevel"], login["own"]["score"]), (["", "", ""], ["", "", ""]))
+        self.assertEqual(login["level"][0], "Thrall")  # a legnagyobb lemaradás ugyanúgy látszik
+        stamp = datetime.fromtimestamp(payload["generated"]).strftime("%Y-%m-%d %H:%M")
+        self.assertEqual(login["footer"], f"Szinkronizálva: {stamp}")
+        self.assertEqual(re.findall(r"timers: (\d+)", chat), ["2", "1", "1", "1", "1"])  # nem frissül magától
+        self.assertIn("WoWLeveling:|r Ez a karakter (Zôltan) nincs a tervben.", chat)
 
 
 if __name__ == "__main__":

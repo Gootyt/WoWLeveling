@@ -1,6 +1,7 @@
 -- A WoW szintezés tervező számításai az addon ablakához: melyik karakter van a legnagyobb
 -- lemaradásban szintben, itemlevelben és Mythic+ pontszámban, mekkora értéket kell elérnie,
--- hogy ne legyen lemaradása, és mennyi hiányzik még.
+-- hogy ne legyen lemaradása, és mennyi hiányzik még; és ugyanez egy megadott (a belépett)
+-- karakterre: mekkora a tervezett értéke, és mennyivel jár előtte vagy mögötte.
 --
 -- Pontosan azt számolja, amit a program (leveling.py: build_plan, lookahead_day, murlok_order,
 -- plan_item_levels, plan_raiderio_scores), csak egész számokkal: a szintek és az itemlevelek
@@ -140,10 +141,15 @@ local function MurlokOrder(chars)
 end
 Plan.MurlokOrder = MurlokOrder
 
+-- Elérte-e a karakter a célitemlevelt: ekkor az itemlevel- és a pontszámtervből kimarad.
+local function Reached(data, char)
+	return data.targetItemLevel and char.itemLevel and char.itemLevel >= data.targetItemLevel
+end
+
 local function NotReached(data, chars)
 	local remaining = {}
 	for _, char in ipairs(chars) do
-		if not (data.targetItemLevel and char.itemLevel and char.itemLevel >= data.targetItemLevel) then
+		if not Reached(data, char) then
 			remaining[#remaining + 1] = char
 		end
 	end
@@ -231,6 +237,15 @@ local function MostBehind(chars, value, planned)
 	return { char = best, target = bestTarget, missing = -bestDeviation }
 end
 
+-- Egy karakter eltérése a tervtől egy szempontból: { target, deviation } (deviation = érték −
+-- tervezett, +: a terv felett), vagy { problem = missing }, ha a karakter értéke nem ismert.
+local function Deviation(current, target, missing)
+	if not current then
+		return { problem = missing }
+	end
+	return { target = target, deviation = current - target }
+end
+
 -- A terv karakterei a számoláshoz. override(char) a program adatánál frissebb értékeket adhatja
 -- vissza (szint és itemlevel századokban, pontszám századokban; nil: marad a programé).
 function Plan.Characters(data, override)
@@ -263,19 +278,36 @@ end
 
 -- A három sor: { level = sor, itemLevel = sor, score = sor }. Egy sor { char, target, missing }
 -- (a lemaradás), { ok = true } (senki sincs lemaradásban) vagy { problem = "ok" }.
-function Plan.Compute(data, chars, today)
+--
+-- focus: a chars egyik karaktere (a belépett), vagy nil. Ha meg van adva, az own mezőben a saját
+-- három sora is benne van, ugyanúgy, ahogy a program listája mutatja: { target, deviation } (lásd
+-- Deviation), { done = "ok" } (elérte a célt), { notStarted = "ÉÉÉÉ-HH-NN" } (a kezdőnapja előtt
+-- legalább a kezdőszinten van), vagy { problem = "ok" }.
+function Plan.Compute(data, chars, today, focus)
 	local result = {}
 	if #chars == 0 then
 		local empty = { problem = "a tervben nincs karakter" }
 		return { level = empty, itemLevel = empty, score = empty, goalDay = today }
 	end
 	local goalDay = data.lookAhead and LookaheadDay(data, chars, today) or today
+	local function LevelGoal(char)
+		return PlannedLevel(char.start, char.deadline, data.startLevel, data.targetLevel, goalDay)
+	end
 	result.level = MostBehind(chars, function(char)
 		return char.level
-	end, function(char)
-		return PlannedLevel(char.start, char.deadline, data.startLevel, data.targetLevel, goalDay)
-	end)
+	end, LevelGoal)
 	result.goalDay = goalDay
+	local own = focus and {}
+	result.own = own
+	if own then
+		if focus.level >= data.targetLevel then
+			own.level = { done = "elérte a célszintet" }
+		elseif goalDay < focus.start and focus.level >= data.startLevel then
+			own.level = { notStarted = focus.source.start }
+		else -- a kezdőnapja előtt a kezdőszint a cél (ha az alatt van, lemaradásban van)
+			own.level = Deviation(focus.level, LevelGoal(focus))
+		end
+	end
 
 	local planned, reason = ItemLevelPlan(data, chars)
 	if planned then
@@ -287,16 +319,37 @@ function Plan.Compute(data, chars, today)
 	else
 		result.itemLevel = { problem = reason }
 	end
+	if own then
+		if Reached(data, focus) then
+			own.itemLevel = { done = "elérte a célitemlevelt" }
+		elseif not planned then
+			own.itemLevel = { problem = reason }
+		else
+			own.itemLevel = Deviation(focus.itemLevel, planned[focus], "nincs itemlevel")
+		end
+	end
 
 	planned, reason = ScorePlan(data, chars)
+	local function Score(char) -- a pontszám tizedekben
+		return char.score and RoundHalfUp(char.score, 10)
+	end
 	if planned then
-		result.score = MostBehind(chars, function(char) -- a pontszám tizedekben
-			return char.score and RoundHalfUp(char.score, 10)
-		end, function(char)
+		result.score = MostBehind(chars, Score, function(char)
 			return planned[char]
 		end)
 	else
 		result.score = { problem = reason }
+	end
+	if own then
+		if Reached(data, focus) then -- a pontszámtervből is kimarad
+			own.score = { done = "elérte a célitemlevelt" }
+		elseif not planned then
+			own.score = { problem = reason }
+		elseif not planned[focus] then
+			own.score = { problem = "a specjének nincs Murlok.io-pontszáma" }
+		else
+			own.score = Deviation(Score(focus), planned[focus], "nincs Mythic+ pontszám")
+		end
 	end
 	return result
 end
