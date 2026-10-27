@@ -51,6 +51,7 @@ jobs:
             ~/.buildozer
             android/.buildozer
           key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-
 
       # Az aláíró kulcs: ha a telefonon frissítésként (az előző fölé) kell települnie, mindig ugyanaz
       # kell. Ha van ANDROID_DEBUG_KEYSTORE titok (lásd README), az; különben egy gyorsítótárazott.
