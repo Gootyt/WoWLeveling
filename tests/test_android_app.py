@@ -25,6 +25,8 @@ except ImportError:  # python -m unittest tests.test_android_app
 
 APP_DIR = Path(__file__).resolve().parent.parent / "android" / "app"
 sys.path.append(str(APP_DIR))  # a mobile_plan (a gyökérben lévő közös modulok maradnak elöl)
+import mobile_plan  # noqa: E402
+
 os.environ.setdefault("KIVY_NO_ARGS", "1")
 os.environ.setdefault("KIVY_LOG_MODE", "PYTHON")  # a Kivy ne vegye át a sys.stderr-t (ott a teszt eredménye)
 try:
@@ -94,8 +96,12 @@ class AndroidAppTests(unittest.TestCase):
             time.sleep(0.02)
         self.fail(f"nem történt meg: {what}")
 
+    def titles(self, app):
+        return [card.title for card in app.list_screen.ids.cards.children[::-1]]
+
     def test_list_and_editing(self):
         app = self.start()
+        app.list_screen.ids.sort.text = "Terv szerinti sorrend"  # átrendezni csak így lehet
         cards = app.list_screen.ids.cards.children[::-1]
         self.assertEqual([card.title for card in cards], ["1. Thrall (Draenor)", "2. Jaina"])
         self.assertIn("2 karakter", app.list_screen.ids.summary.text)
@@ -126,6 +132,35 @@ class AndroidAppTests(unittest.TestCase):
         self.assertTrue(app._on_key(None, 27))  # az Android vissza gombja
         self.assertEqual(app.manager.current, "list")
         self.assertFalse(app._on_key(None, 27))  # a listán: kilép (az Android dönt)
+
+    def test_sorting(self):
+        app = self.start()
+        ids = app.list_screen.ids
+        self.assertEqual((ids.sort.text, ids.reverse.state), ("Állapot", "normal"))  # elöl a legsürgősebb
+        self.assertEqual(ids.sort.values, list(mobile_plan.SORTS.values()))
+        ids.sort.text = "Név"
+        self.assertEqual(self.titles(app), ["2. Jaina", "1. Thrall (Draenor)"])
+        ids.reverse.state = "down"
+        self.assertEqual(self.titles(app), ["1. Thrall (Draenor)", "2. Jaina"])
+        self.assertEqual(mobile_plan.load_sort(self.database), ("name", True))
+        # Feljebb-lejjebb vinni csak a terv sorrendjében lehet (máshogy nem látszana, hová került).
+        app.edit_character("jaina22")
+        self.assertTrue(buttons(app.form_screen, "Feljebb")[0].disabled)
+        self.assertTrue(buttons(app.form_screen, "Lejjebb")[0].disabled)
+        self.assertFalse(buttons(app.form_screen, "Törlés")[0].disabled)
+        self.assertIn(mobile_plan.move_hint("name", True), [child.text for child in app.form_screen.walk() if hasattr(child, "text")])
+        app.show_list()
+        ids.sort.text = "Terv szerinti sorrend"
+        ids.reverse.state = "normal"
+        app.edit_character("jaina22")
+        self.assertFalse(buttons(app.form_screen, "Feljebb")[0].disabled)
+        app.show_list()
+        # A választás a következő indításkor is megmarad: a telefon saját beállítása, nem a tervé (nem szinkronizálódik).
+        ids.sort.text = "Itemlevel"
+        again = self.start().list_screen.ids
+        self.assertEqual((again.sort.text, again.reverse.state), ("Itemlevel", "normal"))
+        view = json.loads(storage.read_document(self.database, storage.PHONE_VIEW))
+        self.assertEqual(view, {"sort": "item_level", "descending": False})
 
     def test_plan_settings(self):
         app = self.start()

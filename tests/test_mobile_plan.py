@@ -1,12 +1,14 @@
 """A telefonos alkalmazás felülettől független részének (android/app/mobile_plan.py) tesztjei."""
 
 import sys
+import tempfile
 import unittest
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from leveling import SEQUENTIAL, Character, LevelingData, Settings, SpecScores, build_plan
+import storage
+from leveling import SEQUENTIAL, SORT_KEYS, Character, LevelingData, Settings, SpecScores, build_plan
 
 # A gyökérben lévő közös modulok maradjanak elöl (az android/app-ba bemásoltak régebbiek lehetnek).
 sys.path.append(str(Path(__file__).resolve().parent.parent / "android" / "app"))
@@ -56,6 +58,47 @@ class CardTests(unittest.TestCase):
             character.level = D(90) if character.uid == "jaina22" else D(89)  # a mai célokat mindenki teljesítette
         self.assertIn("célig:", mobile_plan.summary(data, TODAY))
         self.assertTrue(mobile_plan.summary(LevelingData(Settings.default()), TODAY).startswith("Még nincs karakter"))
+
+
+class SortTests(unittest.TestCase):
+    def order(self, data, sort, descending=False):
+        return [card.uid for card in mobile_plan.cards(data, TODAY, sort, descending)]
+
+    def test_sorted_cards(self):
+        data = sample()
+        self.assertTrue(set(mobile_plan.SORTS) <= set(SORT_KEYS))
+        self.assertEqual(self.order(data, "position"), ["thrall1", "jaina22", "arthas3"])
+        self.assertEqual(self.order(data, "name"), ["arthas3", "jaina22", "thrall1"])
+        self.assertEqual(self.order(data, "name", True), ["thrall1", "jaina22", "arthas3"])
+        # Arthasnak nincs itemlevele: mindkét irányban a végére kerül.
+        self.assertEqual(self.order(data, "item_level"), ["thrall1", "jaina22", "arthas3"])
+        self.assertEqual(self.order(data, "item_level", True), ["jaina22", "thrall1", "arthas3"])
+        self.assertEqual(self.order(data, "status")[-1], "jaina22")  # aki már kész, a végén
+        plans = build_plan(data.settings, data.characters, TODAY, data.spec_scores)
+        most_behind = min(plans, key=lambda plan: plan.deviation).character.uid
+        self.assertEqual(self.order(data, "deviation")[0], most_behind)
+        # A cím a terv szerinti helyet mutatja, akárhogy is rendezett a lista.
+        self.assertEqual(mobile_plan.cards(data, TODAY, "name")[0].title, "3. Arthas")
+        self.assertEqual(mobile_plan.DEFAULT_SORT, ("status", False))
+
+    def test_moving_only_in_plan_order(self):
+        self.assertEqual(mobile_plan.move_hint("position", False), "")
+        self.assertIn("„Terv szerinti sorrend”", mobile_plan.move_hint("status", False))
+        self.assertIn("„Fordítva”", mobile_plan.move_hint("position", True))
+
+    def test_saved_sort(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder) / storage.DB_NAME
+            self.assertEqual(mobile_plan.load_sort(database), mobile_plan.DEFAULT_SORT)  # még nincs adatbázis
+            mobile_plan.save_sort(database, "item_level", True)
+            self.assertEqual(mobile_plan.load_sort(database), ("item_level", True))
+            storage.write_document(database, storage.PHONE_VIEW, '{"sort": "level"}')
+            self.assertEqual(mobile_plan.load_sort(database), ("level", False))
+            for body in ("nem json", "[]", '{"sort": "nincs ilyen"}', '{"sort": ["level"]}', '{"sort": "level", "descending": 1}'):
+                with self.subTest(body=body):
+                    storage.write_document(database, storage.PHONE_VIEW, body)
+                    self.assertEqual(mobile_plan.load_sort(database), mobile_plan.DEFAULT_SORT)
+            self.assertIsNone(storage.read_document(database, storage.LEVELING))  # a tervhez nem nyúlt
 
 
 class EditTests(unittest.TestCase):

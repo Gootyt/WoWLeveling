@@ -1,14 +1,17 @@
-"""A telefonos alkalmazás felülettől független része: a karakterlista kártyáinak szövegei, a
-karakterek felvétele, szerkesztése, törlése és átrendezése, valamint a terv beállításai – ugyanazzal
-a számolással és ellenőrzéssel, mint a gépi program (leveling.py). A Kivy-felület (main.py) csak
-megjeleníti őket; így ez a rész a szokásos tesztekkel is ellenőrizhető (tests/test_mobile_plan.py).
+"""A telefonos alkalmazás felülettől független része: a karakterlista kártyáinak szövegei és
+rendezése, a karakterek felvétele, szerkesztése, törlése és átrendezése, valamint a terv beállításai
+– ugyanazzal a számolással és ellenőrzéssel, mint a gépi program (leveling.py). A Kivy-felület
+(main.py) csak megjeleníti őket; így ez a rész a szokásos tesztekkel is ellenőrizhető
+(tests/test_mobile_plan.py).
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 
+import storage
 from leveling import (
     MODES,
     PARALLEL,
@@ -29,6 +32,7 @@ from leveling import (
     parse_item_level,
     parse_level,
     parse_raiderio_score,
+    sort_plans,
 )
 from wow_data import WOW_CLASSES, WOW_RACES, specs_for_class
 
@@ -45,6 +49,23 @@ TONES = {
 GOOD, BAD, NEUTRAL = (0.35, 0.8, 0.45, 1), (0.95, 0.4, 0.4, 1), (0.8, 0.8, 0.85, 1)
 CLASSES = ("",) + WOW_CLASSES  # az üres: nincs megadva
 RACES = ("",) + WOW_RACES
+
+# A lista rendezései (a kártyákon látható értékek szerint): kulcs (leveling.SORT_KEYS) → felirat. Mind
+# a hasznosabb iránnyal kezd: elöl a legsürgősebb, a legnagyobb lemaradás, a legkisebb érték, illetve
+# ábécérendben; a „Fordítva” kapcsoló megfordítja. Az üres értékűek mindig a végére kerülnek.
+SORTS = {
+    "status": "Állapot",
+    "position": "Terv szerinti sorrend",
+    "deviation": "Szint-lemaradás",
+    "level": "Szint",
+    "item_level_deviation": "Itemlevel-lemaradás",
+    "item_level": "Itemlevel",
+    "raiderio_deviation": "Mythic+ lemaradás",
+    "raiderio": "Mythic+ pontszám",
+    "name": "Név",
+}
+PLAN_ORDER = ("position", False)  # a terv sorrendje (a címekben a sorszám): csak ebben lehet átrendezni
+DEFAULT_SORT = ("status", False)  # mint a gépi program listája: elöl a legsürgősebbek, a kész karakterek a végén
 
 
 @dataclass(frozen=True)
@@ -83,11 +104,11 @@ def _value_line(label: str, value, planned, deviation, formatter) -> str:
     return " · ".join(parts)
 
 
-def cards(data: LevelingData, today: date) -> list[Card]:
-    """A lista kártyái a karakterek sorrendjében (a terv szerinti helyükkel)."""
+def cards(data: LevelingData, today: date, sort: str = "position", descending: bool = False) -> list[Card]:
+    """A lista kártyái a `sort` szerint rendezve (lásd SORTS); a címükben a karakter helye a tervben."""
     plans = build_plan(data.settings, data.characters, today, data.spec_scores, goal_day(data, today))
     result = []
-    for plan in plans:
+    for plan in sort_plans(plans, sort, descending):
         character = plan.character
         title = f"{plan.position}. {character.name}" + (f" ({character.realm})" if character.realm else "")
         subtitle = " · ".join(
@@ -138,6 +159,39 @@ def summary(data: LevelingData, today: date) -> str:
     else:
         parts.append(f"mai teendő: {format_level(due)} szint" if due else "mára nincs több teendő")
     return " · ".join(parts)
+
+
+# --- a lista rendezése ------------------------------------------------------------------
+
+
+def load_sort(database) -> tuple[str, bool]:
+    """A lista rendezése (kulcs, fordítva-e), ahogy a telefonon legutóbb választották; ha még nincs
+    (vagy olvashatatlan), az alapértelmezett. Csak a telefoné: a felhőbe nem kerül fel."""
+    try:
+        text = storage.read_document(database, storage.PHONE_VIEW)
+        view = json.loads(text) if text else {}
+    except (OSError, ValueError):
+        return DEFAULT_SORT
+    if not isinstance(view, dict):
+        return DEFAULT_SORT
+    sort, descending = view.get("sort"), view.get("descending", False)
+    if not isinstance(sort, str) or sort not in SORTS or not isinstance(descending, bool):
+        return DEFAULT_SORT
+    return sort, descending
+
+
+def save_sort(database, sort: str, descending: bool) -> None:
+    storage.write_document(database, storage.PHONE_VIEW, json.dumps({"sort": sort, "descending": descending}))
+
+
+def move_hint(sort: str, descending: bool) -> str:
+    """Miért nem vihető most feljebb vagy lejjebb a karakter ("": ha vihető). Mint a gépi programban:
+    csak a terv sorrendjében látszik, hová kerül."""
+    if sort != PLAN_ORDER[0]:
+        return f"Feljebb vagy lejjebb vinni a lista „{SORTS[PLAN_ORDER[0]]}” rendezésében lehet."
+    if descending != PLAN_ORDER[1]:
+        return "Feljebb vagy lejjebb vinni a „Fordítva” kikapcsolása után lehet."
+    return ""
 
 
 # --- a karakterek szerkesztése ----------------------------------------------------------

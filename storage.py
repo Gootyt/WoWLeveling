@@ -5,7 +5,8 @@
   gear ajánló beállításai – JSON-ban, ugyanabban a szerkezetben, mint korábban a
   szintezes_adatok.json fájlban), és ha a felhasználó kéri, az API-kulcsok (API_KEYS); a
   telefonos szinkronizálás Firebase-fiókja (CLOUD) és az utolsó közös állapot (CLOUD_BASE, lásd
-  cloud_sync.py);
+  cloud_sync.py); a telefonos alkalmazásban a lista rendezése is (PHONE_VIEW: csak a telefoné, nem
+  szinkronizálódik);
 - raiderio_cache tábla: a M+ ilvl statisztika letöltött adatai (lásd raiderio_ilvl_stats.DiskCache);
 - wcl_* táblák: a Raid ilvl statisztika letöltött adatai (lásd wcl_raid_ilvl_stats.Cache).
 
@@ -31,6 +32,7 @@ LEVELING = "szintezes"  # a documents tábla kulcsai
 API_KEYS = "api_kulcsok"
 CLOUD = "felho"
 CLOUD_BASE = "felho_alap"
+PHONE_VIEW = "telefon_nezet"
 LEGACY_FOLDER = "regi_adatok"  # ide kerülnek a beolvasott régi fájlok
 # A korábbi változatok fájljai (a szintezés adatainak fájlja az adatbázissal azonos nevű .json).
 LEGACY_KEYS = "api_kulcsok.json"

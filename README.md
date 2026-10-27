@@ -79,10 +79,10 @@ megtervezéséhez és követéséhez.
   is megvan benne: a karakter itemlevele alapján megmutatja, melyik tartalom ad
   még fejlesztést.
 - **Telefonos alkalmazás (Android):** ugyanaz a terv a telefonon is – a karakterek a
-  mai céljukkal és a lemaradásukkal (szint, itemlevel, Mythic+), új karakter,
-  szerkesztés, törlés, sorrend és a terv beállításai. A gépi programmal a **saját
-  (ingyenes) Firebase-adatbázisodon** át szinkronizál, magától (lásd lent,
-  „Szinkronizálás a telefonnal”).
+  mai céljukkal és a lemaradásukkal (szint, itemlevel, Mythic+), tetszés szerint
+  rendezve, új karakter, szerkesztés, törlés, sorrend és a terv beállításai. A gépi
+  programmal a **saját (ingyenes) Firebase-adatbázisodon** át szinkronizál, magától
+  (lásd lent, „Szinkronizálás a telefonnal”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -766,6 +766,20 @@ e-mail-címet és egy jelszót, majd az első alkalommal „Új fiók létrehoz�
 3. Az alkalmazásban a „Fiók” gomb: ugyanaz a Web API-kulcs, adatbázis, e-mail-cím és
    jelszó, majd „Bejelentkezés”. A terv letöltődik.
 
+**A lista rendezése a telefonon:** a lista fölötti „Rendezés” mezőben választható,
+mi szerint álljanak a karakterek: **Állapot** (alapból; mint a gépi program
+listájában: elöl a legsürgősebbek, a célszintet elértek a végén), **Terv szerinti
+sorrend** (a nevek előtti szám), **Szint-, Itemlevel-** vagy **Mythic+ lemaradás**
+(elöl a legnagyobb lemaradás), **Szint**, **Itemlevel**, **Mythic+ pontszám** (elöl a
+legkisebb) vagy **Név** (ábécérendben). A „Fordítva” kapcsoló megfordítja a
+sorrendet; akinek nincs ilyen értéke (pl. nincs megadva az itemlevele), az mindig a
+végére kerül. A rendezés csak a nézetet változtatja meg, a terv sorrendjét (és így a
+céldátumokat) nem. A telefon megjegyzi a választást, és az nem szinkronizálódik (a
+gépi program listája továbbra is az állapot szerint nyílik meg). A karakter
+szerkesztőjében a „Feljebb” / „Lejjebb” gomb – mint a gépen – csak a terv szerinti
+sorrendben, fordítás nélkül használható, mert csak ebben látszik, hová került a
+karakter.
+
 **Hogyan szinkronizál?**
 
 - Ha mindkét eszközön változtattál, mielőtt szinkronizáltak volna, mindkét
@@ -837,7 +851,7 @@ Ha az adatbázist sokáig egy másik program zárolja, a tervező inkább kilép
 A telefonos szinkronizáláshoz a program az adatbázisban megjegyzi a Firebase-fiókot
 (a projekt adatait, az e-mail-címet és a bejelentkezés tokenjét) és a legutóbb a
 felhővel egyeztetett állapotot. A telefon ugyanígy, a saját adatbázisában tárolja
-az adatait.
+az adatait, és ott jegyzi meg a lista rendezését is (ez nem kerül fel a felhőbe).
 
 Az addon mentéseinek beolvasásához és a terv szinkronizálásához a program az
 adatbázisban megjegyzi a WoW mappáját, karakterenként a legutóbb felhasznált mentés

@@ -1,10 +1,10 @@
 """WoW szintezés – a telefonos alkalmazás (Kivy).
 
 A gépi program (wow_leveling.py) párja: ugyanazt a tervet mutatja és szerkeszti (a karakterek a
-mai céljukkal és a lemaradásukkal szintben, itemlevelben és Mythic+ pontszámban; új karakter,
-szerkesztés, törlés, sorrend; a terv beállításai), és a gépi programmal a felhasználó saját
-Firebase-adatbázisán át szinkronizál (cloud_sync.py). A számolás a gépi programé (leveling.py), a
-felülettől független rész a mobile_plan.py-ban van.
+mai céljukkal és a lemaradásukkal szintben, itemlevelben és Mythic+ pontszámban, tetszés szerint
+rendezve; új karakter, szerkesztés, törlés, sorrend; a terv beállításai), és a gépi programmal a
+felhasználó saját Firebase-adatbázisán át szinkronizál (cloud_sync.py). A számolás a gépi programé
+(leveling.py), a felülettől független rész a mobile_plan.py-ban van.
 
 Az adatok a telefonon is egy SQLite-adatbázisban vannak (storage.py), így internet nélkül is
 használható; a változások a következő szinkronizáláskor mennek fel.
@@ -186,7 +186,25 @@ KV = """
             WrapLabel:
                 id: summary
                 font_size: '14sp'
+            BoxLayout:
+                size_hint_y: None
+                height: dp(44)
+                spacing: dp(6)
+                Label:
+                    text: 'Rendezés:'
+                    font_size: '14sp'
+                    color: 0.72, 0.74, 0.8, 1
+                    size_hint_x: None
+                    width: self.texture_size[0] + dp(2)
+                Spinner:
+                    id: sort
+                ToggleButton:
+                    id: reverse
+                    text: 'Fordítva'
+                    size_hint_x: None
+                    width: dp(92)
         ScrollView:
+            id: scroll
             do_scroll_x: False
             GridLayout:
                 id: cards
@@ -314,11 +332,18 @@ class WowApp(App):
         Window.softinput_mode = "below_target"  # a billentyűzet ne takarja el a mezőt
         Window.bind(on_keyboard=self._on_key)
         self.data = self._load()
+        self.list_sort = mobile_plan.load_sort(self.database)  # (kulcs, fordítva-e); csak ezen a telefonon
         self.manager = ScreenManager(transition=NoTransition())
         self.list_screen = ListScreen(name="list")
         self.form_screen = FormScreen(name="form")
         self.manager.add_widget(self.list_screen)
         self.manager.add_widget(self.form_screen)
+        ids = self.list_screen.ids
+        ids.sort.values = list(mobile_plan.SORTS.values())
+        ids.sort.text = mobile_plan.SORTS[self.list_sort[0]]
+        ids.reverse.state = "down" if self.list_sort[1] else "normal"
+        ids.sort.bind(text=self._sort_changed)  # a kezdőértékek után: azok még nem változtatások
+        ids.reverse.bind(state=self._sort_changed)
         self.sync = cloud_sync.SyncController(
             self.database,
             DEVICE,
@@ -380,7 +405,7 @@ class WowApp(App):
         screen.ids.summary.text = mobile_plan.summary(self.data, self.today)
         container = screen.ids.cards
         container.clear_widgets()
-        for card in mobile_plan.cards(self.data, self.today):
+        for card in mobile_plan.cards(self.data, self.today, *self.list_sort):
             container.add_widget(
                 Card(
                     character_id=card.uid,
@@ -395,6 +420,17 @@ class WowApp(App):
                     mplus_tone=card.mplus_tone,
                 )
             )
+
+    def _sort_changed(self, *_args) -> None:
+        ids = self.list_screen.ids
+        sort = next((key for key, label in mobile_plan.SORTS.items() if label == ids.sort.text), self.list_sort[0])
+        self.list_sort = (sort, ids.reverse.state == "down")
+        try:
+            mobile_plan.save_sort(self.database, *self.list_sort)
+        except OSError as exc:  # a rendezés így is érvényes, csak a következő indításkor nem lesz meg
+            self._sync_status(f"⚠ Nem sikerült menteni a rendezést: {exc}", True)
+        self.refresh()
+        ids.scroll.scroll_y = 1  # az új sorrend eleje látsszon
 
     def show_list(self) -> None:
         self.manager.current = "list"
@@ -471,13 +507,16 @@ class WowApp(App):
                     self.save()
                     self.show_list()
 
+            hint = mobile_plan.move_hint(*self.list_sort)  # más rendezésben nem látszana, hová került
             form.add_widget(
                 button_row(
-                    Button(text="Feljebb", on_release=lambda *_: move(-1)),
-                    Button(text="Lejjebb", on_release=lambda *_: move(1)),
+                    Button(text="Feljebb", disabled=bool(hint), on_release=lambda *_: move(-1)),
+                    Button(text="Lejjebb", disabled=bool(hint), on_release=lambda *_: move(1)),
                     Button(text="Törlés", on_release=lambda *_: self._confirm_delete(character)),
                 )
             )
+            if hint:
+                form.add_widget(form_label(hint))
         self.manager.current = "form"
         self.fields = fields  # a tesztekhez
 
