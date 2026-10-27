@@ -773,7 +773,8 @@ e-mail-címet és egy jelszót, majd az első alkalommal „Új fiók létrehoz�
   ugyanazt a mezőt mindkettőn, az utoljára szinkronizáló eszközé marad. A
   karaktereket egy állandó azonosító párosítja (az átnevezés nem zavarja), a
   törölt karakter csak akkor tűnik el a másik eszközről is, ha ott közben nem írták
-  át; a sorrend annak az eszköznek a szerint alakul, amelyiken átrendezték.
+  át; a sorrendet az az eszköz határozza meg, amelyiken átrendezték (ha mindkettőn,
+  az utoljára szinkronizáló).
 - Az első bejelentkezéskor, ha a felhőben és az eszközön is van már terv, a program
   megkérdezi, melyik maradjon; ha a felhőbelit választod, az eszközön lévő terv egy
   másolatát félreteszi (a gépen a program mappájába, `…elozo-terv-<időpont>.json`).
