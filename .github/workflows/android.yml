@@ -1,0 +1,93 @@
+# A telefonos alkalmazás (android/) fordítása APK-vá Buildozerrel. A main ágon a kész APK a
+# „android” nevű kiadásba (Releases) kerül: https://github.com/Gootyt/WoWLeveling/releases/tag/android
+name: Android APK
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - "leveling.py"
+      - "storage.py"
+      - "cloud_sync.py"
+      - "httpcompat.py"
+      - "wow_data.py"
+      - "raiderio.py"
+      - "murlok.py"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Rendszercsomagok
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+
+      - name: Buildozer
+        run: pip install buildozer==1.5.0 "cython<3" setuptools
+
+      - name: A Buildozer gyorsítótára (Android SDK, NDK, a lefordított Python)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            android/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
+
+      # Az aláíró kulcs: ha a telefonon frissítésként (az előző fölé) kell települnie, mindig ugyanaz
+      # kell. Ha van ANDROID_DEBUG_KEYSTORE titok (lásd README), az; különben egy gyorsítótárazott.
+      - name: Aláíró kulcs (gyorsítótár)
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+      - name: Aláíró kulcs (titok)
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$KEYSTORE" ]; then echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore; fi
+
+      - name: A közös modulok
+        run: python android/prepare.py
+
+      - name: Fordítás
+        working-directory: android
+        run: yes | buildozer -v android debug
+
+      - name: Az APK
+        run: cp android/bin/*.apk wow-szintezes.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wow-szintezes-apk
+          path: wow-szintezes.apk
+
+      - name: Kiadás (csak a main ágon)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view android > /dev/null 2>&1; then
+            gh release create android --title "Telefonos alkalmazás (Android)" \
+              --notes "A WoW szintezés tervező telefonos alkalmazása: töltsd le a wow-szintezes.apk fájlt a telefonodra, és telepítsd (lásd README, „Szinkronizálás a telefonnal”)."
+          fi
+          gh release upload android wow-szintezes.apk --clobber

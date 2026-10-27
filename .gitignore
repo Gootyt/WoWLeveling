@@ -18,3 +18,9 @@ probe_output.json
 debug_raw_run.json
 debug_guild_run.json
 wcl_probe_output.json
+
+# A telefonos alkalmazás fordításakor bemásolt közös modulok (android/prepare.py) és a Buildozer kimenete
+android/app/*.py
+!android/app/main.py
+android/.buildozer/
+android/bin/
