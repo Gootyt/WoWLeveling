@@ -1,0 +1,45 @@
+# Az APK aláíró kulcsa (lásd android.yml) a GitHub gyorsítótárában van, amelyet a GitHub töröl, ha
+# egy hétig senki sem használja; ekkor a következő APK új kulccsal készülne, és nem települne a régi
+# fölé. Ez a munka hetente kétszer előveszi a kulcsot, így az akkor is megmarad, ha közben nem készül
+# új APK. Az ütemezés csak a main ágon fut; a fájl változásakor is lefut (így látszik, hogy működik).
+name: Az aláíró kulcs megőrzése
+
+on:
+  schedule:
+    # Hétfőn és csütörtökön 3:17-kor (UTC): így két használat között legfeljebb 4 nap telik el, akkor
+    # is bőven a 7 napos határ alatt, ha az ütemezett futás késik.
+    - cron: "17 3 * * 1,4"
+  push:
+    paths:
+      - ".github/workflows/android-key.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  key:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Az aláíró kulcs (gyorsítótár)
+        id: key
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1  # ugyanaz, mint az android.yml-ben
+
+      - name: Megvan-e a kulcs
+        env:
+          HIT: ${{ steps.key.outputs.cache-hit }}
+          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ "$HIT" = "true" ]; then
+            keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey \
+              | awk '$1 == "SHA256:" { gsub(":", "", $2); print "A kulcs megvan (SHA-256): " tolower($2); exit }'
+          elif [ -n "$KEYSTORE" ]; then
+            echo "A gyorsítótárban nincs kulcs, de az APK az ANDROID_DEBUG_KEYSTORE titok kulcsával készül."
+          else
+            echo "::error::Az aláíró kulcs nincs meg a gyorsítótárban. A következő APK új kulccsal készül: a telepítése előtt töröld a régi alkalmazást (lásd README, „Az alkalmazás frissítése”)."
+            exit 1
+          fi

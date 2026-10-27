@@ -802,13 +802,17 @@ karakter.
 
 **Az alkalmazás frissítése:** az újabb `wow-szintezes.apk` a régi fölé települ, ha
 ugyanazzal a kulccsal van aláírva. A GitHub a kulcsot egy gyorsítótárban tartja (és
-minden fordításkor ellenőrzi, hogy az APK azzal van-e aláírva), de a gyorsítótárat
-törli, ha egy hétig nem készül új APK. Ilyenkor a következő APK új kulccsal készül,
-és az Android nem engedi a régi fölé telepíteni („Az alkalmazás nincs telepítve”):
-töröld a régit, telepítsd az újat, és jelentkezz be újra – a terv a felhőből
-visszajön. Ha ezt el akarod kerülni, egy állandó kulcs adható meg a repó titkai
-között (*Settings → Secrets and variables → Actions*, `ANDROID_DEBUG_KEYSTORE`
-néven, a kulcsfájl base64 alakban):
+minden fordításkor ellenőrzi, hogy az APK azzal van-e aláírva). A gyorsítótárat a
+GitHub törli, ha egy hétig senki sem használja, ezért egy ütemezett munka (*Az
+aláíró kulcs megőrzése*) hetente kétszer, hétfőn és csütörtökön előveszi a kulcsot;
+ha az mégis elveszett, a munka hibával áll le (az *Actions* fülön látszik). Ha a
+repóban 60 napig semmi sem történik, a GitHub az ütemezett munkát kikapcsolja: az
+*Actions* fülön (*Az aláíró kulcs megőrzése → Enable workflow*) visszakapcsolható.
+Ha a kulcs elveszett, a következő APK új kulccsal készül, és az Android nem engedi a
+régi fölé telepíteni („Az alkalmazás nincs telepítve”): töröld a régit, telepítsd
+az újat, és jelentkezz be újra – a terv a felhőből visszajön. Ha mindezt el akarod
+kerülni, egy állandó kulcs adható meg a repó titkai között (*Settings → Secrets and
+variables → Actions*, `ANDROID_DEBUG_KEYSTORE` néven, a kulcsfájl base64 alakban):
 
 ```
 keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey \
@@ -892,7 +896,8 @@ eredménye mikor került át utoljára.
   telefonnal”)
 - `android/` – a telefonos alkalmazás: `app/main.py` (a felület, Kivy),
   `app/mobile_plan.py` (a felülettől független része), `buildozer.spec` és
-  `prepare.py` (a fordítás); a `.github/workflows/android.yml` fordítja APK-vá
+  `prepare.py` (a fordítás); a `.github/workflows/android.yml` fordítja APK-vá, a
+  `.github/workflows/android-key.yml` pedig megőrzi az aláíró kulcsát
 - `addon/WoWLeveling/` – a WoW addon: `WoWLeveling.toc`, `WoWLeveling.lua` (mentés
   és a lemaradás ablaka), `Plan.lua` (a lemaradások számolása, mint a programban),
   `Gear.lua` (a gear ajánló a játékban), `PlanData.lua` (a program által
