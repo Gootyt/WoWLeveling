@@ -86,11 +86,13 @@ jobs:
       - name: Az aláírás ellenőrzése
         run: |
           build_tools=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/*/ | sort -V | tail -n 1)
+          # „V2 Signer: certificate SHA-256 digest: …” (a régebbi apksigner: „Signer #1 certificate …”)
           apk_key=$("${build_tools}apksigner" verify --print-certs wow-szintezes.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            | awk '/certificate SHA-256 digest:/ { print $NF; exit }')
           saved_key=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey \
-            | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'A-F' 'a-f')
+            | awk '$1 == "SHA256:" { gsub(":", "", $2); print tolower($2); exit }')
           echo "Az APK aláíró kulcsa (SHA-256): ${apk_key:-ismeretlen}"
+          echo "A mentett kulcs (SHA-256): ${saved_key:-nincs}"
           if [ -z "$apk_key" ] || [ "$apk_key" != "$saved_key" ]; then
             echo "::error::Az APK nem a ~/.android/debug.keystore kulcsával van aláírva: a következő nem települne a fölé."
             exit 1
