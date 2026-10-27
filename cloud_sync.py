@@ -686,6 +686,7 @@ class SyncController:
             self._store(storage.CLOUD_BASE, base)
             self._store(storage.CLOUD, account)
             self.remote, self.last_sync, self._blocked = remote, datetime.now(), False
+            problem = None
             if incoming is not None:
                 sent, current = job[1], shared_part(self.get_data())
                 if current != sent:  # közben itt is változtattak: azok is megmaradnak
@@ -693,10 +694,13 @@ class SyncController:
                 try:
                     apply_shared(self.get_data(), incoming)
                 except SyncError as exc:
-                    self._show_status(str(exc), True)
-                    return
-                self.on_change()
-            self._show_status()
+                    problem = exc
+                else:
+                    self.on_change()
+            if problem is None:
+                self._show_status()
+            else:
+                self._show_status(f"⚠ {problem}", True)
         elif kind == "signed_in":
             account, reset = values
             self._store(storage.CLOUD, account)

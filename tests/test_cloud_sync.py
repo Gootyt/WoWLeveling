@@ -469,6 +469,21 @@ class ControllerTests(unittest.TestCase):
         (backup,) = self.folder.glob("Telefon.elozo-terv-*.json")  # az itteni terv nem veszett el
         self.assertEqual([c["name"] for c in json.loads(backup.read_text(encoding="utf-8"))["characters"]], ["Anduin"])
 
+    def test_bad_data_from_the_cloud_is_not_applied(self):
+        pc = self.app("PC", sample())
+        with mock.patch.object(cloud_sync, "normalize_database_url", lambda text: f"{self.fake.url}/db"):
+            self.sign_in(pc, create=True)
+        pc.pump(until=lambda: pc.sync.last_sync is not None)
+        uid = pc.sync.account.uid
+        broken = shared_part(sample())
+        character(broken, "thrall1")["level"] = "sok"  # pl. egy hibás program írta
+        node = self.fake.plan(uid)
+        self.fake.set(f"users/{uid}/plan", dict(node, rev=node["rev"] + 1, data=json.dumps(broken)))
+        pc.sync.sync_now()
+        pc.pump()
+        self.assertTrue(pc.statuses[-1][0].startswith("⚠ Hibás adat jött a felhőből"), pc.statuses[-1])
+        self.assertEqual((pc.changes, pc.data.characters[0].level), (0, D("83.45")))  # a helyi adatok maradtak
+
     def test_login_problems(self):
         pc = self.app("PC", sample())
         with mock.patch.object(cloud_sync, "normalize_database_url", lambda text: f"{self.fake.url}/db"):
