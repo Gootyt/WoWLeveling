@@ -55,6 +55,8 @@ jobs:
 
       # Az aláíró kulcs: ha a telefonon frissítésként (az előző fölé) kell települnie, mindig ugyanaz
       # kell. Ha van ANDROID_DEBUG_KEYSTORE titok (lásd README), az; különben egy gyorsítótárazott.
+      # A Gradle a ~/.android/debug.keystore fájllal ír alá (lásd ANDROID_USER_HOME a fordításnál);
+      # ha még nincs, ott hoz létre egyet, és a munka végén az kerül a gyorsítótárba.
       - name: Aláíró kulcs (gyorsítótár)
         uses: actions/cache@v4
         with:
@@ -70,12 +72,29 @@ jobs:
       - name: A közös modulok
         run: python android/prepare.py
 
+      # Az ANDROID_USER_HOME nélkül a Gradle a GitHub gépein (XDG_CONFIG_HOME miatt) a
+      # ~/.config/.android mappában keresné a kulcsot, így minden fordítás új kulccsal írna alá.
       - name: Fordítás
         working-directory: android
-        run: yes | buildozer -v android debug
+        run: |
+          export ANDROID_USER_HOME="$HOME/.android"
+          yes | buildozer -v android debug
 
       - name: Az APK
         run: cp android/bin/*.apk wow-szintezes.apk
+
+      - name: Az aláírás ellenőrzése
+        run: |
+          build_tools=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/*/ | sort -V | tail -n 1)
+          apk_key=$("${build_tools}apksigner" verify --print-certs wow-szintezes.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          saved_key=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey \
+            | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'A-F' 'a-f')
+          echo "Az APK aláíró kulcsa (SHA-256): ${apk_key:-ismeretlen}"
+          if [ -z "$apk_key" ] || [ "$apk_key" != "$saved_key" ]; then
+            echo "::error::Az APK nem a ~/.android/debug.keystore kulcsával van aláírva: a következő nem települne a fölé."
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

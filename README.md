@@ -801,12 +801,14 @@ karakter.
   Settings → User actions*) az új fiókok létrehozása ki is kapcsolható.
 
 **Az alkalmazás frissítése:** az újabb `wow-szintezes.apk` a régi fölé települ, ha
-ugyanazzal a kulccsal van aláírva. A GitHub a kulcsot egy gyorsítótárban tartja;
-ha az kiürül (néhány hét változtatás nélkül), az Android a frissítést nem engedi
-(„Az alkalmazás nincs telepítve”): ilyenkor töröld a régit, telepítsd az újat, és
-jelentkezz be újra – a terv a felhőből visszajön. Ha ezt el akarod kerülni, egy
-állandó kulcs adható meg a repó titkai között (*Settings → Secrets and variables →
-Actions*, `ANDROID_DEBUG_KEYSTORE` néven, a kulcsfájl base64 alakban):
+ugyanazzal a kulccsal van aláírva. A GitHub a kulcsot egy gyorsítótárban tartja (és
+minden fordításkor ellenőrzi, hogy az APK azzal van-e aláírva), de a gyorsítótárat
+törli, ha egy hétig nem készül új APK. Ilyenkor a következő APK új kulccsal készül,
+és az Android nem engedi a régi fölé telepíteni („Az alkalmazás nincs telepítve”):
+töröld a régit, telepítsd az újat, és jelentkezz be újra – a terv a felhőből
+visszajön. Ha ezt el akarod kerülni, egy állandó kulcs adható meg a repó titkai
+között (*Settings → Secrets and variables → Actions*, `ANDROID_DEBUG_KEYSTORE`
+néven, a kulcsfájl base64 alakban):
 
 ```
 keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey \
