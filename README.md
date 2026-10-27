@@ -78,6 +78,11 @@ megtervezéséhez és követéséhez.
   háromban; a tervet a program szinkronizálja neki (lásd lent, „WoW addon”). A **gear ajánló**
   is megvan benne: a karakter itemlevele alapján megmutatja, melyik tartalom ad
   még fejlesztést.
+- **Telefonos alkalmazás (Android):** ugyanaz a terv a telefonon is – a karakterek a
+  mai céljukkal és a lemaradásukkal (szint, itemlevel, Mythic+), új karakter,
+  szerkesztés, törlés, sorrend és a terv beállításai. A gépi programmal a **saját
+  (ingyenes) Firebase-adatbázisodon** át szinkronizál, magától (lásd lent,
+  „Szinkronizálás a telefonnal”).
 - A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
   szerkeszthetők és törölhetők.
 - Minden változást automatikusan elment.
@@ -92,14 +97,22 @@ megtervezéséhez és követéséhez.
   a raid statisztikához saját (ingyenes) Warcraft Logs API-kulcs is.
 - A `requests` csomag nem kell: ha telepítve van, a statisztikai programok azt
   használják, különben a beépített `httpcompat.py`-t (a szabványos urllib-bel).
+- A telefonos alkalmazáshoz Android 7.0 vagy újabb kell, a szinkronizáláshoz egy
+  saját Firebase-projekt (ingyenes; lásd „Szinkronizálás a telefonnal”).
 
 ## Indítás
+
+Windowson kattints duplán a **`wow_leveling.pyw`** fájlra: így a program parancssori
+ablak nélkül indul (a `.pyw` fájlt a Windows a `pythonw.exe`-vel futtatja). Ilyenkor
+a program kiírásai és az esetleges hibák a mappájában lévő `wow_leveling_naplo.txt`
+fájlba kerülnek (csak ha van mit beleírni), egy váratlan hibát pedig egy ablak is
+jelez. Parancssorból:
 
 ```
 python wow_leveling.py
 ```
 
-Windowson `py wow_leveling.py` is jó, vagy dupla kattintás a fájlra.
+(Windowson `py wow_leveling.py`.)
 
 Ha több tervet akarsz külön vezetni (pl. másik szerveren), add meg az adatbázis
 fájlját (ha még nincs meg, a program létrehozza):
@@ -710,6 +723,82 @@ elavultnak („Out of date”) jelzi, az AddOns ablakban kapcsold be a „Load o
 date AddOns” lehetőséget, vagy írd át a `WoWLeveling.toc` fájl `## Interface:`
 sorában a számot az új verzióéra.
 
+## Szinkronizálás a telefonnal
+
+A telefonos alkalmazás (Android) és a gépi program ugyanazt a tervet mutatja és
+szerkeszti: a beállításokat, a karaktereket (a szintjükkel, itemlevelükkel és
+Mythic+ pontszámukkal), a Murlok.io-pontszámokat és a gear ajánló belépési
+ilvl-jeit. A kettő a **te saját Firebase-projekted** adatbázisán (Realtime Database)
+keresztül szinkronizál: induláskor, minden változás után pár másodperccel, és amíg
+nyitva vannak, félpercenként. Ami a gépen az addonból bejön (pl. egy szintlépés),
+az így a telefonon is megjelenik, és fordítva. Ami csak a géphez tartozik (az addon
+mappája, a statisztikák ablakainak mezői, az API-kulcsok), az nem kerül fel.
+
+**A Firebase-projekt (egyszer kell, kb. 10 perc, ingyenes):**
+
+1. A <https://console.firebase.google.com> oldalon: *Create a project* (Projekt
+   létrehozása), tetszőleges névvel (pl. `wow-szintezes`); a Google Analytics nem
+   kell.
+2. *Build → Authentication → Get started*, majd a *Sign-in method* fülön az
+   *Email/Password* bekapcsolása (*Enable*, *Save*).
+3. *Build → Realtime Database → Create database*: a hely lehet *Belgium
+   (europe-west1)*, az indulás *Start in locked mode*. Utána a *Rules* fülön cseréld
+   le a szabályokat a `firebase/database.rules.json` fájl tartalmára (*Publish*):
+   így mindenki csak a saját adataihoz fér hozzá.
+4. Az **adatbázis címe** a Realtime Database oldal tetején látszik (pl.
+   `https://wow-szintezes-default-rtdb.europe-west1.firebasedatabase.app`), a **Web
+   API-kulcs** a projekt beállításainál (fogaskerék → *Project settings → General →
+   Web API Key*).
+
+**A gépen:** a főablak „Telefonos alkalmazás – szinkronizálás a Firebase-en át”
+keretében a „Beállítás…” gomb: add meg a Web API-kulcsot, az adatbázis címét, egy
+e-mail-címet és egy jelszót, majd az első alkalommal „Új fiók létrehozása”
+(később „Bejelentkezés”). A program ekkor feltölti a tervet.
+
+**A telefonon:**
+
+1. Töltsd le a telefonra a `wow-szintezes.apk` fájlt a
+   <https://github.com/Gootyt/WoWLeveling/releases/tag/android> oldalról (a GitHub
+   minden változás után magától elkészíti).
+2. Nyisd meg; az Android megkérdezi, engedélyezed-e az ismeretlen forrásból
+   származó alkalmazások telepítését (a böngészőnek vagy a fájlkezelőnek): engedélyezd,
+   és telepítsd.
+3. Az alkalmazásban a „Fiók” gomb: ugyanaz a Web API-kulcs, adatbázis, e-mail-cím és
+   jelszó, majd „Bejelentkezés”. A terv letöltődik.
+
+**Hogyan szinkronizál?**
+
+- Ha mindkét eszközön változtattál, mielőtt szinkronizáltak volna, mindkét
+  változtatás megmarad: amit csak az egyiken írtál át, az átkerül a másikra; ha
+  ugyanazt a mezőt mindkettőn, az utoljára szinkronizáló eszközé marad. A
+  karaktereket egy állandó azonosító párosítja (az átnevezés nem zavarja), a
+  törölt karakter csak akkor tűnik el a másik eszközről is, ha ott közben nem írták
+  át; a sorrend annak az eszköznek a szerint alakul, amelyiken átrendezték.
+- Az első bejelentkezéskor, ha a felhőben és az eszközön is van már terv, a program
+  megkérdezi, melyik maradjon; ha a felhőbelit választod, az eszközön lévő terv egy
+  másolatát félreteszi (a gépen a program mappájába, `…elozo-terv-<időpont>.json`).
+- Internet nélkül is minden működik: a változások a következő sikeres
+  szinkronizáláskor mennek fel. A szinkronizálás állapota a főablak keretében és a
+  telefon listája fölött látszik.
+- A jelszót egyik eszköz sem tárolja, csak a bejelentkezés után kapott hosszú
+  lejáratú tokent (a helyi adatbázisban). A Web API-kulcs nem titkos, de ne tedd
+  közzé. Ha már létrehoztad a fiókodat, a Firebase-konzolban (*Authentication →
+  Settings → User actions*) az új fiókok létrehozása ki is kapcsolható.
+
+**Az alkalmazás frissítése:** az újabb `wow-szintezes.apk` a régi fölé települ, ha
+ugyanazzal a kulccsal van aláírva. A GitHub a kulcsot egy gyorsítótárban tartja;
+ha az kiürül (néhány hét változtatás nélkül), az Android a frissítést nem engedi
+(„Az alkalmazás nincs telepítve”): ilyenkor töröld a régit, telepítsd az újat, és
+jelentkezz be újra – a terv a felhőből visszajön. Ha ezt el akarod kerülni, egy
+állandó kulcs adható meg a repó titkai között (*Settings → Secrets and variables →
+Actions*, `ANDROID_DEBUG_KEYSTORE` néven, a kulcsfájl base64 alakban):
+
+```
+keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey \
+  -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+base64 -w0 debug.keystore
+```
+
 ## Adatok
 
 A program minden adatát egyetlen fájlban, a program mappájában lévő
@@ -744,6 +833,11 @@ adatbázis sérült, az egész fájlt nevezi át (`szintezes_adatok.hibas-<időp
 Ha az adatbázist sokáig egy másik program zárolja, a tervező inkább kilép, hogy ne
 írja felül az adatokat.
 
+A telefonos szinkronizáláshoz a program az adatbázisban megjegyzi a Firebase-fiókot
+(a projekt adatait, az e-mail-címet és a bejelentkezés tokenjét) és a legutóbb a
+felhővel egyeztetett állapotot. A telefon ugyanígy, a saját adatbázisában tárolja
+az adatait.
+
 Az addon mentéseinek beolvasásához és a terv szinkronizálásához a program az
 adatbázisban megjegyzi a WoW mappáját, karakterenként a legutóbb felhasznált mentés
 idejét, és azokat a karaktereket, amelyeket nem kértél fel a listára. A gear
@@ -752,7 +846,8 @@ eredménye mikor került át utoljára.
 
 ## Fájlok
 
-- `wow_leveling.py` – a grafikus felület, ezt kell elindítani
+- `wow_leveling.py` – a grafikus felület
+- `wow_leveling.pyw` – az indítója Windowsra, parancssori ablak nélkül
 - `leveling.py` – az ütemezés számítása, mentés és betöltés
 - `storage.py` – a közös adatbázis, és a korábbi változatok fájljainak beolvasása
 - `murlok.py` – a spec-pontszámok lekérése a Murlok.io-ról
@@ -773,6 +868,14 @@ eredménye mikor került át utoljára.
   a választható faj–kaszt kombinációk
 - `wow_addon.py` – a WoWLeveling addon mentéseinek beolvasása és importálása, a
   terv átadása az addonnak
+- `cloud_sync.py` – a szinkronizálás a Firebase-en át (bejelentkezés, feltételes
+  írás, az összefésülés), a gépen és a telefonon ugyanaz
+- `cloud_window.py` – a szinkronizálás beállításának ablakai a gépen
+- `firebase/database.rules.json` – az adatbázis szabályai (lásd „Szinkronizálás a
+  telefonnal”)
+- `android/` – a telefonos alkalmazás: `app/main.py` (a felület, Kivy),
+  `app/mobile_plan.py` (a felülettől független része), `buildozer.spec` és
+  `prepare.py` (a fordítás); a `.github/workflows/android.yml` fordítja APK-vá
 - `addon/WoWLeveling/` – a WoW addon: `WoWLeveling.toc`, `WoWLeveling.lua` (mentés
   és a lemaradás ablaka), `Plan.lua` (a lemaradások számolása, mint a programban),
   `Gear.lua` (a gear ajánló a játékban), `PlanData.lua` (a program által
@@ -789,6 +892,9 @@ python -m unittest discover -s tests -v
 ```
 
 A felület tesztjeihez grafikus kijelző kell (Linuxon kijelző nélkül pl.
-`xvfb-run python -m unittest discover -s tests`); ha nincs, ezek kimaradnak. Az
+`xvfb-run python -m unittest discover -s tests`); ha nincs, ezek kimaradnak. A
+telefonos alkalmazás felületének tesztjeihez a Kivy is kell (`pip install kivy`);
+nélküle ezek maradnak ki. A szinkronizálás tesztjei egy Firebase-utánzattal
+(`tests/fake_firebase.py`) futnak, hálózat nélkül. Az
 addon tesztjéhez Lua-értelmező kell (`lua5.1`, `luajit` vagy `lua`); ha nincs, ez
 a teszt kimarad.

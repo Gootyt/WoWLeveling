@@ -2490,7 +2490,7 @@ class GuiTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         thrall = Character("Thrall", "Shaman", "Enhancement", D("83.45"), realm="Draenor")
         pc = self.cloud_app("pc", fake, [thrall, Character("Jaina", "Mage", "Frost", D("81.00"))])
-        self.assertEqual(pc.cloud_status_var.get(), cloud_sync.NOT_CONFIGURED)
+        self.assertEqual(pc.cloud_status_var.get(), cloud_sync.NOT_CONFIGURED.format(where=cloud_sync.DESKTOP_SETTINGS))
         pc.sync_cloud_now()  # bejelentkezés nélkül a beállítás ablakát nyitja meg
         dialog = pc.cloud_dialog
         self.assertIsNotNone(dialog)

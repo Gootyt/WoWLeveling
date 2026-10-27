@@ -556,7 +556,9 @@ class SyncEngine:
 
 CHECK_MS = 200  # ilyen gyakran nézi meg a felület szála, végzett-e a háttérszál
 PUSH_DELAY_MS = 2000  # egy helyi változás után ennyivel később tölt fel (a gyors egymás utániakat egyben)
-NOT_CONFIGURED = "Nincs beállítva: a „Beállítás…” gombbal kapcsolható be (a Firebase-projekted adataival)."
+NOT_CONFIGURED = "Nincs beállítva: {where} kapcsolható be (a Firebase-projekted adataival)."
+NOT_SIGNED_IN = "Nincs bejelentkezve: {where} jelentkezhetsz be."
+DESKTOP_SETTINGS = "a „Beállítás…” gombbal"  # hol állítható be (a telefonon a „Fiók” gomb)
 
 
 class SyncController:
@@ -573,11 +575,15 @@ class SyncController:
     ask_choice(kérdés, answer): az első szinkronizáláskor, ha a felhőben is és itt is van terv; a
         felület megkérdezi, melyik maradjon, és meghívja: answer("remote"), answer("local") vagy answer(None)
     call_later(ms, függvény): a függvény futtatása a felület szálán ms ezredmásodperc múlva
+    where: hol lehet beállítani a szinkronizálást (az állapot szövegében)
     """
 
-    def __init__(self, database, device: str, get_data, on_change, on_status, ask_choice, call_later):
+    def __init__(
+        self, database, device: str, get_data, on_change, on_status, ask_choice, call_later, where=DESKTOP_SETTINGS
+    ):
         self.database = Path(database)
         self.device = device
+        self.where = where
         self.get_data, self.on_change, self.on_status = get_data, on_change, on_status
         self.ask_choice, self.call_later = ask_choice, call_later
         self.account = Account.from_dict(self._load(storage.CLOUD))
@@ -738,9 +744,9 @@ class SyncController:
         if text is None:
             account = self.account
             if not account.configured:
-                text = NOT_CONFIGURED
+                text = NOT_CONFIGURED.format(where=self.where)
             elif not account.signed_in:
-                text = "Nincs bejelentkezve: a „Beállítás…” gombbal jelentkezhetsz be."
+                text = NOT_SIGNED_IN.format(where=self.where)
             elif self.last_sync is None:
                 text = f"Bejelentkezve: {account.email}"
             else:

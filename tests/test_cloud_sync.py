@@ -396,7 +396,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_two_apps(self):
         pc = self.app("PC", sample())
-        self.assertEqual(pc.statuses[-1], (cloud_sync.NOT_CONFIGURED, False))
+        self.assertEqual(pc.statuses[-1], (cloud_sync.NOT_CONFIGURED.format(where="a „Beállítás…” gombbal"), False))
         for args, message in (
             (("rövid", "https://x.firebasedatabase.app", "a@b.hu", "titok123"), "Web API-kulcs"),
             ((fake_firebase.API_KEY, "nincs", "a@b.hu", "titok123"), "https://"),

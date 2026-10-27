@@ -22,5 +22,6 @@ wcl_probe_output.json
 # A telefonos alkalmazás fordításakor bemásolt közös modulok (android/prepare.py) és a Buildozer kimenete
 android/app/*.py
 !android/app/main.py
+!android/app/mobile_plan.py
 android/.buildozer/
 android/bin/
