@@ -6,18 +6,24 @@ program. Indítás:
 
     python wow_leveling.py [adatbázis]
 
+Windowson parancssori ablak nélkül: dupla kattintás a wow_leveling.pyw fájlra.
+
 A program minden adatát (beállítások, karakterek, API-kulcsok, a statisztikák
 gyorsítótára) automatikusan menti, egyetlen adatbázisba: alapértelmezés szerint a
-program mappájában lévő ``szintezes_adatok.sqlite`` fájlba (lásd storage.py).
+program mappájában lévő ``szintezes_adatok.sqlite`` fájlba (lásd storage.py). A terv
+a telefonos alkalmazással is szinkronizálható egy Firebase-adatbázison át (lásd
+cloud_sync.py).
 """
 
 from __future__ import annotations
 
 import argparse
 import calendar
+import platform
 import queue
 import sys
 import threading
+import traceback
 import tkinter as tk
 from collections import Counter
 from collections.abc import Callable
@@ -66,6 +72,8 @@ from leveling import (
     save_data,
     sort_plans,
 )
+import cloud_sync
+import cloud_window
 import gear_advisor
 import gearing
 import murlok
@@ -1381,6 +1389,23 @@ class App:
         self._addon_state: tuple | None = None
         self._addon_pending: tuple | None = None
         self._addon_importing = False
+        # A szinkronizálás a telefonos alkalmazással (lásd cloud_sync.py és cloud_window.py).
+        self.cloud_status_var = tk.StringVar()
+        self._cloud_style = "Hint.TLabel"
+        self.cloud_status_label: ttk.Label | None = None
+        self.cloud_dialog: cloud_window.AccountDialog | None = None
+        self.cloud_choice: cloud_window.ChoiceDialog | None = None
+        self._loading_settings = False  # a beállítások mezőit a program tölti ki (a felhőből jött adatokkal)
+        self.cloud = cloud_sync.SyncController(
+            self.data_path,
+            device_name(),
+            lambda: self.data,
+            self._cloud_changed,
+            self._cloud_status,
+            self._ask_cloud_choice,
+            root.after,
+        )
+        root.bind("<Destroy>", self._on_destroy, add="+")
 
         self._build()
         settings_vars = (
@@ -1667,8 +1692,20 @@ class App:
         )
         self.addon_status_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
+        phone = ttk.LabelFrame(body, text="Telefonos alkalmazás – szinkronizálás a Firebase-en át", padding=10)
+        phone.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        phone.columnconfigure(0, weight=1)
+        self.cloud_status_label = ttk.Label(
+            phone, textvariable=self.cloud_status_var, style=self._cloud_style, wraplength=self.px(700), justify="left"
+        )
+        self.cloud_status_label.grid(row=0, column=0, sticky="w")
+        phone_buttons = ttk.Frame(phone)
+        phone_buttons.grid(row=0, column=1, sticky="e")
+        for text, command in (("Beállítás…", self.open_cloud_settings), ("Szinkronizálás most", self.sync_cloud_now)):
+            ttk.Button(phone_buttons, text=text, command=command).pack(side="left", padx=(6, 0))
+
         footer = ttk.Frame(body)
-        footer.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        footer.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Label(footer, textvariable=self.summary_var, justify="left").pack(side="left", anchor="w")
         window_buttons = ttk.Frame(footer)
         window_buttons.pack(side="right", anchor="n")
@@ -1689,7 +1726,7 @@ class App:
         self.gear_status_label = ttk.Label(
             body, textvariable=self.gear_status_var, style="Hint.TLabel", wraplength=self.px(940), justify="left"
         )
-        self.gear_status_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.gear_status_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _read_settings_fields(self) -> tuple[dict, dict[str, str]]:
         """A beállítások mezőiből beolvasott értékek és a hibák, a Settings mezőnevei szerint."""
@@ -1712,6 +1749,8 @@ class App:
 
     def _on_settings_edited(self, *_args) -> None:
         """Minden módosítás után ellenőrzi a beállításokat; ha helyesek, el is menti őket."""
+        if self._loading_settings:  # a program tölti ki a mezőket: a félig átírt állapot nem számít
+            return
         values, problems = self._read_settings_fields()
         if problems:
             self._show_settings_problems(list(problems.values()))
@@ -2646,6 +2685,61 @@ class App:
         else:
             self._save_error_shown = False
             self._schedule_addon_sync()
+            self.cloud.local_changed()  # a telefonra is (kicsit később, a gyors változásokat egyben)
+
+    # --- a szinkronizálás a telefonos alkalmazással
+
+    def open_cloud_settings(self) -> None:
+        if self.cloud_dialog is not None and self.cloud_dialog.winfo_exists():
+            self.cloud_dialog.lift()
+            return
+        self.cloud_dialog = cloud_window.AccountDialog(self)
+
+    def sync_cloud_now(self) -> None:
+        if not self.cloud.account.signed_in:
+            self.open_cloud_settings()
+            return
+        self.cloud.sync_now()
+
+    def _cloud_status(self, text: str, problem: bool) -> None:
+        self.cloud_status_var.set(text)
+        self._cloud_style = "Error.TLabel" if problem else "Hint.TLabel"
+        if self.cloud_status_label is not None:
+            self.cloud_status_label.configure(style=self._cloud_style)
+        if self.cloud_dialog is not None and self.cloud_dialog.winfo_exists():
+            self.cloud_dialog.show_status(text, problem)
+
+    def _ask_cloud_choice(self, question: str, answer) -> None:
+        if self.cloud_choice is not None and self.cloud_choice.winfo_exists():
+            self.cloud_choice.destroy()
+        self.cloud_choice = cloud_window.ChoiceDialog(self, question, answer)
+
+    def _cloud_changed(self) -> None:
+        """A másik eszközön változtatott adatok bekerültek az adatokba: a mezők, a mentés és az ablakok."""
+        self._show_settings_fields()
+        self.save()
+        self.refresh()
+
+    def _show_settings_fields(self) -> None:
+        settings = self.data.settings
+        self._loading_settings = True
+        try:
+            self.start_var.set(format_date(settings.start_date))
+            self.first_var.set(format_date(settings.first_target_date))
+            self.last_var.set(format_date(settings.last_target_date))
+            self.start_level_var.set(format_level(settings.start_level))
+            self.target_level_var.set(format_level(settings.target_level))
+            target_item_level = settings.target_item_level
+            self.target_item_level_var.set("" if target_item_level is None else format_item_level(target_item_level))
+            self.mode_var.set(settings.mode)
+            self.region_var.set(settings.region.upper())
+        finally:
+            self._loading_settings = False
+        self._show_settings_problems(settings.errors())
+
+    def _on_destroy(self, event) -> None:
+        if event.widget is self.root:
+            self.cloud.close()
 
     def known_realms(self) -> list[str]:
         """A karaktereknél már megadott realmek, a realm mezők javaslataihoz."""
@@ -2681,6 +2775,61 @@ class App:
         self.root.after(60_000, self._watch_date)
 
 
+def device_name() -> str:
+    """Az eszköz neve a felhőben (a telefon ebből látja, honnan jött a legutóbbi változás)."""
+    node = platform.node().strip()
+    return f"PC ({node})" if node else "PC"
+
+
+LOG_NAME = "wow_leveling_naplo.txt"  # pythonw alatt ide kerülnek a kiírások és a hibák
+
+
+class _LazyLog:
+    """A program mappájában lévő napló, amelyet csak az első kiíráskor nyit meg (így amíg nincs mit
+    írni, nem is jön létre). pythonw alatt (a .pyw indításakor) nincs parancssor: a sys.stdout és a
+    sys.stderr ide mutat."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.file = None
+
+    def write(self, text: str) -> int:
+        if self.file is None:
+            self.file = open(self.path, "a", encoding="utf-8", errors="replace")
+            self.file.write(f"\n--- {datetime.now():%Y-%m-%d %H:%M:%S} ---\n")
+        self.file.write(text)
+        self.file.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        if self.file is not None:
+            self.file.flush()
+
+
+def _redirect_output(folder: Path) -> Path:
+    """Ha nincs parancssor (pythonw), a kiírások és a hibák a naplóba kerülnek; a napló útvonala."""
+    log = folder / LOG_NAME
+    if sys.stdout is None or sys.stderr is None:
+        writer = _LazyLog(log)
+        sys.stdout = sys.stdout or writer
+        sys.stderr = sys.stderr or writer
+    return log
+
+
+def _report_errors(root: tk.Tk, log: Path) -> None:
+    """A felület egy váratlan hibája ablakban is látszik (parancssor nélkül máshol nem látná senki)."""
+
+    def report(kind, value, trace) -> None:
+        print("".join(traceback.format_exception(kind, value, trace)), file=sys.stderr)
+        messagebox.showerror(
+            APP_TITLE,
+            f"Váratlan hiba történt:\n{value}\n\nA részletek: {log}\n(Ha a program parancssorból fut, ott is.)",
+            parent=root,
+        )
+
+    root.report_callback_exception = report
+
+
 def _enable_windows_dpi_awareness() -> None:
     """Windows alatt éles (nem elmosódott) megjelenítés nagy felbontású kijelzőn."""
     if sys.platform != "win32":
@@ -2704,8 +2853,10 @@ def main(argv: list[str] | None = None) -> None:
         "adatfájl helyett a mellette lévő, azonos nevű .sqlite",
     )
     args = parser.parse_args(argv)
+    log = _redirect_output(default_data_path().parent)
     _enable_windows_dpi_awareness()
     root = tk.Tk()
+    _report_errors(root, log)
     App(
         root,
         args.data_file,

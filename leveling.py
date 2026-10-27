@@ -309,6 +309,9 @@ class Settings:
         )
 
 
+CHARACTER_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")  # a mentett (vagy a felhőből jött) azonosító
+
+
 @dataclass(eq=False)  # két azonos nevű karakter is különböző lehet
 class Character:
     name: str
@@ -319,11 +322,13 @@ class Character:
     realm: str = ""  # szerver, pl. Draenor
     raiderio_score: Decimal | None = None  # Raider.io (Mythic+) pontszám, ha meg van adva
     item_level: Decimal | None = None  # itemlevel, ha meg van adva
-    # Csak a program futása alatt használt azonosító, nem kerül mentésre.
+    # Tartós azonosító: ez alapján párosítja a szinkronizálás (lásd cloud_sync.py) a karaktert a
+    # telefonon és a gépen, így az átnevezés és az azonos nevű karakterek sem zavarják.
     uid: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
     def to_dict(self) -> dict:
         return {
+            "id": self.uid,
             "name": self.name,
             "realm": self.realm,
             "race": self.race,
@@ -339,7 +344,9 @@ class Character:
         name = str(data["name"]).strip()
         if not name:
             raise ValueError("üres karakternév")
+        uid = data.get("id")
         return cls(
+            uid=uid if isinstance(uid, str) and CHARACTER_ID.fullmatch(uid) else uuid.uuid4().hex,
             name=name,
             char_class=str(data.get("class", "")).strip(),
             spec=str(data.get("spec", "")).strip(),
@@ -1158,9 +1165,15 @@ class LevelingData:
                 gear_updated_at[str(source)] = datetime.fromisoformat(value)
             except (TypeError, ValueError):
                 pass  # a hibás időpont olyan, mintha még nem lett volna frissítés
+        characters = [Character.from_dict(item, settings.start_level) for item in data.get("characters", [])]
+        seen = set()
+        for character in characters:  # két karakternek nem lehet ugyanaz az azonosítója
+            if character.uid in seen:
+                character.uid = uuid.uuid4().hex
+            seen.add(character.uid)
         return cls(
             settings=settings,
-            characters=[Character.from_dict(item, settings.start_level) for item in data.get("characters", [])],
+            characters=characters,
             spec_scores=spec_scores,
             look_ahead=look_ahead if isinstance(look_ahead, bool) else True,
             raiderio_fetched_at=raiderio_fetched_at,

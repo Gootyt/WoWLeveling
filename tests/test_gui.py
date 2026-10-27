@@ -2,8 +2,11 @@
 ha nincs, vagy hiányzik a tkinter, a tesztek kimaradnak."""
 
 import gc
+import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,6 +22,7 @@ try:
 except ImportError:
     tk = ttk = None
 
+import cloud_sync
 import wow_addon
 from leveling import (
     SEQUENTIAL,
@@ -31,7 +35,13 @@ from leveling import (
     save_data,
 )
 
+try:
+    import fake_firebase
+except ImportError:  # python -m unittest tests.test_gui
+    from tests import fake_firebase
+
 D = Decimal
+ROOT = Path(__file__).resolve().parent.parent
 
 # A WoWLeveling addon mentése, ahogy a játék kiírja (lásd tests/test_wow_addon.py), a programmal
 # érkező változattól.
@@ -2440,6 +2450,128 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn("egyetlen fájlban tárolja", message)
         self.assertEqual(stats.load_api_keys(database), {"raiderio_api_key": "rio"})
         self.assertEqual(len(list((folder / "regi_adatok").glob("api_kulcsok*.json"))), 2)
+
+    # --- a telefonos szinkronizálás és az indítás parancssor nélkül
+
+    def wait(self, condition, what):
+        for _ in range(600):
+            self.root.update()
+            if condition():
+                return
+            time.sleep(0.01)
+        self.fail(f"nem történt meg: {what}")
+
+    def cloud_app(self, name, fake, characters=()):
+        """Egy főablak a saját adatbázisával, amely a Firebase-utánzattal szinkronizál."""
+        path = Path(self.temp_dir.name) / f"{name}.sqlite"
+        if characters:
+            save_data(path, LevelingData(Settings.default(), list(characters)))
+        with mock.patch.multiple(cloud_sync, AUTH_URL=f"{fake.url}/v1/accounts", TOKEN_URL=f"{fake.url}/v1/token"):
+            return self.gui.App(tk.Toplevel(self.root), path)
+
+    def sign_in(self, app, create=False):
+        app.open_cloud_settings()
+        dialog = app.cloud_dialog
+        dialog.api_key_var.set(fake_firebase.API_KEY)
+        dialog.url_var.set("https://wow-default-rtdb.europe-west1.firebasedatabase.app")
+        dialog.email_var.set("gamer@example.com")
+        dialog.password_var.set("titok123")
+        (dialog.create_button if create else dialog.sign_in_button).invoke()
+        return dialog
+
+    def test_phone_sync(self):
+        fake = fake_firebase.FakeFirebase()
+        self.addCleanup(fake.close)
+        for patcher in (
+            mock.patch.object(cloud_sync, "normalize_database_url", lambda text: f"{fake.url}/db"),
+            mock.patch.object(cloud_sync, "PUSH_DELAY_MS", 50),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        thrall = Character("Thrall", "Shaman", "Enhancement", D("83.45"), realm="Draenor")
+        pc = self.cloud_app("pc", fake, [thrall, Character("Jaina", "Mage", "Frost", D("81.00"))])
+        self.assertEqual(pc.cloud_status_var.get(), cloud_sync.NOT_CONFIGURED)
+        pc.sync_cloud_now()  # bejelentkezés nélkül a beállítás ablakát nyitja meg
+        dialog = pc.cloud_dialog
+        self.assertIsNotNone(dialog)
+        dialog.api_key_var.set("rövid")
+        dialog.sign_in_button.invoke()
+        self.assertEqual(dialog.message_var.get(), "⚠ A Web API-kulcs betűkből és számokból áll (általában „AIza”-val kezdődik).")
+        dialog.close()
+        dialog = self.sign_in(pc, create=True)
+        self.wait(lambda: pc.cloud.last_sync is not None, "az első feltöltés")
+        uid = pc.cloud.account.uid
+        self.assertEqual(fake.shared(uid), cloud_sync.shared_part(pc.data))
+        self.assertEqual(dialog.password_var.get(), "")  # a jelszót nem tartja meg
+        self.assertTrue(pc.cloud_status_var.get().startswith("Szinkronizálva: "))
+        self.assertIn(pc.cloud_status_var.get(), dialog.message_var.get())
+        self.assertNotIn("disabled", dialog.sign_out_button.state())
+
+        # A telefon (itt egy SyncEngine) átírja Jaina szintjét és a célszintet.
+        client = fake.client()
+        client.sign_in("gamer@example.com", "titok123")
+        phone = cloud_sync.SyncEngine(client, device="Telefon")
+        phone_data = LevelingData(Settings.default())
+        cloud_sync.apply_shared(phone_data, phone.sync(cloud_sync.shared_part(phone_data)))
+        phone_data.characters[1].level = D("82.40")
+        phone_data.settings.target_level = D(91)
+        phone.sync(cloud_sync.shared_part(phone_data))
+        pc.open_list()
+        pc.sync_cloud_now()
+        self.wait(lambda: pc.data.characters[1].level == D("82.40"), "a telefon változásának átvétele")
+        self.assertEqual(pc.target_level_var.get(), "91,00")  # a mezők is
+        self.assertEqual(pc.settings_message.get(), "✔ A beállítások rendben vannak, a változások automatikusan mentődnek.")
+        self.assertEqual(self.rows(pc.list_window)[1]["level"], "82,40")  # és az ablakok
+        self.assertEqual(load_data(pc.data_path).settings.target_level, D(91))  # el is mentette
+        self.assertIn("a felhőbe utoljára: Telefon", pc.cloud_status_var.get())
+
+        # A gépen átírt szint kicsit később a felhőbe kerül, onnan a telefonra.
+        pc.data.characters[0].level = D("84.00")
+        pc.data_changed()
+        self.wait(lambda: fake.shared(uid)["characters"][0]["level"] == 84.0, "a gép változásának feltöltése")
+        cloud_sync.apply_shared(phone_data, phone.sync(cloud_sync.shared_part(phone_data)))
+        self.assertEqual(phone_data.characters[0].level, D("84.00"))
+
+        # Egy másik gép a saját tervével jelentkezik be: megkérdezi, melyik maradjon.
+        other = self.cloud_app("masik", fake, [Character("Anduin", "Priest", "Holy")])
+        self.sign_in(other)
+        self.wait(lambda: other.cloud_choice is not None, "a kérdés")
+        self.assertIn("A felhőben már van egy terv (2 karakterrel", other.cloud_choice.question)
+        other.cloud_choice.remote_button.invoke()
+        self.wait(lambda: [c.name for c in other.data.characters] == ["Thrall", "Jaina"], "a felhőbeli terv átvétele")
+        self.assertEqual(len(list(Path(self.temp_dir.name).glob("masik.elozo-terv-*.json"))), 1)
+        other.cloud_dialog.sign_out_button.invoke()
+        self.assertEqual(other.cloud_status_var.get(), "Nincs bejelentkezve: a „Beállítás…” gombbal jelentkezhetsz be.")
+
+    def test_windows_launcher_without_console(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "wow_leveling.pyw"), "--help"], capture_output=True, text=True, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("az adatbázis útvonala", result.stdout)
+        # A pythonw alatt nincs sys.stdout és sys.stderr: a kiírások a naplóba kerülnek (csak ha van mit).
+        folder = Path(self.temp_dir.name)
+        with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+            log = self.gui._redirect_output(folder)
+            self.assertFalse(log.exists())
+            print("kiírás")
+            print("hiba", file=sys.stderr)
+            writer = sys.stderr
+        writer.file.close()
+        self.assertEqual(log.name, "wow_leveling_naplo.txt")
+        self.assertTrue(log.read_text(encoding="utf-8").endswith("---\nkiírás\nhiba\n"))
+        # Egy váratlan hiba a felületen: ablakban is szól, és a hiba részletei a naplóba kerülnek.
+        with mock.patch.object(self.gui.messagebox, "showerror") as error, mock.patch.object(
+            sys, "stderr", io.StringIO()
+        ) as stderr:
+            self.gui._report_errors(self.root, log)
+            try:
+                raise ValueError("próba")
+            except ValueError as exc:
+                self.root.report_callback_exception(ValueError, exc, exc.__traceback__)
+        self.assertIn("Váratlan hiba történt:\npróba", error.call_args.args[1])
+        self.assertIn(str(log), error.call_args.args[1])
+        self.assertIn("ValueError: próba", stderr.getvalue())
 
 
 if __name__ == "__main__":
