@@ -478,7 +478,14 @@ minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből va
   a +2…+5 kulcsokon élő `lindormis-guidance`-szel a ranglista is eléri a kis
   kulcsokat).
 - **Raider.io API-kulcs** (nem kötelező, https://raider.io/settings/apps):
-  nagyobb lekérési keretet ad.
+  nagyobb lekérési keretet ad. Ha a Raider.io nem fogadja el (elírták, lejárt vagy
+  visszavonták), a lekérdezés kulcs nélkül folytatódik, és az állapotsor szól, hogy
+  javítsd vagy töröld.
+
+Ha 5 karakter lekérése egymás után nem sikerül, a lekérdezés megszakad, és az
+állapotsor megmondja az okát – a Raider.io lekérési korlátja, kimaradás vagy nincs
+internet, illetve elutasított kérések – és az utolsó hibát; a táblázat az addig
+összegyűjtött adatokat mutatja.
 
 **Raid ilvl statisztika (Warcraft Logs).** Az aktuális raid bossaira
 nehézségenként (Normal, Heroic, Mythic) és bossonként: a kill-ek száma, valamint

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-raiderio_ilvl_stats.py  (v4.4)
+raiderio_ilvl_stats.py  (v4.5)
 
 Average / median / 25th percentile / min / max item level of Mythic+ groups,
 grouped by keystone level, using the public Raider.IO API (https://raider.io/api).
@@ -12,6 +12,15 @@ IN THE WOW LEVELING PLANNER
   and a Stop button instead of Ctrl+C (see run() and STOP). Run on its own it
   works exactly as described below. Without the requests package it uses
   httpcompat.py (the same requests calls over the standard library's urllib).
+
+NEW IN v4.5
+  A REFUSED API KEY NO LONGER STOPS EVERYTHING. Raider.IO answers every request made
+  with a wrong or revoked key with "403 Invalid API key"; the lookups then all failed
+  and the collection was aborted. Now the key is dropped at the first such answer and
+  the query goes on without it (the public API needs no key, it only has a lower rate
+  limit); the summary says so. An aborted collection names the last error and its
+  likely cause (rate limit, Raider.IO down / no connection, requests refused), and no
+  error message shows the request URL any more - it carried the API key.
 
 NEW IN v4.4
   THE CACHE IS AN SQLITE DATABASE: by default the planner's own database,
@@ -237,6 +246,7 @@ SESSION.headers.update({"Accept": "application/json",
                         "User-Agent": "raiderio-ilvl-stats/4.0 (personal script)"})
 
 API_KEY = None   # set from --api-key / RAIDERIO_API_KEY in main()
+KEY_REJECTED = False   # Raider.IO refused API_KEY during this run, which then went on without it
 DELAY = 0.4      # seconds between requests (be polite)
 
 MAX_ERROR_STREAK = 5   # abort after this many failed lookups in a row (API down / blocked)
@@ -251,7 +261,22 @@ GUILD_PATH_RE = re.compile(r"/guilds/([^/]+)/([^/]+)/([^/?#]+)")
 
 
 class TooManyErrors(Exception):
-    pass
+    """MAX_ERROR_STREAK character lookups failed in a row. kind says how the last one failed
+    (see failure_kind), last is its error message."""
+
+    def __init__(self, message, kind=None, last=""):
+        super().__init__(message)
+        self.kind = kind
+        self.last = last
+
+
+class GaveUp(RuntimeError):
+    """api_get kept getting 429 / 5xx answers or network errors. status is the last HTTP status
+    (None: no answer at all)."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 class Stopped(Exception):
@@ -298,19 +323,36 @@ def live_changed():
 
 # --------------------------------------------------------------------------- HTTP
 
+def response_message(resp):
+    """Raider.IO's own explanation of an error response (e.g. "Invalid API key"), or ""."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return ""
+    message = body.get("message") if isinstance(body, dict) else None
+    return " ".join(str(message).split())[:200] if message else ""
+
+
 def api_get(path, params, max_retries=5):
     """
     GET one Raider.IO endpoint and return the parsed JSON.
-    Retries on 429 / 5xx / network errors (honouring Retry-After). Any other
-    4xx response raises requests.HTTPError so the caller can decide what it means.
+    Retries on 429 / 5xx / network errors (honouring Retry-After), then raises GaveUp. Any
+    other 4xx response raises requests.HTTPError so the caller can decide what it means; its
+    message names the endpoint and Raider.IO's explanation, never the URL (that carries the
+    API key). An API key Raider.IO refuses is dropped for the rest of the run (KEY_REJECTED),
+    and the request goes again without it - the public API needs none.
     """
-    global HTTP_CALLS
+    global HTTP_CALLS, API_KEY, KEY_REJECTED
     url = f"{BASE_URL}/{path}"
     params = dict(params)
-    if API_KEY:
-        params["access_key"] = API_KEY
-    problem = "unknown"
-    for attempt in range(1, max_retries + 1):
+    problem, status = "unknown", None
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
+        if API_KEY:
+            params["access_key"] = API_KEY
+        else:
+            params.pop("access_key", None)
         if STOP.is_set():
             raise Stopped()
         if LIVE is not None:
@@ -319,13 +361,21 @@ def api_get(path, params, max_retries=5):
         try:
             resp = SESSION.get(url, params=params, timeout=20)
         except requests.exceptions.RequestException as exc:
-            problem = exc.__class__.__name__
+            problem, status = exc.__class__.__name__, None
             wait = min(2 ** attempt, 30)
         else:
             if resp.status_code != 429 and resp.status_code < 500:
-                resp.raise_for_status()
-                return resp.json()
-            problem = f"HTTP {resp.status_code}"
+                if resp.status_code < 400:
+                    return resp.json()
+                message = response_message(resp)
+                if API_KEY and resp.status_code in (401, 403) and "key" in message.lower():
+                    API_KEY, KEY_REJECTED = None, True
+                    log(f"  Raider.IO refused the API key ({message}) - going on without it", err=True)
+                    attempt -= 1        # the same request again, without the key
+                    continue
+                raise requests.HTTPError(f"{path}: HTTP {resp.status_code}" + (f" ({message})" if message else ""),
+                                         response=resp)
+            problem, status = f"HTTP {resp.status_code}", resp.status_code
             try:
                 wait = float(resp.headers.get("Retry-After", ""))
             except ValueError:
@@ -334,7 +384,16 @@ def api_get(path, params, max_retries=5):
         if LIVE is not None:
             LIVE.before_wait()
         pause(wait + 0.5)
-    raise RuntimeError(f"{path}: giving up after {max_retries} attempts ({problem})")
+    raise GaveUp(f"{path}: giving up after {max_retries} attempts ({problem})", status)
+
+
+def failure_kind(exc):
+    """How a request failed, for the reason an aborted collection gives: 'rate_limit' (HTTP 429
+    to the end), 'unavailable' (5xx or no answer at all), 'refused' (401 / 403) or None."""
+    if isinstance(exc, GaveUp):
+        return "rate_limit" if exc.status == 429 else "unavailable"
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return "refused" if status in (401, 403) else None
 
 
 def parse_ts(value):
@@ -941,7 +1000,8 @@ def get_profile(ref, cache, c, need_guild=False, with_runs=False):
         c["error_streak"] += 1
         log(f"  lookup failed for {'/'.join(ref)}: {exc}", err=True)
         if c["error_streak"] >= MAX_ERROR_STREAK:
-            raise TooManyErrors(f"{MAX_ERROR_STREAK} character lookups failed in a row")
+            raise TooManyErrors(f"{MAX_ERROR_STREAK} character lookups failed in a row (last: {exc})",
+                                failure_kind(exc), str(exc))
         return None
     c["error_streak"] = 0
     c["profile_calls"] += 1
@@ -1822,6 +1882,9 @@ def summary_lines(state, queue=None, ilvl_range=None):
                       ("guild_errors", "guild roster fetch(es) failed")):
         if c[key]:
             lines.append(f"({c[key]} {text})")
+    if KEY_REJECTED:
+        lines.append("(Raider.IO refused the API key, so the query went on without it - correct or remove "
+                     "--api-key / RAIDERIO_API_KEY)")
     return lines
 
 
@@ -2202,9 +2265,10 @@ def run(args, seeds, make_view, info=print):
     --debug-guild). Raises StatsError if the season can't be looked up, ValueError for
     options that don't work together, and Stopped if STOP is set before the collection.
     """
-    global API_KEY, DELAY, LIVE, HTTP_CALLS
+    global API_KEY, KEY_REJECTED, DELAY, LIVE, HTTP_CALLS
     HTTP_CALLS = 0
     API_KEY = args.api_key or os.environ.get("RAIDERIO_API_KEY")
+    KEY_REJECTED = False
     DELAY = max(args.delay, 0.0)
     page_limit = 1000 if API_KEY else 100
     if args.max_pages > page_limit:
@@ -2290,7 +2354,10 @@ def run(args, seeds, make_view, info=print):
         except Stopped:
             reason = "stopped - summarizing what was collected so far"
         except TooManyErrors as exc:
-            reason = f"aborted: {exc} (rate limit or outage?) - summarizing what was collected so far"
+            guess = {"rate_limit": "rate limit", "unavailable": "Raider.IO down or no connection",
+                     "refused": "requests refused"}.get(exc.kind)
+            reason = f"aborted: {exc}{f' - {guess}?' if guess else ''} - summarizing what was collected so far"
+            state["abort"] = {"kind": exc.kind, "last": exc.last}
         finally:
             try:
                 LIVE.stop(f"finished - {reason}" if reason else "finished")

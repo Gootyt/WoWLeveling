@@ -488,6 +488,28 @@ class StatsWindow(tk.Toplevel):
         self.destroy()
 
 
+# Miért szakadt meg a lekérdezés (a TooManyErrors.kind, lásd mplus.failure_kind).
+MPLUS_ABORT_CAUSES = {
+    "rate_limit": "a Raider.io túl sok kérést jelzett (lekérési korlát): várj néhány percet, vagy adj meg API-kulcsot",
+    "unavailable": "a Raider.io nem válaszol (kimaradás, vagy nincs internetkapcsolat)",
+    "refused": "a Raider.io elutasította a kéréseket",
+}
+KEY_REFUSED = (
+    " A Raider.io nem fogadta el az API-kulcsot, ezért kulcs nélkül kérdezett le: javítsd vagy töröld a"
+    " „Raider.io API-kulcs” mezőben."
+)
+
+
+def mplus_abort_text(abort: dict) -> str:
+    """Az ablak állapotsora, ha a lekérdezés sok egymás utáni hiba miatt megszakadt."""
+    cause = MPLUS_ABORT_CAUSES.get(abort.get("kind"))
+    text = f"Megszakadt: {mplus.MAX_ERROR_STREAK} karakter lekérése egymás után nem sikerült"
+    text += f" – {cause}." if cause else "."
+    if abort.get("last"):
+        text += f" Az utolsó hiba: {abort['last']}."
+    return text + " A táblázat az addig összegyűjtött adatokat mutatja."
+
+
 class _MythicView(mplus.LiveView):
     """A raiderio_ilvl_stats élő nézete az ablakhoz: a háttérszálban a konzol helyett
     üzenetet küld (a táblázat sorait, az állapotot, a naplósorokat), az ablak a saját
@@ -772,12 +794,13 @@ class MythicStatsWindow(StatsWindow):
         for line in mplus.summary_lines(state, guild_queue, ilvl_range):
             post(("log", line))
         post(("result", mplus.summary_rows(state)))
+        key_note = KEY_REFUSED if mplus.KEY_REJECTED else ""
         if reason and reason.startswith("stopped"):
-            post(("finished", "Leállítva – a táblázat az addig összegyűjtött adatokat mutatja.", False))
+            post(("finished", "Leállítva – a táblázat az addig összegyűjtött adatokat mutatja." + key_note, False))
         elif reason and reason.startswith("aborted"):
-            post(("finished", f"Megszakadt (sok egymás utáni hiba – lekérési korlát vagy kimaradás?): {reason}", True))
+            post(("finished", mplus_abort_text(state.get("abort") or {}) + key_note, True))
         else:
-            post(("finished", "Kész" + (f" – {reason}." if reason else "."), False))
+            post(("finished", "Kész" + (f" – {reason}." if reason else ".") + key_note, False))
 
     def _handle(self, message: tuple) -> None:
         kind = message[0]

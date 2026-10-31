@@ -124,6 +124,16 @@ def leaderboard_run(run_id, level, chests=1):
     }
 
 
+class FakeResponse:
+    """A Raider.io egy válasza (a SESSION.get helyett)."""
+
+    def __init__(self, status_code, body):
+        self.status_code, self.headers, self.body = status_code, {}, body
+
+    def json(self):
+        return self.body
+
+
 class FakeRaiderio:
     """A Raider.io API helyett: a ranglista egy oldala és a futások csapatai."""
 
@@ -370,6 +380,60 @@ class RaiderioStatsTests(unittest.TestCase):
         with self.assertRaises(mplus.Stopped):
             mplus.pause(30)
         self.assertLess(time.monotonic() - started, 5)
+
+    def test_refused_api_key_is_dropped(self):
+        # Rossz (vagy visszavont) kulccsal a Raider.io minden kérésre 403-at ad: a kulcs nélkül megy tovább.
+        data, sent = FakeRaiderio(), []
+
+        def get(url, params=None, timeout=None):
+            sent.append(dict(params))
+            if "access_key" in params:
+                return FakeResponse(403, {"statusCode": 403, "error": "Forbidden", "message": "Invalid API key"})
+            return FakeResponse(200, data(url.split("/api/v1/", 1)[1], params))
+
+        args, seeds = self.args("--max-pages", "2", "--api-key", "rossz-kulcs")
+        self.addCleanup(setattr, mplus, "KEY_REJECTED", False)
+        with mock.patch.object(mplus.SESSION, "get", get):
+            reason, state, guild_queue, ilvl_range = mplus.run(args, seeds, self.quiet_view, info=lambda line: None)
+        self.assertIsNone(reason)
+        self.assertTrue(mplus.KEY_REJECTED)
+        self.assertEqual(["access_key" in params for params in sent], [True] + [False] * (len(sent) - 1))
+        self.assertEqual([row[:2] for row in mplus.summary_rows(state)], [(12, 2), (15, 1)])
+        self.assertIn("Raider.IO refused the API key", "\n".join(mplus.summary_lines(state, guild_queue, ilvl_range)))
+
+    def test_http_errors_do_not_show_the_key(self):
+        responses = [FakeResponse(403, {"message": "Forbidden"}), FakeResponse(500, {}), FakeResponse(429, {})]
+        self.addCleanup(setattr, mplus, "API_KEY", None)
+        mplus.API_KEY = "titkos-kulcs"
+        with mock.patch.object(mplus.SESSION, "get", side_effect=responses[:1]):
+            with self.assertRaises(mplus.requests.HTTPError) as caught:
+                mplus.api_get("characters/profile", {"name": "Thrall"})
+        self.assertEqual(str(caught.exception), "characters/profile: HTTP 403 (Forbidden)")  # nem a kulcs hibája
+        self.assertEqual(caught.exception.response.status_code, 403)
+        self.assertEqual(mplus.API_KEY, "titkos-kulcs")
+        self.assertEqual(mplus.failure_kind(caught.exception), "refused")
+        with mock.patch.object(mplus.SESSION, "get", side_effect=responses[1:]), mock.patch.object(mplus, "pause"):
+            with self.assertRaises(mplus.GaveUp) as caught:
+                mplus.api_get("characters/profile", {"name": "Thrall"}, max_retries=2)
+        self.assertEqual((str(caught.exception), caught.exception.status), ("characters/profile: giving up after 2 attempts (HTTP 429)", 429))
+        self.assertEqual(mplus.failure_kind(caught.exception), "rate_limit")
+        self.assertEqual(mplus.failure_kind(mplus.GaveUp("x", None)), "unavailable")  # nincs válasz / 5xx
+
+    def test_abort_names_the_last_error(self):
+        class Unreachable(FakeGuildRaiderio):
+            GUILDS = {"solutions": ["Thrall", "Jaina", "Uther", "Arthas", "Sylvanas", "Anduin"]}
+
+            def __call__(self, path, params, max_retries=5):
+                if path == "characters/profile":
+                    raise mplus.GaveUp("characters/profile: giving up after 5 attempts (HTTP 429)", 429)
+                return super().__call__(path, params, max_retries)
+
+        args, seeds = self.args("--guild", "Solutions@ragnaros", "--no-follow-guilds")
+        with mock.patch.object(mplus, "api_get", Unreachable()):
+            reason, state, _queue, _range = mplus.run(args, seeds, self.quiet_view, info=lambda line: None)
+        self.assertTrue(reason.startswith("aborted: 5 character lookups failed in a row (last: characters/profile: "), reason)
+        self.assertIn("- rate limit? -", reason)
+        self.assertEqual(state["abort"], {"kind": "rate_limit", "last": "characters/profile: giving up after 5 attempts (HTTP 429)"})
 
     def test_season_lookup_failure(self):
         args, seeds = self.args()

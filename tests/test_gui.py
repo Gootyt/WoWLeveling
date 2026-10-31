@@ -981,6 +981,40 @@ class GuiTests(unittest.TestCase):
         window = self.app.mplus_stats_window
         self.assertEqual((window.source_var.get(), window.levels_var.get()), ("guild", "2-4"))
 
+    def test_mplus_stats_abort_and_refused_key(self):
+        stats = self.gui.stats_windows
+        mplus = stats.mplus
+        self.app.open_mplus_stats()
+        window = self.app.mplus_stats_window
+
+        def fake_run(reason, abort=None, key_refused=False):
+            def run(args, seeds, make_view, info):
+                state = mplus.new_state()
+                if abort:
+                    state["abort"] = abort
+                mplus.KEY_REJECTED = key_refused
+                return reason, state, mplus.GuildQueue(), "250-350"
+
+            return run
+
+        self.addCleanup(setattr, mplus, "KEY_REJECTED", False)
+        # Sok egymás utáni hiba: az ok és az utolsó hiba is látszik (nem csak egy találgatás).
+        last = "characters/profile: giving up after 5 attempts (HTTP 429)"
+        with mock.patch.object(mplus, "run", fake_run("aborted: …", {"kind": "rate_limit", "last": last})):
+            window.start_button.invoke()
+            self.wait_until_finished(window)
+        status = window.status_var.get()
+        self.assertTrue(status.startswith("Megszakadt: 5 karakter lekérése egymás után nem sikerült – a Raider.io túl sok"), status)
+        self.assertIn(f"Az utolsó hiba: {last}.", status)
+        self.assertEqual(str(window.status_label.cget("style")), "Error.TLabel")
+        # A rossz API-kulcs nélkül ment végig: kész, de szól, hogy a kulcsot javítani kell.
+        with mock.patch.object(mplus, "run", fake_run(None, key_refused=True)):
+            window.start_button.invoke()
+            self.wait_until_finished(window)
+        self.assertEqual(window.status_var.get(), "Kész." + stats.KEY_REFUSED)
+        self.assertIn("„Raider.io API-kulcs” mezőben", window.status_var.get())
+        self.assertEqual(str(window.status_label.cget("style")), "Ok.TLabel")  # az eredmény jó (átvihető)
+
     def test_mplus_stats_stop_and_input_checks(self):
         stats = self.gui.stats_windows
         mplus = stats.mplus
