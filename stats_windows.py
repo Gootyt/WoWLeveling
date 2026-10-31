@@ -34,6 +34,7 @@ import storage
 import wcl_raid_ilvl_stats as wcl
 
 LOG_LINES = 2000  # ennyi sor marad meg a naplóban
+LOG_MIN_LINES = 5  # a naplóból legalább ennyi sor látszik, akármilyen alacsony az ablak
 POLL_MS = 100  # ilyen gyakran nézi az ablak a háttérszál üzeneteit
 
 MPLUS_REGIONS = ("eu", "us", "kr", "tw", "cn", "world")
@@ -145,6 +146,13 @@ def parse_guilds(text: str, region: str) -> list[str]:
     return guilds
 
 
+def follow_width(label: ttk.Label) -> None:
+    """A felirat sorai az elérhető szélességhez törnek, nem egy rögzített szélességhez: széles
+    ablakban kevesebb sort foglal, keskenyben sem lóg ki. A feliratnak ki kell töltenie a
+    szélességet (fill="x")."""
+    label.bind("<Configure>", lambda event: label.configure(wraplength=max(event.width - 4, 200)))
+
+
 class LogPane(ttk.Frame):
     """Görgethető, csak olvasható napló; ha a végén áll, az új sorokat is mutatja."""
 
@@ -242,13 +250,13 @@ class StatsWindow(tk.Toplevel):
         footer = ttk.Frame(body)
         footer.pack(side="bottom", fill="x", pady=(8, 0))
         ttk.Button(footer, text="Bezárás", command=self.close).pack(side="right")
-        ttk.Label(
-            body, text=f"{self.HINT} {AUTO_HINT}", style="Hint.TLabel", wraplength=px(900), justify="left"
-        ).pack(anchor="w", pady=(0, 8))
+        hint = ttk.Label(body, text=f"{self.HINT} {AUTO_HINT}", style="Hint.TLabel", wraplength=px(900), justify="left")
+        hint.pack(fill="x", pady=(0, 8))
+        follow_width(hint)
         self._build_options(body)
         self._load_keys()
         buttons = ttk.Frame(body)
-        buttons.pack(fill="x", pady=(8, 4))
+        buttons.pack(fill="x", pady=(8, 2))
         self.start_button = ttk.Button(buttons, text="Indítás", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Leállítás", command=self.stop, state="disabled")
         self.csv_button = ttk.Button(buttons, text="CSV mentése…", command=self.save_csv, state="disabled")
@@ -257,12 +265,26 @@ class StatsWindow(tk.Toplevel):
         )
         for button in (self.start_button, self.stop_button, self.csv_button, self.transfer_button):
             button.pack(side="left", padx=(0, 6))
-        self.status_label = ttk.Label(buttons, textvariable=self.status_var, wraplength=px(620), justify="left")
-        self.status_label.pack(side="left", padx=(6, 0))
-        self._build_results(body)
-        ttk.Label(body, text="Napló").pack(anchor="w", pady=(8, 2))
-        self.log = LogPane(body, height=4)
-        self.log.pack(fill="both", expand=True)
+        # Az állapot a gombok alatt, a teljes szélességben (a gombok mellett a hosszabb üzenet kilógott).
+        self.status_label = ttk.Label(body, textvariable=self.status_var, wraplength=px(900), justify="left")
+        self.status_label.pack(fill="x", pady=(2, 4))
+        follow_width(self.status_label)
+        # Az eredmény és a napló osztozik a maradék helyen. Ha az ablak nem elég magas (pl. nagyított
+        # kijelzőn), az eredmény görgethető táblázata zsugorodik, a naplóból pedig legalább
+        # LOG_MIN_LINES sor látszik (egymás alá csomagolva a napló szinte eltűnt).
+        area = ttk.Frame(body)
+        area.pack(fill="both", expand=True)
+        results = ttk.Frame(area)
+        self._build_results(results)
+        results.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(area, text="Napló").grid(row=1, column=0, sticky="w", pady=(8, 2))
+        self.log = LogPane(area, height=LOG_MIN_LINES + 1)
+        self.log.grid(row=2, column=0, sticky="nsew")
+        line = tkfont.Font(font=self.log.text.cget("font")).metrics("linespace")
+        frame = self.log.text.winfo_reqheight() - (LOG_MIN_LINES + 1) * line  # a keret és a margó
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(0, weight=3, minsize=px(140))
+        area.rowconfigure(2, weight=2, minsize=LOG_MIN_LINES * line + frame)
         self._load_options()
         self.update_idletasks()
         self.minsize(px(720), px(480))

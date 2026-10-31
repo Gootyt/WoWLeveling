@@ -983,6 +983,31 @@ class GuiTests(unittest.TestCase):
         window = self.app.mplus_stats_window
         self.assertEqual((window.source_var.get(), window.levels_var.get()), ("guild", "2-4"))
 
+    def test_stats_window_log_stays_visible(self):
+        # A megnyitáskor rögzített méretű ablakban lekérdezés közben megjelennek a haladás, az API és
+        # a hosszú állapot sorai: ezek a táblázattól vesznek el helyet, a naplóból legalább
+        # LOG_MIN_LINES sor látszik (korábban egy pár pixeles csík maradt belőle).
+        from tkinter import font as tkfont
+
+        stats = self.gui.stats_windows
+        self.app.open_mplus_stats()
+        window = self.app.mplus_stats_window
+        self.root.update()
+        window.progress_var.set(
+            "Felhasznált futások: 377 (nem időben teljesített, kihagyva: 7) · tartományon kívüli itemlevel, kihagyva: "
+            "3 játékos · beolvasott guildek: 4, várakozik: 646 · ellenőrzött karakterek: 91 · privát profil, kihagyva: 12"
+        )
+        window.api_var.set("API-kérések: 524 · letöltve: 377 futás, 91 profil, 4 guildlista · most: guild Enclave tagjai")
+        window.status_var.set(
+            "Megszakadt: 5 karakter lekérése egymás után nem sikerült – a Raider.io elutasította a kéréseket. Az utolsó "
+            "hiba: characters/profile: HTTP 403 (Profile is private). A táblázat az addig összegyűjtött adatokat mutatja."
+        )
+        self.root.update()
+        line = tkfont.Font(font=window.log.text.cget("font")).metrics("linespace")
+        self.assertGreaterEqual(window.log.text.winfo_height(), stats.LOG_MIN_LINES * line)
+        bottom = window.log.winfo_rooty() + window.log.winfo_height()
+        self.assertLessEqual(bottom, window.winfo_rooty() + window.winfo_height())  # nem lóg le az ablakról
+
     def test_mplus_stats_abort_and_refused_key(self):
         stats = self.gui.stats_windows
         mplus = stats.mplus
