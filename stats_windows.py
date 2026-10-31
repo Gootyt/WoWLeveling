@@ -539,6 +539,8 @@ class _MythicView(mplus.LiveView):
             text += f" (nem időben teljesített, kihagyva: {dropped})"
         if c["skipped_ilvl_range"]:
             text += f" · tartományon kívüli itemlevel, kihagyva: {c['skipped_ilvl_range']} játékos"
+        if c["private_profiles"]:
+            text += f" · privát profil, kihagyva: {c['private_profiles']} karakter"
         if c["guilds_done"] or len(self.queue):
             text += (
                 f" · beolvasott guildek: {c['guilds_done']}, várakozik: {len(self.queue)}"

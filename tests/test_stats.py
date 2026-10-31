@@ -435,6 +435,57 @@ class RaiderioStatsTests(unittest.TestCase):
         self.assertIn("- rate limit? -", reason)
         self.assertEqual(state["abort"], {"kind": "rate_limit", "last": "characters/profile: giving up after 5 attempts (HTTP 429)"})
 
+    def test_private_profiles_are_skipped(self):
+        # Akinek a profilja privát (403 Profile is private), azt kihagyja, mint egy ismeretlent: ez nem hiba.
+        class Private(FakeGuildRaiderio):
+            GUILDS = {"solutions": ["Thrall", "Jaina", "Uther", "Arthas", "Sylvanas", "Anduin", "Varian"]}
+
+            def __call__(self, path, params, max_retries=5):
+                if path == "characters/profile" and params["name"] != "Thrall":
+                    self.calls.append(path)
+                    body = {"statusCode": 403, "error": "Forbidden", "message": "Profile is private"}
+                    raise mplus.requests.HTTPError("characters/profile: HTTP 403 (Profile is private)",
+                                                   response=FakeResponse(403, body))
+                return super().__call__(path, params, max_retries)
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cache = str(Path(folder.name) / "cache.sqlite")
+        fake = Private()
+        args = mplus.build_parser().parse_args(
+            ["--cache", cache, "--delay", "0", "--guild", "Solutions@ragnaros", "--no-follow-guilds"]
+        )
+        seeds = mplus.prepare_args(args)
+        with mock.patch.object(mplus, "api_get", fake):
+            reason, state, guild_queue, ilvl_range = mplus.run(args, seeds, self.quiet_view, info=lambda line: None)
+        self.assertIsNone(reason)  # nem szakadt meg
+        c = state["c"]
+        self.assertEqual((c["private_profiles"], c["lookup_errors"], c["chars_checked"]), (6, 0, 7))
+        self.assertEqual([row[:2] for row in mplus.summary_rows(state)], [(12, 1)])  # Thrall futása megvan
+        summary = "\n".join(mplus.summary_lines(state, guild_queue, ilvl_range))
+        self.assertIn("(6 character(s) skipped because their Raider.IO profile is private)", summary)
+        # A gyorsítótárban is privátként marad: újra lekérdezve nem kérdezi meg őket még egyszer.
+        fake.calls.clear()
+        with mock.patch.object(mplus, "api_get", fake):
+            _reason, state, _queue, _range = mplus.run(args, seeds, self.quiet_view, info=lambda line: None)
+        self.assertNotIn("characters/profile", fake.calls)
+        self.assertEqual(state["c"]["private_profiles"], 6)
+
+    def test_other_403s_still_count_as_failures(self):
+        forbidden = mplus.requests.HTTPError("characters/profile: HTTP 403 (Forbidden)",
+                                             response=FakeResponse(403, {"message": "Forbidden"}))
+        private = mplus.requests.HTTPError("characters/profile: HTTP 403 (Profile is private)",
+                                           response=FakeResponse(403, {"message": "Profile is private"}))
+        self.assertEqual((mplus.is_private(private), mplus.is_private(forbidden)), (True, False))
+        with mock.patch.object(mplus, "api_get", side_effect=forbidden):
+            with self.assertRaises(mplus.requests.HTTPError):
+                mplus.fetch_profile(("eu", "ragnaros", "Thrall"))
+        with mock.patch.object(mplus, "api_get", side_effect=private):
+            self.assertEqual(
+                mplus.fetch_profile(("eu", "ragnaros", "Thrall"), with_runs=True),
+                {"ilvl": None, "crawled": None, "guild": None, "private": True, "recent_runs": []},
+            )
+
     def test_season_lookup_failure(self):
         args, seeds = self.args()
         with mock.patch.object(mplus, "api_get", side_effect=RuntimeError("HTTP 503")):

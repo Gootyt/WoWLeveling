@@ -482,10 +482,12 @@ minimuma és maximuma. Egy futás csapatának itemlevelei a futás idejéből va
   visszavonták), a lekérdezés kulcs nélkül folytatódik, és az állapotsor szól, hogy
   javítsd vagy töröld.
 
-Ha 5 karakter lekérése egymás után nem sikerül, a lekérdezés megszakad, és az
-állapotsor megmondja az okát – a Raider.io lekérési korlátja, kimaradás vagy nincs
-internet, illetve elutasított kérések – és az utolsó hibát; a táblázat az addig
-összegyűjtött adatokat mutatja.
+Akinek a Raider.io-profilja privát (a gazdája elrejtette), azt kihagyja, mint egy
+ismeretlen karaktert – ez nem hiba; hogy hányat, az a haladás sorában és a napló
+végén látszik. Ha viszont 5 karakter lekérése egymás után nem sikerül, a lekérdezés
+megszakad, és az állapotsor megmondja az okát – a Raider.io lekérési korlátja,
+kimaradás vagy nincs internet, illetve elutasított kérések – és az utolsó hibát; a
+táblázat az addig összegyűjtött adatokat mutatja.
 
 **Raid ilvl statisztika (Warcraft Logs).** Az aktuális raid bossaira
 nehézségenként (Normal, Heroic, Mythic) és bossonként: a kill-ek száma, valamint

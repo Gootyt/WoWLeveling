@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-raiderio_ilvl_stats.py  (v4.5)
+raiderio_ilvl_stats.py  (v4.6)
 
 Average / median / 25th percentile / min / max item level of Mythic+ groups,
 grouped by keystone level, using the public Raider.IO API (https://raider.io/api).
@@ -12,6 +12,13 @@ IN THE WOW LEVELING PLANNER
   and a Stop button instead of Ctrl+C (see run() and STOP). Run on its own it
   works exactly as described below. Without the requests package it uses
   httpcompat.py (the same requests calls over the standard library's urllib).
+
+NEW IN v4.6
+  PRIVATE PROFILES ARE SKIPPED, NOT ERRORS. Raider.IO answers "403 Profile is private"
+  for a character whose owner hid it; such a character is now left out like an unknown
+  one (and cached as such for --cache-hours), instead of counting as a failed lookup -
+  a guild with five private members in a row used to abort the whole collection. The
+  summary says how many were skipped.
 
 NEW IN v4.5
   A REFUSED API KEY NO LONGER STOPS EVERYTHING. Raider.IO answers every request made
@@ -387,6 +394,13 @@ def api_get(path, params, max_retries=5):
     raise GaveUp(f"{path}: giving up after {max_retries} attempts ({problem})", status)
 
 
+def is_private(exc):
+    """Raider.IO refused one character's data because its owner made it private (HTTP 403
+    "Profile is private") - the request itself was fine."""
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 403 and "private" in response_message(response).lower()
+
+
 def failure_kind(exc):
     """How a request failed, for the reason an aborted collection gives: 'rate_limit' (HTTP 429
     to the end), 'unavailable' (5xx or no answer at all), 'refused' (401 / 403) or None."""
@@ -749,7 +763,8 @@ def fetch_profile(ref, with_runs=False):
     One /characters/profile call -> compact cache entry
     {'ilvl', 'crawled', 'guild'[, 'recent_runs']}; 'guild' is None when the character
     has no guild. 'guild' costs nothing extra, so it is always asked for.
-    Unknown character (400/404) -> an empty entry.
+    Unknown character (400/404) or a private profile (403, see is_private) -> an empty
+    entry, the latter marked 'private'.
     """
     region, realm, name = ref
     fields = "gear,guild" + (",mythic_plus_recent_runs" if with_runs else "")
@@ -757,8 +772,11 @@ def fetch_profile(ref, with_runs=False):
         data = api_get("characters/profile",
                        {"region": region, "realm": realm, "name": name, "fields": fields})
     except requests.HTTPError as exc:
-        if getattr(exc.response, "status_code", None) in (400, 404):
+        private = is_private(exc)
+        if private or getattr(exc.response, "status_code", None) in (400, 404):
             entry = {"ilvl": None, "crawled": None, "guild": None}
+            if private:
+                entry["private"] = True
             if with_runs:
                 entry["recent_runs"] = []
             return entry
@@ -992,6 +1010,8 @@ def get_profile(ref, cache, c, need_guild=False, with_runs=False):
     if (entry is not None and (not need_guild or "guild" in entry)
             and (not with_runs or "recent_runs" in entry)):
         c["profile_hits"] += 1
+        if entry.get("private"):
+            c["private_profiles"] += 1
         return entry
     try:
         entry = cache.put(key, fetch_profile(ref, with_runs))
@@ -1005,6 +1025,8 @@ def get_profile(ref, cache, c, need_guild=False, with_runs=False):
         return None
     c["error_streak"] = 0
     c["profile_calls"] += 1
+    if entry.get("private"):
+        c["private_profiles"] += 1
     pause(DELAY)
     return entry
 
@@ -1866,6 +1888,7 @@ def summary_lines(state, queue=None, ilvl_range=None):
                       ("skipped_idle", "guild member(s) skipped as idle - not crawled by Raider.IO "
                                        "since the season / --since-days window started "
                                        "(--include-idle checks them too)"),
+                      ("private_profiles", "character(s) skipped because their Raider.IO profile is private"),
                       ("skipped_old", "run(s) skipped by --since-days"),
                       ("skipped_gap", "player(s) skipped by --max-gap-days"),
                       ("skipped_ilvl_range", f"player(s) skipped for an item level outside the allowed "

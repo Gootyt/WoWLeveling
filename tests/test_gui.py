@@ -921,6 +921,7 @@ class GuiTests(unittest.TestCase):
                 view.changed()
             state["c"]["guilds_done"] = 1
             state["c"]["cached_runs"] = 1
+            state["c"]["private_profiles"] = 2
             view.event("guild Solutions@ragnaros@eu: 40 member(s), 38 to check")
             view.stop("finished")
             return None, state, guild_queue, "250-350"
@@ -958,6 +959,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(window.status_var.get(), "Kész.")
         self.assertIn("beolvasott guildek: 1", window.progress_var.get())
         self.assertIn("ebből korábban letöltött (a gyorsítótárból): 1", window.progress_var.get())
+        self.assertIn("privát profil, kihagyva: 2 karakter", window.progress_var.get())
         log = window.log.content()
         self.assertIn("season=season-mn-2", log)
         self.assertIn("guild Solutions@ragnaros@eu: 40 member(s)", log)
