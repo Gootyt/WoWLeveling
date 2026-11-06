@@ -83,8 +83,10 @@ megtervezéséhez és követéséhez.
   rendezve, új karakter, szerkesztés, törlés, sorrend és a terv beállításai. A gépi
   programmal a **saját (ingyenes) Firebase-adatbázisodon** át szinkronizál, magától
   (lásd lent, „Szinkronizálás a telefonnal”).
-- A listában állítható a karakterek jelenlegi szintje és sorrendje, a karakterek
-  szerkeszthetők és törölhetők.
+- A listában állítható a karakterek jelenlegi szintje és **sorrendje** (bármelyik
+  rendezésben: egy hellyel feljebb/lejjebb, vagy egyből a megadott helyre), a
+  karakterek szerkeszthetők és törölhetők. A telefonon a sorrend a „Sorrend”
+  képernyőn vagy a karakter szerkesztőjében módosítható.
 - Minden változást automatikusan elment.
 
 ## Követelmények
@@ -159,7 +161,8 @@ Minden tervnek saját adatbázisa lesz, a saját API-kulcsaival és gyorsítót�
    tervezett Raider.io oszlopai vannak, és alul a Raider.io pontszám állítható.
 4. **Haladás rögzítése**: jelöld ki a karaktert, írd be a jelenlegi szintjét
    (pl. `84,30`, majd Enter vagy „Beállítás”), vagy nyomd meg a „+1 szint”
-   gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Delete` törlés.
+   gombot. Billentyűvel: `+` / `-` egy szinttel feljebb/lejjebb, `Alt+↑` / `Alt+↓`
+   egy hellyel feljebb/lejjebb a sorrendben, `Delete` törlés.
    A Gear ablakban ugyanígy az itemlevel („+1 itemlevel”), a Mythic+ ablakban a
    Raider.io pontszám („+1 pont”) állítható; ezek üresre is törölhetők. Minden
    ablakban dupla kattintásra (vagy a „Szerkesztés…” gombbal) a karakter minden
@@ -176,9 +179,15 @@ Minden tervnek saját adatbázisa lesz, a saját API-kulcsaival és gyorsítót�
    az eredeti sorrendet. Az üres értékek (pl. a kész karakterek mai célja) mindig a
    lista végére kerülnek, a „Kaszt” szerinti rendezés pedig kaszton belül spec
    szerint rendez.
-6. **Sorrend**: a „▲ Feljebb” / „▼ Lejjebb” gombokkal, a # szerinti nézetben (a #
-   oszlop fejlécére kattintva). A sorrend határozza meg, melyik karakternek kell
-   elsőként, melyiknek utoljára elérnie a célszintet.
+6. **Sorrend**: a kijelölt karakter a „▲ Feljebb” / „▼ Lejjebb” gombbal egy hellyel
+   feljebb vagy lejjebb kerül; a „Hely” mezőbe írt számmal (Enter vagy
+   „Áthelyezés”) pedig egyből oda, a köztes karakterek egy hellyel arrébb csúsznak
+   (pl. a 7. karakter helyének `2`-t írva ő lesz a 2., az eddigi 2–6. pedig a 3–7.).
+   Ez bármelyik rendezésben működik, a Gear és a Mythic+ ablakban is: a nézet
+   rendezése marad, a karakter új helye a # oszlopban és a „Hely” mezőben látszik (a #
+   szerinti nézetben a sora is odébb kerül). A sorrend határozza meg, melyik
+   karakternek kell elsőként, melyiknek utoljára elérnie a célszintet; a céldátumok
+   azonnal az új sorrendhez igazodnak.
 7. **Murlok.io szerinti sorrend**: ez a gomb az összes karakter sorrendjét
    beállítja a Murlok.io-pontszámok alapján, körönként. Az első körbe minden
    class/specből egy karakter kerül (a legmagasabb szintű), a körön belül a
@@ -784,10 +793,19 @@ legkisebb) vagy **Név** (ábécérendben). A „Fordítva” kapcsoló megford�
 sorrendet; akinek nincs ilyen értéke (pl. nincs megadva az itemlevele), az mindig a
 végére kerül. A rendezés csak a nézetet változtatja meg, a terv sorrendjét (és így a
 céldátumokat) nem. A telefon megjegyzi a választást, és az nem szinkronizálódik (a
-gépi program listája továbbra is az állapot szerint nyílik meg). A karakter
-szerkesztőjében a „Feljebb” / „Lejjebb” gomb – mint a gépen – csak a terv szerinti
-sorrendben, fordítás nélkül használható, mert csak ebben látszik, hová került a
-karakter.
+gépi program listája továbbra is az állapot szerint nyílik meg).
+
+**A terv sorrendje a telefonon** (bármelyik rendezés mellett):
+
+- A lista alján lévő **„Sorrend”** gomb a karaktereket a terv sorrendjében mutatja, a
+  céldátumukkal. Koppints egy karakterre (kiemelődik), majd a képernyő alján lévő
+  „Feljebb” / „Lejjebb” gomb egy hellyel feljebb vagy lejjebb viszi; a kiemelt sor
+  látható marad, így a gomb újra és újra megnyomható. A változás azonnal mentődik (és
+  szinkronizáláskor a gépre is átkerül), a céldátumok rögtön az új sorrendhez
+  igazodnak.
+- A karakter **szerkesztőjében** a „Hely a tervben” mezővel egyből a kívánt helyre
+  tehető (a „Mentés” után); a köztes karakterek egy hellyel arrébb csúsznak. Az új
+  karakter a lista végére kerül.
 
 **Hogyan szinkronizál?**
 

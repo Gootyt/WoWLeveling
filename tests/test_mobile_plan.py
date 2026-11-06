@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import storage
-from leveling import SEQUENTIAL, SORT_KEYS, Character, LevelingData, Settings, SpecScores, build_plan
+from leveling import SEQUENTIAL, SORT_KEYS, Character, LevelingData, Settings, SpecScores, build_plan, format_date
 
 # A gyökérben lévő közös modulok maradjanak elöl (az android/app-ba bemásoltak régebbiek lehetnek).
 sys.path.append(str(Path(__file__).resolve().parent.parent / "android" / "app"))
@@ -16,6 +16,10 @@ import mobile_plan  # noqa: E402
 
 D = Decimal
 TODAY = date(2026, 10, 27)
+
+
+def find(data, uid):
+    return next(character for character in data.characters if character.uid == uid)
 
 
 def sample() -> LevelingData:
@@ -81,10 +85,25 @@ class SortTests(unittest.TestCase):
         self.assertEqual(mobile_plan.cards(data, TODAY, "name")[0].title, "3. Arthas")
         self.assertEqual(mobile_plan.DEFAULT_SORT, ("status", False))
 
-    def test_moving_only_in_plan_order(self):
-        self.assertEqual(mobile_plan.move_hint("position", False), "")
-        self.assertIn("„Terv szerinti sorrend”", mobile_plan.move_hint("status", False))
-        self.assertIn("„Fordítva”", mobile_plan.move_hint("position", True))
+    def test_order_rows(self):
+        data = sample()
+        rows = mobile_plan.order_rows(data)
+        self.assertEqual([row.uid for row in rows], ["thrall1", "jaina22", "arthas3"])  # a terv sorrendje
+        settings = data.settings
+        self.assertEqual(
+            [(row.title, row.subtitle) for row in rows],
+            [
+                ("1. Thrall (Draenor)", f"Enhancement Shaman · szint 83,45 · céldátum: {format_date(settings.first_target_date)}"),
+                ("2. Jaina", f"Frost Mage · szint 90,00 · céldátum: {format_date(TODAY + timedelta(days=10))}"),
+                ("3. Arthas", f"szint 81,00 · céldátum: {format_date(settings.last_target_date)}"),
+            ],
+        )
+        # Átrendezés után a céldátumok az új sorrendhez igazodnak.
+        self.assertTrue(mobile_plan.move_character(data, "arthas3", -1))
+        rows = mobile_plan.order_rows(data)
+        self.assertEqual([row.title for row in rows], ["1. Thrall (Draenor)", "2. Arthas", "3. Jaina"])
+        self.assertTrue(rows[1].subtitle.endswith(format_date(TODAY + timedelta(days=10))))
+        self.assertEqual(mobile_plan.order_rows(LevelingData(Settings.default())), [])
 
     def test_saved_sort(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -106,8 +125,8 @@ class EditTests(unittest.TestCase):
         data = sample()
         uther = mobile_plan.save_character(data, None, {"name": " Uther ", "class": "Paladin", "spec": "Holy", "level": ""})
         self.assertEqual((data.characters[-1], uther.level, uther.spec), (uther, D(80), "Holy"))  # üres szint: a kezdőszint
-        form = mobile_plan.character_form(data.characters[0])
-        self.assertEqual(form["level"], "83,45")
+        form = mobile_plan.character_form(data, data.characters[0])
+        self.assertEqual((form["level"], form["position"]), ("83,45", "1"))
         form.update(level="84,5", item_level="303,25", score="", **{"class": "Mage"})  # a régi spec nem illik az új kaszthoz
         thrall = mobile_plan.save_character(data, "thrall1", form)
         self.assertEqual((thrall.level, thrall.item_level, thrall.raiderio_score, thrall.spec), (D("84.50"), D("303.25"), None, ""))
@@ -125,11 +144,33 @@ class EditTests(unittest.TestCase):
         self.assertTrue(mobile_plan.move_character(data, uther.uid, -1))
         self.assertEqual([c.name for c in data.characters], ["Thrall", "Jaina", "Uther", "Arthas"])
         self.assertFalse(mobile_plan.move_character(data, "thrall1", -1))  # már az első
+        self.assertFalse(mobile_plan.move_character(data, "arthas3", 1))  # már az utolsó
+        self.assertFalse(mobile_plan.move_character(data, "nincs-ilyen", 1))
+        self.assertEqual(mobile_plan.position_of(data, uther.uid), 3)
+        self.assertIsNone(mobile_plan.position_of(data, None))
+
+        # A szerkesztőben megadott hely: a köztük lévők egy hellyel arrébb csúsznak.
+        form = mobile_plan.character_form(data, find(data, "arthas3"))
+        self.assertEqual(form["position"], "4")
+        mobile_plan.save_character(data, "arthas3", dict(form, position="2", level="82"))
+        self.assertEqual([c.name for c in data.characters], ["Thrall", "Arthas", "Jaina", "Uther"])
+        self.assertEqual(find(data, "arthas3").level, D(82))
+        for position, message in (("0", "Hely a tervben: A hely 1 és 4 között"), ("első", "nem érvényes hely"), ("", "Hiányzik a hely")):
+            with self.subTest(position=position), self.assertRaisesRegex(ValueError, message):
+                mobile_plan.save_character(data, "arthas3", dict(form, position=position, level="88"))
+        self.assertEqual(find(data, "arthas3").level, D(82))  # a hibás hellyel semmi sem változott
+        self.assertEqual([c.name for c in data.characters], ["Thrall", "Arthas", "Jaina", "Uther"])
+        # Az új karakter mindig a lista végére kerül (a szerkesztőjében nincs hely mező).
+        self.assertNotIn("position", mobile_plan.character_form(data, None))
+        anduin = mobile_plan.save_character(data, None, {"name": "Anduin", "position": "1"})
+        self.assertIs(data.characters[-1], anduin)
+        data.characters.remove(anduin)
+
         mobile_plan.delete_character(data, "jaina22")
-        self.assertEqual([c.name for c in data.characters], ["Thrall", "Uther", "Arthas"])
+        self.assertEqual([c.name for c in data.characters], ["Thrall", "Arthas", "Uther"])
         self.assertEqual(mobile_plan.spec_choices("Mage"), ("", "Arcane", "Fire", "Frost"))
         self.assertEqual(mobile_plan.spec_choices(""), ("",))
-        self.assertEqual(mobile_plan.character_form(None)["name"], "")
+        self.assertEqual(mobile_plan.character_form(data, None)["name"], "")
 
     def test_settings(self):
         data = sample()

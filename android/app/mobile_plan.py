@@ -1,5 +1,6 @@
 """A telefonos alkalmazás felülettől független része: a karakterlista kártyáinak szövegei és
-rendezése, a karakterek felvétele, szerkesztése, törlése és átrendezése, valamint a terv beállításai
+rendezése, a karakterek felvétele, szerkesztése, törlése és átrendezése (a „Sorrend” képernyő sorai
+is), valamint a terv beállításai
 – ugyanazzal a számolással és ellenőrzéssel, mint a gépi program (leveling.py). A Kivy-felület
 (main.py) csak megjeleníti őket; így ez a rész a szokásos tesztekkel is ellenőrizhető
 (tests/test_mobile_plan.py).
@@ -21,6 +22,7 @@ from leveling import (
     Settings,
     Status,
     build_plan,
+    deadlines,
     format_date,
     format_deviation,
     format_item_level,
@@ -31,9 +33,11 @@ from leveling import (
     parse_date,
     parse_item_level,
     parse_level,
+    parse_position,
     parse_raiderio_score,
     sort_plans,
 )
+from leveling import move_character as move_to_position
 from wow_data import WOW_CLASSES, WOW_RACES, specs_for_class
 
 # Az állapotok színe a kártyákon (RGBA, 0–1): a gépi program listájának színeihez hasonlóan.
@@ -64,7 +68,6 @@ SORTS = {
     "raiderio": "Mythic+ pontszám",
     "name": "Név",
 }
-PLAN_ORDER = ("position", False)  # a terv sorrendje (a címekben a sorszám): csak ebben lehet átrendezni
 DEFAULT_SORT = ("status", False)  # mint a gépi program listája: elöl a legsürgősebbek, a kész karakterek a végén
 
 
@@ -82,6 +85,20 @@ class Card:
     gear_tone: tuple
     mplus: str  # „M+ 1234,0 · terv 1234,0 · 0,0”
     mplus_tone: tuple
+
+
+@dataclass(frozen=True)
+class OrderRow:
+    """Egy karakter sora a „Sorrend” képernyőn (a terv sorrendjében)."""
+
+    uid: str
+    title: str  # „3. Thrall (Draenor)”, mint a kártyán
+    subtitle: str  # „Enhancement Shaman · szint 83,45 · céldátum: 2026-11-06”
+
+
+def card_title(position: int, character: Character) -> str:
+    """A karakter címe a helyével a tervben, pl. „1. Thrall (Draenor)”."""
+    return f"{position}. {character.name}" + (f" ({character.realm})" if character.realm else "")
 
 
 def goal_day(data: LevelingData, today: date) -> date:
@@ -110,7 +127,6 @@ def cards(data: LevelingData, today: date, sort: str = "position", descending: b
     result = []
     for plan in sort_plans(plans, sort, descending):
         character = plan.character
-        title = f"{plan.position}. {character.name}" + (f" ({character.realm})" if character.realm else "")
         subtitle = " · ".join(
             part for part in (" ".join(p for p in (character.spec, character.char_class) if p), character.race) if part
         )
@@ -123,7 +139,7 @@ def cards(data: LevelingData, today: date, sort: str = "position", descending: b
         result.append(
             Card(
                 uid=character.uid,
-                title=title,
+                title=card_title(plan.position, character),
                 subtitle=subtitle,
                 level=level,
                 status=plan.status_text,
@@ -184,24 +200,16 @@ def save_sort(database, sort: str, descending: bool) -> None:
     storage.write_document(database, storage.PHONE_VIEW, json.dumps({"sort": sort, "descending": descending}))
 
 
-def move_hint(sort: str, descending: bool) -> str:
-    """Miért nem vihető most feljebb vagy lejjebb a karakter ("": ha vihető). Mint a gépi programban:
-    csak a terv sorrendjében látszik, hová kerül."""
-    if sort != PLAN_ORDER[0]:
-        return f"Feljebb vagy lejjebb vinni a lista „{SORTS[PLAN_ORDER[0]]}” rendezésében lehet."
-    if descending != PLAN_ORDER[1]:
-        return "Feljebb vagy lejjebb vinni a „Fordítva” kikapcsolása után lehet."
-    return ""
-
-
 # --- a karakterek szerkesztése ----------------------------------------------------------
 
 
-def character_form(character: Character | None) -> dict:
-    """A szerkesztő mezők szövegei (új karakternél üresek)."""
+def character_form(data: LevelingData, character: Character | None) -> dict:
+    """A szerkesztő mezők szövegei (új karakternél üresek; a helye a tervben csak a meglévőnél van:
+    az új a lista végére kerül)."""
     if character is None:
         return {"name": "", "realm": "", "class": "", "spec": "", "race": "", "level": "", "item_level": "", "score": ""}
     return {
+        "position": str(position_of(data, character.uid)),
         "name": character.name,
         "realm": character.realm,
         "class": character.char_class,
@@ -221,9 +229,15 @@ def find(data: LevelingData, uid: str | None) -> Character | None:
     return next((character for character in data.characters if character.uid == uid), None)
 
 
+def position_of(data: LevelingData, uid: str | None) -> int | None:
+    """A karakter helye a terv sorrendjében (1-től), vagy None, ha nincs ilyen karakter."""
+    return next((index for index, character in enumerate(data.characters, start=1) if character.uid == uid), None)
+
+
 def save_character(data: LevelingData, uid: str | None, form: dict) -> Character:
-    """A szerkesztett (uid: None esetén az új, a lista végére kerülő) karakter. ValueError magyar
-    üzenettel, ha valamelyik mező hibás; ekkor az adatok nem változnak."""
+    """A szerkesztett (uid: None esetén az új, a lista végére kerülő) karakter; a meglévő a „position”
+    mezőben megadott helyre is kerül a terv sorrendjében. ValueError magyar üzenettel, ha valamelyik
+    mező hibás; ekkor az adatok nem változnak."""
     name = form.get("name", "").strip()
     if not name:
         raise ValueError("Add meg a karakter nevét.")
@@ -247,12 +261,20 @@ def save_character(data: LevelingData, uid: str | None, form: dict) -> Character
     character = find(data, uid)
     if uid is not None and character is None:
         raise ValueError("Ez a karakter közben törlődött (pl. a másik eszközön).")
+    position = None
+    if character is not None and "position" in form:
+        try:
+            position = parse_position(form["position"], len(data.characters))
+        except ValueError as exc:
+            raise ValueError(f"Hely a tervben: {exc}") from exc
     if character is None:
         character = Character(name)
         data.characters.append(character)
     character.name, character.realm, character.race = name, form.get("realm", "").strip(), form.get("race", "").strip()
     character.char_class, character.spec, character.level = char_class, spec, level
     character.item_level, character.raiderio_score = item_level, score
+    if position is not None:
+        move_to_position(data.characters, character, position)
     return character
 
 
@@ -261,13 +283,24 @@ def delete_character(data: LevelingData, uid: str) -> None:
 
 
 def move_character(data: LevelingData, uid: str, offset: int) -> bool:
-    """A karakter eggyel feljebb (offset=-1) vagy lejjebb (+1) a listában; igaz, ha mozdult."""
-    characters = data.characters
-    index = next((i for i, character in enumerate(characters) if character.uid == uid), None)
-    if index is None or not 0 <= index + offset < len(characters):
+    """A karakter eggyel feljebb (offset=-1) vagy lejjebb (+1) a terv sorrendjében; igaz, ha mozdult."""
+    position = position_of(data, uid)
+    if position is None or not 1 <= position + offset <= len(data.characters):
         return False
-    characters[index], characters[index + offset] = characters[index + offset], characters[index]
-    return True
+    return move_to_position(data.characters, find(data, uid), position + offset)
+
+
+def order_rows(data: LevelingData) -> list[OrderRow]:
+    """A „Sorrend” képernyő sorai: a karakterek a terv sorrendjében, a céldátumukkal (ez a sorrendből
+    adódik, így átrendezéskor látszik, mi változott)."""
+    rows = []
+    ends = deadlines(data.settings, len(data.characters))
+    for position, (character, deadline) in enumerate(zip(data.characters, ends), start=1):
+        kind = " ".join(part for part in (character.spec, character.char_class) if part)
+        details = [kind] if kind else []
+        details += [f"szint {format_level(character.level)}", f"céldátum: {format_date(deadline)}"]
+        rows.append(OrderRow(character.uid, card_title(position, character), " · ".join(details)))
+    return rows
 
 
 # --- a terv beállításai -----------------------------------------------------------------

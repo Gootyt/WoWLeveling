@@ -637,6 +637,36 @@ def sort_plans(plans: list[CharacterPlan], key: str = "position", descending: bo
     return sorted(present, key=get, reverse=descending) + missing
 
 
+_POSITION_PATTERN = re.compile(r"([0-9]+)\s*\.?")
+
+
+def parse_position(text: str, count: int) -> int:
+    """A karakter helye (sorszáma) a `count` karakteres listában: 1 és `count` közötti egész
+    szám; a sorszám utáni pont (pl. „3.”) is jó."""
+    original = text.strip()
+    if not original:
+        raise ValueError("Hiányzik a hely (hányadik legyen a karakter a sorrendben).")
+    match = _POSITION_PATTERN.fullmatch(original)
+    if match is None:
+        raise ValueError(f"„{original}” nem érvényes hely (egész szám, pl. 3).")
+    position = int(match.group(1))
+    if not 1 <= position <= count:
+        raise ValueError(f"A hely 1 és {count} között lehet." if count > 1 else "Egy karakter van, a helye csak 1 lehet.")
+    return position
+
+
+def move_character(characters: list[Character], character: Character, position: int) -> bool:
+    """A karakter áthelyezése a lista `position`-edik helyére (1-től számolva; a lista elejénél
+    vagy végénél nem tovább). A köztes karakterek egy hellyel arrébb csúsznak, a többiek helye
+    nem változik. Igaz, ha változott a sorrend (és így a céldátumok)."""
+    index = characters.index(character)
+    target = min(max(position, 1), len(characters)) - 1
+    if target == index:
+        return False
+    characters.insert(target, characters.pop(index))
+    return True
+
+
 def _number_article(number: int) -> str:
     """Határozott névelő sorszám elé: „az 1.”, „az 5.”, „az 50.”, de „a 2.”, „a 10.”."""
     digits = str(number)

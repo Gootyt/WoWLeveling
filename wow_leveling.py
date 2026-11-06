@@ -61,6 +61,7 @@ from leveling import (
     goal_day_phrase,
     load_data,
     lookahead_day,
+    move_character,
     murlok_order,
     parse_date,
     plan_item_levels,
@@ -68,6 +69,7 @@ from leveling import (
     parse_item_level,
     reached_target_item_level,
     parse_level,
+    parse_position,
     parse_raiderio_score,
     save_data,
     sort_plans,
@@ -129,7 +131,6 @@ HOVER_DAY_COLOR = "#cfe0f5"
 OTHER_MONTH_COLOR = "#9aa0a6"
 
 SORT_ARROWS = {False: " ▲", True: " ▼"}  # növekvő / csökkenő rendezés jele a fejlécben
-PLAN_ORDER = ("position", False)  # a lista eredeti (# szerinti) sorrendje
 # A karakterlista mindig az állapot szerint nyílik meg: elöl a legsürgősebbek, a célszintet elértek a végén.
 LIST_ORDER = ("status", False)
 GEAR_ORDER = ("item_level_deviation", False)  # a Gear ablak alapból az itemlevel-eltérés szerint rendez
@@ -632,7 +633,8 @@ class CharacterListWindow(tk.Toplevel):
     SORT_ATTRIBUTE = "list_sort"
     EDITED_FIELD = LEVEL_FIELD  # ezt lehet módosítani az ablak alján a kijelölt karakternél
     HINT_TEXT = (
-        "A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie a célszintet. "
+        "A sorrend számít: az első karakternek kell elsőként, az utolsónak utoljára elérnie a célszintet; "
+        "alul, a kijelölt karakternél módosítható. "
         "A „Mai cél” az a szint, amelyet a mai nap végéig el kell érni (előretekintéskor a következő "
         "napé), a „Szinteltérés” pedig azt mutatja, hány szinttel jár a karakter a terv előtt (+) vagy "
         "mögött (−). A „Murlok.io” oszlop a karakter specjének pontszáma a Murlok.io Mythic+ rangsorában. "
@@ -672,7 +674,7 @@ class CharacterListWindow(tk.Toplevel):
         self.summary_var = tk.StringVar()
         self.selected_var = tk.StringVar()
         self.value_var = tk.StringVar()  # a kijelölt karakter módosítható száma (lásd EDITED_FIELD)
-        self.order_hint_var = tk.StringVar()
+        self.position_var = tk.StringVar()  # a kijelölt karakter helye a terv sorrendjében (a # oszlop)
         self.day_var = tk.StringVar()
         self.look_ahead_var = tk.BooleanVar(value=app.data.look_ahead)
         self.look_ahead_info_var = tk.StringVar()
@@ -757,6 +759,8 @@ class CharacterListWindow(tk.Toplevel):
         self.tree.bind("<Delete>", lambda _event: self.delete_selected())
         for key, delta in (("<plus>", 1), ("<KP_Add>", 1), ("<minus>", -1), ("<KP_Subtract>", -1)):
             self.tree.bind(key, lambda _event, delta=delta: self.change_value(delta))
+        for key, offset in (("<Alt-Up>", -1), ("<Alt-Down>", 1)):
+            self.tree.bind(key, lambda _event, offset=offset: self._move_by_key(offset))
 
         selected = ttk.LabelFrame(body, text="Kijelölt karakter", padding=8)
         selected.pack(fill="x", pady=(10, 0))
@@ -773,22 +777,41 @@ class CharacterListWindow(tk.Toplevel):
         plus_button = ttk.Button(value_row, text=f"+1 {field.unit}", command=lambda: self.change_value(1))
         plus_button.pack(side="left", padx=(6, 0))
 
+        # A sorrend bármelyik rendezésben módosítható: feljebb, lejjebb, vagy egyből a megadott helyre.
         action_row = ttk.Frame(selected)
         action_row.pack(fill="x", pady=(8, 0))
-        up_button = ttk.Button(action_row, text="▲ Feljebb", command=lambda: self.move_selected(-1))
-        down_button = ttk.Button(action_row, text="▼ Lejjebb", command=lambda: self.move_selected(1))
+        self.up_button = ttk.Button(action_row, text="▲ Feljebb", command=lambda: self.move_selected(-1))
+        self.down_button = ttk.Button(action_row, text="▼ Lejjebb", command=lambda: self.move_selected(1))
+        position_label = ttk.Label(action_row, text="Hely:")
+        self.position_entry = ttk.Entry(action_row, textvariable=self.position_var, width=5, justify="center")
+        self.position_entry.bind("<Return>", lambda _event: self.apply_position())
+        move_button = ttk.Button(action_row, text="Áthelyezés", command=self.apply_position)
         self.murlok_order_button = ttk.Button(
             action_row, text="Murlok.io szerinti sorrend", command=self.order_by_murlok
         )
         edit_button = ttk.Button(action_row, text="Szerkesztés…", command=self.edit_selected)
         delete_button = ttk.Button(action_row, text="Törlés", command=self.delete_selected)
-        for button in (up_button, down_button, self.murlok_order_button, edit_button, delete_button):
-            button.pack(side="left", padx=(0, 6))
-        self.order_hint_label = ttk.Label(action_row, textvariable=self.order_hint_var, style="Hint.TLabel")
-        self.order_hint_label.pack(side="left", padx=(6, 0))
+        for widget, gap in (
+            (self.up_button, 6),
+            (self.down_button, 12),
+            (position_label, 4),
+            (self.position_entry, 6),
+            (move_button, 12),
+            (self.murlok_order_button, 6),
+            (edit_button, 6),
+            (delete_button, 6),
+        ):
+            widget.pack(side="left", padx=(0, gap))
         self.action_row = action_row
-        self._selection_widgets = (self.value_spin, set_button, plus_button, edit_button, delete_button)
-        self._order_widgets = (up_button, down_button)  # csak az eredeti sorrendben használhatók
+        self._selection_widgets = (
+            self.value_spin,
+            set_button,
+            plus_button,
+            self.position_entry,
+            move_button,
+            edit_button,
+            delete_button,
+        )
 
         footer = ttk.Frame(body)
         footer.pack(fill="x", pady=(10, 0))
@@ -964,16 +987,19 @@ class CharacterListWindow(tk.Toplevel):
         character = self._selected_character()
         for widget in self._selection_widgets:
             widget.state(["!disabled" if character else "disabled"])
-        in_plan_order = self.view_sort == PLAN_ORDER
-        for widget in self._order_widgets:
-            widget.state(["!disabled" if character and in_plan_order else "disabled"])
-        self.order_hint_var.set("" if in_plan_order else "Az átrendezéshez rendezd a listát a # oszlop szerint.")
+        characters = self.app.data.characters
+        index = None if character is None else characters.index(character)
+        # Feljebb és lejjebb bármelyik rendezésben lehet, csak a lista elejénél, illetve végénél nem.
+        self.up_button.state(["!disabled" if index is not None and index > 0 else "disabled"])
+        self.down_button.state(["!disabled" if index is not None and index < len(characters) - 1 else "disabled"])
         if character is None:
             self.selected_var.set("– nincs kijelölve –")
             self.value_var.set("")
+            self.position_var.set("")
         else:
             self.selected_var.set(describe_character(character))
             self._show_value(character)
+            self._show_position(character)
 
     def sort_by(self, key: str) -> None:
         """Rendezés oszlop szerint; ugyanarra az oszlopra kattintva megfordul az irány."""
@@ -1058,16 +1084,47 @@ class CharacterListWindow(tk.Toplevel):
         # A nézet rendezése marad (a karakterlistában az állapot szerinti); az új sorrend a # oszlopban látszik.
         self.app.data_changed(select=self._selected_character())
 
+    def _show_position(self, character: Character) -> None:
+        self.position_var.set(str(self.app.data.characters.index(character) + 1))
+
     def move_selected(self, offset: int) -> None:
+        """A kijelölt karakter egy hellyel feljebb (−1) vagy lejjebb (+1) a terv sorrendjében.
+
+        Bármelyik rendezésben lehet: a nézet rendezése marad, a karakter új helye a # oszlopban és a
+        „Hely” mezőben látszik (a # szerinti nézetben a sora is odébb kerül).
+        """
         character = self._selected_character()
-        if character is None or self.view_sort != PLAN_ORDER:
+        if character is None:
             return
         characters = self.app.data.characters
-        index = characters.index(character)
-        target = index + offset
-        if 0 <= target < len(characters):
-            characters[index], characters[target] = characters[target], characters[index]
+        position = characters.index(character) + 1 + offset
+        if not 1 <= position <= len(characters):
+            self.bell()  # már az első (vagy az utolsó)
+            return
+        move_character(characters, character, position)
+        self.app.data_changed(select=character)
+
+    def _move_by_key(self, offset: int) -> str:
+        self.move_selected(offset)
+        return "break"  # a táblázat saját fel/le léptetése ne vigye el a kijelölést
+
+    def apply_position(self) -> None:
+        """A kijelölt karakter áthelyezése a „Hely” mezőbe írt helyre; a köztük lévők egy hellyel
+        arrébb csúsznak."""
+        character = self._selected_character()
+        if character is None:
+            return
+        characters = self.app.data.characters
+        try:
+            position = parse_position(self.position_var.get(), len(characters))
+        except ValueError as exc:
+            messagebox.showwarning("Hibás hely", str(exc), parent=self)
+            self._show_position(character)
+            return
+        if move_character(characters, character, position):
             self.app.data_changed(select=character)
+        else:
+            self._show_position(character)  # pl. „3.” helyett „3”
 
     def edit_selected(self) -> None:
         character = self._selected_character()
@@ -1188,7 +1245,7 @@ class GearWindow(CharacterListWindow):
             self.action_row,
             text="Gear ajánló…",
             command=lambda: self.app.open_gear_advisor(self._selected_character()),
-        ).pack(side="left", padx=(0, 6), before=self.order_hint_label)
+        ).pack(side="left", padx=(0, 6))
         self.info_var = tk.StringVar()  # a terv összefoglalója a táblázat fölött
         self.info_label = ttk.Label(self.table_frame.master, textvariable=self.info_var)
         self.info_label.pack(anchor="w", pady=(0, 6), before=self.table_frame)

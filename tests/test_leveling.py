@@ -30,10 +30,12 @@ from leveling import (
     leveling_windows,
     load_data,
     lookahead_day,
+    move_character,
     murlok_order,
     parse_date,
     parse_item_level,
     parse_level,
+    parse_position,
     parse_raiderio_score,
     plan_item_levels,
     plan_raiderio_scores,
@@ -430,6 +432,47 @@ class SortTests(unittest.TestCase):
         names = ["Zoli", "Ödön", "Oszkár", "Ábel", "abel"]
         plans = build_plan(make_settings(), [Character(name) for name in names], START)
         self.assertEqual(self.names(sort_plans(plans, "name")), ["abel", "Ábel", "Oszkár", "Ödön", "Zoli"])
+
+
+class OrderTests(unittest.TestCase):
+    def test_move_character_to_a_position(self):
+        characters = [Character(name) for name in "ABCDE"]
+        a, b, c, d, e = characters
+
+        def names():
+            return "".join(character.name for character in characters)
+
+        self.assertTrue(move_character(characters, d, 2))  # B és C egy hellyel lejjebb csúszik
+        self.assertEqual(names(), "ADBCE")
+        self.assertTrue(move_character(characters, a, 4))  # D, B és C egy hellyel feljebb
+        self.assertEqual(names(), "DBCAE")
+        self.assertFalse(move_character(characters, c, 3))  # már ott van
+        self.assertTrue(move_character(characters, b, 0))  # az elejénél nem tovább
+        self.assertTrue(move_character(characters, d, 99))  # a végénél sem
+        self.assertEqual(names(), "BCAED")
+        self.assertFalse(move_character(characters, b, -5))
+        # A céldátumok a lista sorrendjét követik.
+        plans = build_plan(make_settings(), characters, START)
+        self.assertEqual([plan.character for plan in plans], [b, c, a, e, d])
+        self.assertEqual(plans[0].deadline, make_settings().first_target_date)
+
+    def test_parse_position(self):
+        for text, expected in (("3", 3), (" 1 ", 1), ("12.", 12), ("05", 5)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_position(text, 12), expected)
+        for text, message in (
+            ("", "Hiányzik a hely"),
+            ("harmadik", "„harmadik” nem érvényes hely"),
+            ("2,5", "nem érvényes hely"),
+            ("-1", "nem érvényes hely"),
+            ("0", "1 és 12 között"),
+            ("13", "1 és 12 között"),
+        ):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, message):
+                parse_position(text, 12)
+        self.assertEqual(parse_position("1", 1), 1)
+        with self.assertRaisesRegex(ValueError, "csak 1 lehet"):
+            parse_position("2", 1)
 
 
 class DayProgressTests(unittest.TestCase):
