@@ -36,7 +36,7 @@ from kivy.clock import Clock  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
 from kivy.metrics import dp  # noqa: E402
-from kivy.properties import BooleanProperty, ListProperty, StringProperty  # noqa: E402
+from kivy.properties import ListProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
 from kivy.uix.button import Button  # noqa: E402
@@ -56,11 +56,6 @@ ACCOUNT_HINT = (
     "a Web API-kulcsot, adatbázist és fiókot add meg, mint a gépen (a gépi programban a „Telefonos "
     "alkalmazás” keret „Beállítás…” gombjával). A projekt létrehozását a README „Szinkronizálás a "
     "telefonnal” része írja le."
-)
-ORDER_HINT = (
-    "A sorrend határozza meg, melyik karakternek kell elsőként, melyiknek utoljára elérnie a célszintet: a "
-    "céldátumok ehhez igazodnak. Koppints egy karakterre, majd vidd feljebb vagy lejjebb (a változás azonnal "
-    "mentődik). A karakter szerkesztőjében egyből a kívánt helyére is teheted."
 )
 
 KV = """
@@ -139,28 +134,6 @@ KV = """
         color: root.mplus_tone
         font_size: '14sp'
         height: (self.texture_size[1] + dp(2)) if root.mplus else 0
-
-<OrderRow>:
-    orientation: 'vertical'
-    size_hint_y: None
-    height: self.minimum_height
-    padding: dp(12), dp(8)
-    spacing: dp(1)
-    canvas.before:
-        Color:
-            rgba: (0.2, 0.33, 0.52, 1) if self.chosen else ((0.24, 0.25, 0.3, 1) if self.state == 'down' else (0.15, 0.16, 0.2, 1))
-        RoundedRectangle:
-            pos: self.pos
-            size: self.size
-            radius: [dp(8)]
-    WrapLabel:
-        text: root.title
-        bold: True
-        font_size: '16sp'
-    WrapLabel:
-        text: root.subtitle
-        color: 0.75, 0.77, 0.83, 1
-        font_size: '13sp'
 
 <TopBar@BoxLayout>:
     size_hint_y: None
@@ -244,61 +217,9 @@ KV = """
             size_hint_y: None
             height: dp(58)
             padding: dp(6)
-            spacing: dp(6)
             Button:
                 text: '+ Új karakter'
                 on_release: app.edit_character(None)
-            Button:
-                text: 'Sorrend'
-                on_release: app.open_order()
-
-<OrderScreen>:
-    BoxLayout:
-        orientation: 'vertical'
-        TopBar:
-            Label:
-                text: 'Sorrend'
-                bold: True
-                font_size: '18sp'
-                halign: 'left'
-                text_size: self.size
-                valign: 'middle'
-            Button:
-                text: 'Vissza'
-                size_hint_x: None
-                width: dp(84)
-                on_release: app.show_list()
-        BoxLayout:
-            size_hint_y: None
-            height: self.minimum_height
-            padding: dp(10), dp(6)
-            WrapLabel:
-                id: hint
-                font_size: '14sp'
-                color: 0.72, 0.74, 0.8, 1
-        ScrollView:
-            id: scroll
-            do_scroll_x: False
-            GridLayout:
-                id: rows
-                cols: 1
-                size_hint_y: None
-                height: self.minimum_height
-                padding: dp(8)
-                spacing: dp(8)
-        BoxLayout:
-            size_hint_y: None
-            height: dp(58)
-            padding: dp(6)
-            spacing: dp(6)
-            Button:
-                id: up
-                text: 'Feljebb'
-                on_release: app.move_in_order(-1)
-            Button:
-                id: down
-                text: 'Lejjebb'
-                on_release: app.move_in_order(1)
 
 <FormScreen>:
     BoxLayout:
@@ -347,25 +268,8 @@ class Card(ButtonBehavior, BoxLayout):
         App.get_running_app().edit_character(self.character_id)
 
 
-class OrderRow(ButtonBehavior, BoxLayout):
-    """Egy karakter a „Sorrend” képernyőn; koppintásra kijelölődik, és a képernyő alján lévő két gomb
-    ezt viszi feljebb vagy lejjebb."""
-
-    character_id = StringProperty("")
-    title = StringProperty("")
-    subtitle = StringProperty("")
-    chosen = BooleanProperty(False)
-
-    def on_release(self):
-        App.get_running_app().choose_in_order(self.character_id)
-
-
 class ListScreen(Screen):
     pass
-
-
-class OrderScreen(Screen):
-    """A terv sorrendje: a karakterek a helyükkel és a céldátumukkal, alul a Feljebb / Lejjebb gombbal."""
 
 
 class FormScreen(Screen):
@@ -432,11 +336,8 @@ class WowApp(App):
         self.manager = ScreenManager(transition=NoTransition())
         self.list_screen = ListScreen(name="list")
         self.form_screen = FormScreen(name="form")
-        self.order_screen = OrderScreen(name="order")
-        for screen in (self.list_screen, self.form_screen, self.order_screen):
-            self.manager.add_widget(screen)
-        self.order_uid = None  # a „Sorrend” képernyőn kijelölt karakter
-        self.order_widgets = {}  # karakter uid → a sora a „Sorrend” képernyőn
+        self.manager.add_widget(self.list_screen)
+        self.manager.add_widget(self.form_screen)
         ids = self.list_screen.ids
         ids.sort.values = list(mobile_plan.SORTS.values())
         ids.sort.text = mobile_plan.SORTS[self.list_sort[0]]
@@ -541,50 +442,6 @@ class WowApp(App):
             return
         self.sync.sync_now()
 
-    # --- a terv sorrendje
-
-    def open_order(self) -> None:
-        self.order_uid = None
-        self.manager.current = "order"
-        self.refresh_order()
-        self.order_screen.ids.scroll.scroll_y = 1
-
-    def refresh_order(self) -> None:
-        """A „Sorrend” képernyő sorai a terv sorrendjében; a kijelölés marad (ha a karakter még megvan)."""
-        ids = self.order_screen.ids
-        if mobile_plan.find(self.data, self.order_uid) is None:  # pl. közben törölték a másik eszközön
-            self.order_uid = None
-        ids.hint.text = ORDER_HINT if self.data.characters else mobile_plan.summary(self.data, self.today)
-        ids.rows.clear_widgets()
-        self.order_widgets = {}
-        for row in mobile_plan.order_rows(self.data):
-            widget = OrderRow(character_id=row.uid, title=row.title, subtitle=row.subtitle, chosen=row.uid == self.order_uid)
-            ids.rows.add_widget(widget)
-            self.order_widgets[row.uid] = widget
-        self._update_order_buttons()
-
-    def _update_order_buttons(self) -> None:
-        ids = self.order_screen.ids
-        position = mobile_plan.position_of(self.data, self.order_uid)
-        ids.up.disabled = position is None or position == 1
-        ids.down.disabled = position is None or position == len(self.data.characters)
-
-    def choose_in_order(self, uid: str) -> None:
-        self.order_uid = uid
-        for row_uid, widget in self.order_widgets.items():
-            widget.chosen = row_uid == uid
-        self._update_order_buttons()
-
-    def move_in_order(self, offset: int) -> None:
-        """A kijelölt karakter egy hellyel feljebb (−1) vagy lejjebb (+1); azonnal menti (és szinkronizálja)."""
-        if self.order_uid is None or not mobile_plan.move_character(self.data, self.order_uid, offset):
-            return
-        self.save()
-        self.refresh_order()
-        widget = self.order_widgets.get(self.order_uid)
-        if widget is not None:  # a kijelölt sor maradjon látható
-            self.order_screen.ids.scroll.scroll_to(widget, padding=dp(16), animate=False)
-
     # --- a karakter szerkesztése
 
     def edit_character(self, uid: str | None) -> None:
@@ -596,7 +453,7 @@ class WowApp(App):
             self.show_list()
             return
         form = self.form_screen.clear("Új karakter" if character is None else character.name)
-        values = mobile_plan.character_form(self.data, character)
+        values = mobile_plan.character_form(character)
         fields = {}
 
         def text_field(key, label, hint="", input_type="text"):
@@ -626,9 +483,6 @@ class WowApp(App):
         text_field("level", "Szint (két tizedes: 83,45)", hint="üresen: a kezdőszint", input_type="number")
         text_field("item_level", "Itemlevel", hint="nem kötelező", input_type="number")
         text_field("score", "Mythic+ (Raider.io) pontszám", hint="nem kötelező", input_type="number")
-        if character is not None:  # az új karakter a lista végére kerül
-            count = len(self.data.characters)
-            text_field("position", f"Hely a tervben (1–{count}; a céldátuma ehhez igazodik)", input_type="number")
         message = wrap_label(color=mobile_plan.BAD)
         form.add_widget(message)
         self.message = message  # a hibák (a tesztek is innen olvassák)
@@ -636,9 +490,6 @@ class WowApp(App):
         def save(*_args):
             entered = {key: field.text for key, field in fields.items()}
             entered.update({"class": class_box.text, "spec": spec_box.text, "race": race_box.text})
-            if "position" in entered and entered["position"].strip() == values["position"]:
-                # Nem írta át: ha közben a másik eszközön átrendezték, az a hely maradjon.
-                del entered["position"]
             try:
                 mobile_plan.save_character(self.data, uid, entered)
             except ValueError as exc:
@@ -650,7 +501,22 @@ class WowApp(App):
         buttons = [Button(text="Mentés", on_release=save)]
         form.add_widget(button_row(*buttons, Button(text="Mégse", on_release=lambda *_: self.show_list())))
         if character is not None:
-            form.add_widget(button_row(Button(text="Törlés", on_release=lambda *_: self._confirm_delete(character))))
+
+            def move(offset):
+                if mobile_plan.move_character(self.data, uid, offset):
+                    self.save()
+                    self.show_list()
+
+            hint = mobile_plan.move_hint(*self.list_sort)  # más rendezésben nem látszana, hová került
+            form.add_widget(
+                button_row(
+                    Button(text="Feljebb", disabled=bool(hint), on_release=lambda *_: move(-1)),
+                    Button(text="Lejjebb", disabled=bool(hint), on_release=lambda *_: move(1)),
+                    Button(text="Törlés", on_release=lambda *_: self._confirm_delete(character)),
+                )
+            )
+            if hint:
+                form.add_widget(form_label(hint))
         self.manager.current = "form"
         self.fields = fields  # a tesztekhez
 
@@ -788,8 +654,6 @@ class WowApp(App):
         self.save(push=False)
         if self.manager.current == "list":
             self.refresh()
-        elif self.manager.current == "order":
-            self.refresh_order()
 
     def _sync_status(self, text: str, problem: bool) -> None:
         text = text.replace("⚠ ", "")  # a Kivy betűkészletében nincs ilyen jel; a piros szín jelzi

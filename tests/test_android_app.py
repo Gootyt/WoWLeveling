@@ -77,11 +77,7 @@ class AndroidAppTests(unittest.TestCase):
 
     def start(self):
         from kivy.app import App
-        from kivy.lang import global_idmap
 
-        # A KV-szabályok „app”-ja az első alkalmazást jegyzi meg (és csak annak leállásakor felejti el):
-        # ez a teszt alkalmazása legyen, különben a gombjai egy korábbi tesztét hívnák.
-        object.__setattr__(global_idmap["app"], "_obj", None)
         with mock.patch.multiple(cloud_sync, AUTH_URL=f"{self.fake.url}/v1/accounts", TOKEN_URL=f"{self.fake.url}/v1/token"):
             app = self.main.WowApp(database=self.database)
             app.build()
@@ -105,7 +101,8 @@ class AndroidAppTests(unittest.TestCase):
 
     def test_list_and_editing(self):
         app = self.start()
-        cards = app.list_screen.ids.cards.children[::-1]  # alapból az állapot szerint (itt ugyanaz a sorrend)
+        app.list_screen.ids.sort.text = "Terv szerinti sorrend"  # átrendezni csak így lehet
+        cards = app.list_screen.ids.cards.children[::-1]
         self.assertEqual([card.title for card in cards], ["1. Thrall (Draenor)", "2. Jaina"])
         self.assertIn("2 karakter", app.list_screen.ids.summary.text)
         # Koppintás egy kártyára: a szerkesztő; a vissza gomb a listára visz.
@@ -118,33 +115,19 @@ class AndroidAppTests(unittest.TestCase):
         app.fields["level"].text = "82,4"
         buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
         self.assertEqual((app.manager.current, load_data(self.database).characters[1].level), ("list", D("82.40")))
-        # Új karakter (a lista végére), átrendezés a szerkesztőben és törlés (megerősítéssel).
+        # Új karakter, átrendezés és törlés (megerősítéssel).
         buttons(app.list_screen, "+ Új karakter")[0].dispatch("on_release")
-        self.assertNotIn("position", app.fields)
         app.fields["name"].text = "Uther"
         buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
         uther = app.data.characters[-1]
         self.assertEqual((uther.name, uther.level), ("Uther", D(80)))
         app.edit_character(uther.uid)
-        self.assertEqual(app.fields["position"].text, "3")
-        app.fields["position"].text = "4"
-        buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
-        self.assertEqual(app.message.text, "Hely a tervben: A hely 1 és 3 között lehet.")
-        app.fields["position"].text = "2"
-        buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
-        self.assertEqual(app.manager.current, "list")
-        self.assertEqual([c.name for c in load_data(self.database).characters], ["Thrall", "Uther", "Jaina"])
+        buttons(app.form_screen, "Feljebb")[0].dispatch("on_release")
+        self.assertEqual([c.name for c in app.data.characters], ["Thrall", "Uther", "Jaina"])
         app.edit_character("thrall1")
         buttons(app.form_screen, "Törlés")[0].dispatch("on_release")
         buttons(app.popup.content, "Törlés")[0].dispatch("on_release")
         self.assertEqual([c.name for c in load_data(self.database).characters], ["Uther", "Jaina"])
-        # Ha a hely mezőjéhez nem nyúlt, a közben (a másik eszközön) módosított sorrend marad.
-        app.edit_character("jaina22")
-        self.assertEqual(app.fields["position"].text, "2")
-        app.data.characters.reverse()  # a szinkronizálásból: Jaina lett az első
-        app.fields["level"].text = "82,5"
-        buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
-        self.assertEqual([(c.name, c.level) for c in app.data.characters], [("Jaina", D("82.50")), ("Uther", D(80))])
         app.edit_character("jaina22")
         self.assertTrue(app._on_key(None, 27))  # az Android vissza gombja
         self.assertEqual(app.manager.current, "list")
@@ -160,58 +143,24 @@ class AndroidAppTests(unittest.TestCase):
         ids.reverse.state = "down"
         self.assertEqual(self.titles(app), ["1. Thrall (Draenor)", "2. Jaina"])
         self.assertEqual(mobile_plan.load_sort(self.database), ("name", True))
-        # Átrendezni bármelyik rendezésben lehet; a cím a terv szerinti új helyet mutatja.
+        # Feljebb-lejjebb vinni csak a terv sorrendjében lehet (máshogy nem látszana, hová került).
         app.edit_character("jaina22")
-        app.fields["position"].text = "1"
-        buttons(app.form_screen, "Mentés")[0].dispatch("on_release")
-        self.assertEqual(self.titles(app), ["2. Thrall (Draenor)", "1. Jaina"])
-        self.assertEqual(mobile_plan.load_sort(self.database), ("name", True))  # a rendezés marad
+        self.assertTrue(buttons(app.form_screen, "Feljebb")[0].disabled)
+        self.assertTrue(buttons(app.form_screen, "Lejjebb")[0].disabled)
+        self.assertFalse(buttons(app.form_screen, "Törlés")[0].disabled)
+        self.assertIn(mobile_plan.move_hint("name", True), [child.text for child in app.form_screen.walk() if hasattr(child, "text")])
+        app.show_list()
+        ids.sort.text = "Terv szerinti sorrend"
+        ids.reverse.state = "normal"
+        app.edit_character("jaina22")
+        self.assertFalse(buttons(app.form_screen, "Feljebb")[0].disabled)
+        app.show_list()
         # A választás a következő indításkor is megmarad: a telefon saját beállítása, nem a tervé (nem szinkronizálódik).
         ids.sort.text = "Itemlevel"
-        ids.reverse.state = "normal"
         again = self.start().list_screen.ids
         self.assertEqual((again.sort.text, again.reverse.state), ("Itemlevel", "normal"))
         view = json.loads(storage.read_document(self.database, storage.PHONE_VIEW))
         self.assertEqual(view, {"sort": "item_level", "descending": False})
-
-    def test_order_screen(self):
-        app = self.start()
-        app.list_screen.ids.sort.text = "Név"  # a lista rendezésétől független
-        buttons(app.list_screen, "Sorrend")[0].dispatch("on_release")
-        self.assertEqual(app.manager.current, "order")
-        ids = app.order_screen.ids
-
-        def rows():
-            return ids.rows.children[::-1]
-
-        self.assertEqual([row.title for row in rows()], ["1. Thrall (Draenor)", "2. Jaina"])
-        self.assertIn("céldátum: ", rows()[1].subtitle)
-        self.assertTrue(ids.up.disabled and ids.down.disabled)  # még nincs kijelölve senki
-        rows()[1].dispatch("on_release")  # Jaina kijelölése
-        self.assertEqual([row.chosen for row in rows()], [False, True])
-        self.assertFalse(ids.up.disabled)
-        self.assertTrue(ids.down.disabled)  # az utolsót nem lehet lejjebb vinni
-        jaina_deadline = rows()[1].subtitle.rsplit(" ", 1)[1]
-        ids.up.dispatch("on_release")
-        self.assertEqual([c.name for c in load_data(self.database).characters], ["Jaina", "Thrall"])  # azonnal mentve
-        self.assertEqual([row.title for row in rows()], ["1. Jaina", "2. Thrall (Draenor)"])
-        self.assertEqual([row.chosen for row in rows()], [True, False])  # a kijelölés vele megy
-        self.assertTrue(rows()[1].subtitle.endswith(jaina_deadline))  # Thrall kapta az ő céldátumát
-        self.assertTrue(ids.up.disabled)
-        self.assertFalse(ids.down.disabled)
-        ids.up.dispatch("on_release")  # az elsőt már nem viszi feljebb
-        self.assertEqual([c.name for c in app.data.characters], ["Jaina", "Thrall"])
-        # Ha közben a gépről jön változás (itt: egy új karakter), a képernyő frissül, a kijelölés marad.
-        app.data.characters.append(Character("Uther", uid="uther9"))
-        app._remote_changed()
-        self.assertEqual([row.title for row in rows()], ["1. Jaina", "2. Thrall (Draenor)", "3. Uther"])
-        rows()[2].dispatch("on_release")
-        ids.up.dispatch("on_release")
-        self.assertEqual([c.name for c in app.data.characters], ["Jaina", "Uther", "Thrall"])
-        # A vissza gomb a listára visz, amely a rendezését megtartja, a címekben az új helyekkel.
-        self.assertTrue(app._on_key(None, 27))
-        self.assertEqual(app.manager.current, "list")
-        self.assertEqual(self.titles(app), ["1. Jaina", "3. Thrall (Draenor)", "2. Uther"])
 
     def test_plan_settings(self):
         app = self.start()

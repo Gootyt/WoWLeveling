@@ -2238,11 +2238,13 @@ class GuiTests(unittest.TestCase):
         self.app.open_list()  # a már nyitott ablakot csak előtérbe hozza, a rendezése marad
         self.assertEqual(tree.heading("deviation", "text"), "Szinteltérés ▼")
 
-        # A rendezés csak a nézetet változtatja meg, a karakterek sorrendjét (és a céldátumokat) nem.
+        # Rendezett nézetben nem lehet átrendezni, a karakterek sorrendje (és a céldátumok) nem változik.
         jaina = self.app.data.characters[1]
         self.select(jaina)
+        self.assertIn("disabled", window._order_widgets[0].state())
+        self.assertTrue(window.order_hint_var.get())
+        window.move_selected(-1)
         self.assertEqual([c.name for c in self.app.data.characters], ["Thrall", "Jaina", "Arthas", "Sylvanas"])
-        self.assertEqual(window.position_var.get(), "2")  # a helye a tervben (a # oszlop)
 
         # Szintmódosítás után újrarendeződik, a kijelölés megmarad.
         window.value_var.set("1")
@@ -2263,86 +2265,13 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(window.tree.heading("status", "text"), "Állapot ▲")
         self.assertEqual(window.tree.heading("deviation", "text"), "Szinteltérés")
 
-        # A # oszlop visszaállítja az eredeti sorrendet.
+        # A # oszlop visszaállítja az eredeti sorrendet, és újra lehet átrendezni.
         window.sort_by("position")
         self.assertEqual(self.names(), ["Thrall", "Arthas", "Sylvanas"])
         self.assertEqual(window.tree.heading("position", "text"), "# ▲")
-
-    def test_characters_can_be_reordered_in_any_view(self):
-        today = date.today()
-        self.app.start_var.set(format_date(today))
-        self.app.first_var.set(format_date(today + timedelta(days=9)))
-        self.app.last_var.set(format_date(today + timedelta(days=27)))
-        self.add("Thrall", "Jaina", "Arthas", "Sylvanas")
-        self.app.open_list()
-        window = self.app.list_window
-        thrall, jaina, arthas, sylvanas = self.app.data.characters
-
-        def order():
-            return [c.name for c in self.app.data.characters]
-
-        def row_of(character):
-            return next(row for row in self.rows() if row["name"] == character.name)
-
-        # Az állapot szerinti (alap) nézetben is: a kijelölt karakter helye a „Hely” mezőben látszik.
-        self.assertEqual(self.app.list_sort, self.gui.LIST_ORDER)
-        self.assertEqual(window.position_var.get(), "")  # nincs kijelölve
-        self.assertIn("disabled", window.up_button.state())
-        self.assertIn("disabled", window.position_entry.state())
-        self.select(arthas)
-        self.assertEqual(window.position_var.get(), "3")
-        self.assertNotIn("disabled", window.up_button.state())
-        self.assertNotIn("disabled", window.position_entry.state())
-        window.move_selected(-1)
-        self.assertEqual(order(), ["Thrall", "Arthas", "Jaina", "Sylvanas"])
-        self.assertEqual((window.position_var.get(), window.tree.selection()), ("2", (arthas.uid,)))
-        self.assertEqual(self.app.list_sort, self.gui.LIST_ORDER)  # a nézet rendezése marad
-        self.assertEqual((row_of(arthas)["position"], row_of(jaina)["position"]), ("2", "3"))
-        self.assertEqual(row_of(arthas)["deadline"], format_date(today + timedelta(days=15)))  # a 2. céldátuma
-        self.assertEqual([c.name for c in load_data(self.path).characters], order())  # el is mentette
-
-        # Egyből a megadott helyre (a sorszám utáni pont is jó): a köztük lévők egy hellyel lejjebb csúsznak.
-        self.select(sylvanas)
-        window.position_var.set("1.")
-        window.apply_position()
-        self.assertEqual(order(), ["Sylvanas", "Thrall", "Arthas", "Jaina"])
-        self.assertEqual((window.position_var.get(), window.tree.selection()), ("1", (sylvanas.uid,)))
-        self.assertIn("disabled", window.up_button.state())  # az elsőt nem lehet feljebb vinni
-        self.assertNotIn("disabled", window.down_button.state())
-        window.move_selected(-1)
-        self.assertEqual(order(), ["Sylvanas", "Thrall", "Arthas", "Jaina"])
-
-        # Hibás hely: figyelmeztet, a sorrend marad, a mező a mostani helyet mutatja.
-        with mock.patch.object(self.gui.messagebox, "showwarning") as warning:
-            window.position_var.set("9")
-            window.apply_position()
-        warning.assert_called_once()
-        self.assertIn("1 és 4 között", warning.call_args.args[1])
-        self.assertEqual((order(), window.position_var.get()), (["Sylvanas", "Thrall", "Arthas", "Jaina"], "1"))
-
-        # Billentyűvel (Alt+le, Alt+fel) is, a # szerinti nézetben a sor is odébb kerül.
-        window.sort_by("position")
-        self.assertTrue(window.tree.bind("<Alt-Down>") and window.tree.bind("<Alt-Up>"))
-        self.assertEqual(window._move_by_key(1), "break")  # a táblázat ne léptesse tovább a kijelölést
-        self.assertEqual(order(), ["Thrall", "Sylvanas", "Arthas", "Jaina"])
-        self.assertEqual(self.names(), order())
-        self.assertEqual(window.tree.selection(), (sylvanas.uid,))
-        self.select(jaina)
-        self.assertIn("disabled", window.down_button.state())  # az utolsót nem lehet lejjebb vinni
-        window.position_var.set("2")
-        window.apply_position()
-        self.assertEqual(self.names(), ["Thrall", "Jaina", "Sylvanas", "Arthas"])
-
-        # A Gear ablakban is (ott alapból az itemlevel-eltérés szerint rendez).
-        self.app.open_gear()
-        gear = self.app.gear_window
-        self.select_in(gear, arthas)
-        self.assertEqual(gear.position_var.get(), "4")
-        gear.position_var.set("1")
-        gear.apply_position()
-        self.assertEqual(order(), ["Arthas", "Thrall", "Jaina", "Sylvanas"])
-        self.assertEqual(self.app.gear_sort, self.gui.GEAR_ORDER)
-        self.assertEqual(self.names(), order())  # a karakterlista is frissült
+        self.select(self.app.data.characters[1])
+        self.assertNotIn("disabled", window._order_widgets[0].state())
+        self.assertEqual(window.order_hint_var.get(), "")
 
     def test_list_opens_sorted_by_status_with_finished_characters_last(self):
         today = date.today()
